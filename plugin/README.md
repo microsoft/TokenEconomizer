@@ -507,6 +507,8 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | `repomap_tokens` | `2048` | the map's size, in tokens |
 | `repomap_python` | auto | the Python that has aider installed |
 | `repomap_timeout` | `8` | seconds the first prompt may wait for a ranked map before the cached one is used |
+| `backfill` | `true` | on a repository's first Claude Code session, also learn from its earlier logs in `~/.claude/projects` |
+| `backfill_sessions` | `30` | how many of the most recent earlier sessions `backfill` reads |
 
 **Other settings:**
 

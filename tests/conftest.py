@@ -35,3 +35,14 @@ def _no_model_calls(request, monkeypatch):
         return
     for name in ("claude_call", "codex_call", "copilot_call", "pi_call"):
         monkeypatch.setattr(sidecall, name, lambda *a, **k: ("", None))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_history(tmp_path, monkeypatch):
+    """No test reads the machine's own Claude Code history: a context without
+    `CLAUDE_CONFIG_DIR` finds an empty one under the test's directory."""
+    from tokeneconomizer.plugin import backfill
+    real = backfill.claude_projects_dir
+    empty = str(tmp_path / "no-claude-history")
+    monkeypatch.setattr(backfill, "claude_projects_dir",
+                        lambda env: real(env) if env.get("CLAUDE_CONFIG_DIR") else empty)

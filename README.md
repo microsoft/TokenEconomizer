@@ -272,6 +272,13 @@ repository have been idle for *q* minutes (or, at the latest, a day after the li
 conversation resumed after its tools change must write its whole history to the prompt cache again
 instead of reading it, and after an idle hour that cache has expired anyway.
 
+It does not start from nothing. On a repository's first Claude Code session, it reads the sessions
+you ran there before installing it, from Claude Code's own logs in `~/.claude/projects` (the most
+recent `backfill_sessions`, 30 by default), in the background and oldest first, then keeps
+learning from each session that follows. `backfill=off` turns this off, and `te backfill
+--dry-run` lists what it would read. Other agents' history is not read yet. With that history,
+tool pruning may have evidence enough at once, so `toolprune=propose` is the way to look first.
+
 Besides `on` and `off`, two modes are useful: `toolprune=propose` only proposes the deny list, and
 nothing changes until you run `toolprune apply`; `microskills=envfacts` learns facts only from
 repeated failures, with no model calls.
