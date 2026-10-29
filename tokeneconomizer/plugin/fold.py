@@ -63,7 +63,7 @@ def _run_dir(workdir, trace_path):
     return run
 
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, paid=True):
     profile = ctx.config.microskills
     if profile == "off":
         return None
@@ -73,10 +73,10 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
                            propose_every=ctx.config.microskills_propose_every,
                            max_facts=ctx.config.microskills_max_facts,
                            max_tokens=ctx.config.microskills_max_tokens)
-    # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
-    # still learns.
+    # Paused once the host's CLI said it is not signed in (`sidecall.paused`), and never run for
+    # a session imported from before the plugin (`history`): the free layer still learns.
     runner = (sidecall.runner_for(ctx.host.name, ctx.config)
-              if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
+              if icfg.paid and paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
@@ -107,15 +107,17 @@ def enough_evidence(sessions, prompts, cfg, high_risk=False):
 
 
 def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=None,
-                    prompts=None):
+                    prompts=None, imported=False):
     """Tool pruning's evidence: the sessions a tool went unused (`ToolingStage`'s streaks) and
     the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
     applies from a later session, since a running session keeps the tools it started with.
-    `prompts` is None where the log does not say, and the session counts as one prompt."""
+    `prompts` is None where the log does not say, and the session counts as one prompt.
+    `imported`: a session from before the plugin (`history`), see `_from_history`."""
     if not denylist.supports(ctx.host.name) or ctx.config.toolprune == "off":
         return None
     if ctx.host.name == "codex":
-        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts)
+        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts,
+                                     imported)
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
     from tokeneconomizer.toolprune import ToolingStage
@@ -184,8 +186,9 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
         proposal = [t for t in raw if t not in applied and t not in kept]
     doc["proposal"] = proposal
     doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
-    if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
-        _hold(doc, st, proposal, ctx.repo.root)
+    auto = _from_history(doc, st, proposal, imported)
+    if ctx.config.toolprune == "auto" and auto and not ctx.config.shadow:
+        _hold(doc, st, auto, ctx.repo.root)
     if restored:
         doc["restored_protected"] = restored
     ctx.store.write("untool.json", doc)
@@ -211,7 +214,8 @@ def _server_summary(stage, servers, prompt_streaks):
     return out
 
 
-def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts=None):
+def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts=None,
+                          imported=False):
     """Codex: the experiments' capability controller (`codex_untool.CodexUntoolProfile`, driven
     through `ToolingStage`) decides which packages went unused, over a trace that carries the
     model's own `exec` calls (`trace.codex_capability_trace`). Two live adaptations:
@@ -270,11 +274,27 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
            "loaded_prompts": loaded_prompts,
            "proposal": proposal, "updated": time.time(),
            "new_in_proposal": sorted(set(proposal) - set(prior.get("proposal", [])))}
-    if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
-        _hold(doc, prior, proposal, ctx.repo.root)
+    auto = _from_history(doc, prior, proposal, imported)
+    if ctx.config.toolprune == "auto" and auto and not ctx.config.shadow:
+        _hold(doc, prior, auto, ctx.repo.root)
     ctx.store.write("untool.json", doc)
     return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
             "restored": []}
+
+
+def _from_history(doc, prior, proposal, imported):
+    """What `auto` may write by itself: the proposal less what an import of sessions from
+    before the plugin (`history`) put on it. A history imported at install can be long, and
+    weeks of other work in it can propose many tools at once; those wait, announced at session
+    start, for `toolprune apply` (`from_history` records them while they stay proposed).
+    What the plugin's own sessions add to the list is written as usual."""
+    held = set(prior.get("from_history") or ())
+    if imported:
+        held |= set(proposal) - set(prior.get("proposal") or ())
+    held &= set(proposal)
+    if held:
+        doc["from_history"] = sorted(held)
+    return [t for t in proposal if t not in held]
 
 
 def _hold(doc, prior, proposal, root):
@@ -355,8 +375,10 @@ def schedule_pending(ctx):
 CODEX_HIGH_RISK = frozenset({"image_media"})
 
 
-def fold_session(ctx, session_id, transcript_path=None):
-    """Fold one finished session. Returns the ledger record, or None if already folded."""
+def fold_session(ctx, session_id, transcript_path=None, imported=False):
+    """Fold one finished session. Returns the ledger record, or None if already folded.
+    `imported`: a session from before the plugin, read from the agent's own logs (`history`);
+    it makes no model call, and its record says so."""
     sess_name = os.path.join("sessions", f"{session_id}.json")
     with ctx.store.locked("fold", timeout=FOLD_LOCK_WAIT_S) as got:
         if not got:
@@ -370,6 +392,8 @@ def fold_session(ctx, session_id, transcript_path=None):
                   "repo": ctx.repo.label, "folded_at": time.time(),
                   "started": sess.get("started"), "ended": sess.get("ended"),
                   "shadow": ctx.config.shadow}
+        if imported:
+            record["imported"] = True
         workdir = tempfile.mkdtemp(prefix="te-fold-")
         try:
             trace_path = ctx.host.mechanism_trace(transcript, workdir) if transcript else None
@@ -386,11 +410,12 @@ def fold_session(ctx, session_id, transcript_path=None):
                                       catalog=load_catalog(ctx.root, ctx.host.name))
                 with ctx.store.locked("mechanisms"):
                     inj = _fold_microskills(ctx, adapter, run_dir, session_id,
-                                            injected=sess.get("injected_ids"))
+                                            injected=sess.get("injected_ids"),
+                                            paid=not imported)
                     # A session that ran no prompt is no evidence about the tools.
                     unt = None if prompts == 0 else _fold_toolprune(
                         ctx, adapter, run_dir, session_id, transcript=transcript,
-                        workdir=workdir, prompts=prompts)
+                        workdir=workdir, prompts=prompts, imported=imported)
                 record["injection"] = inj
                 record["untool"] = unt
                 if unt and unt.get("pending"):
@@ -414,7 +439,8 @@ def fold_session(ctx, session_id, transcript_path=None):
                     "spiral_judge_tokens": float(sess.get("judge_tokens", 0) or 0),
                     "spiral_nudge_writer_tokens": float(sess.get("writer_tokens", 0) or 0)}})
             ctx.store.append("ledger.jsonl", record)
-            folded[session_id] = {"at": time.time(), "transcript": transcript}
+            folded[session_id] = dict({"at": time.time(), "transcript": transcript},
+                                      **({"imported": True} if imported else {}))
             ctx.store.write("folded.json", folded)
             if sess:
                 sess["folded"] = True

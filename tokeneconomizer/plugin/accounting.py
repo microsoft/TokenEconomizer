@@ -31,8 +31,10 @@ def overhead_total(overhead):
 
 
 def summarize(records):
-    """Aggregate ledger records into the numbers `te status` prints."""
-    sessions = [r for r in records if r.get("kind") == "session"]
+    """Aggregate ledger records into the numbers `te status` prints. A session imported from
+    before the plugin (`history`) ran without it, so it is counted apart."""
+    imported = [r for r in records if r.get("kind") == "session" and r.get("imported")]
+    sessions = [r for r in records if r.get("kind") == "session" and not r.get("imported")]
     priced = [r for r in sessions if isinstance(r.get("effective_tokens"), (int, float))]
     exec_total = sum(r["effective_tokens"] for r in priced)
     # `overhead` records are paid calls charged as they happened (the background stuck judge),
@@ -41,6 +43,7 @@ def summarize(records):
                    if r.get("kind") in ("session", "overhead"))
     return {
         "sessions": len(sessions),
+        "imported_sessions": len(imported),
         "priced_sessions": len(priced),
         "effective_tokens": exec_total,
         "overhead_tokens": oh_total,

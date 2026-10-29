@@ -42,7 +42,15 @@ person can tune by hand:
   * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
-  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map.
+  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
+  * history_import              -- "on" (the default): the first session start in a repository
+                                   folds the repository's sessions from before the plugin, read
+                                   from the agent's own session logs (`history`); "off" waits
+                                   for sessions the plugin sees end;
+  * history_dirs                -- where those logs are, when not the agent's default
+                                   (`~/.claude`, or CLAUDE_CONFIG_DIR): directories separated by
+                                   os.pathsep, or a list in a config file;
+  * history_max_sessions        -- the most recent this many earlier sessions are folded (0: all).
 
 The names before the mechanisms were renamed are read too, so an existing config file keeps
 working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
@@ -64,12 +72,13 @@ MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
+HISTORY = ("off", "on")
 MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
 # What `on` turns each mechanism to, and the words read as on / off.
 ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard": "nudge",
-            "repomap": "on"}
+            "repomap": "on", "history_import": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
 # Values renamed with their mechanism.
@@ -155,6 +164,9 @@ class LiveConfig:
     repomap_tokens: int = 2048
     repomap_python: str = ""
     repomap_timeout: int = 8
+    history_import: str = "on"
+    history_dirs: str = ""
+    history_max_sessions: int = 50
     paid_model: str = ""
     shadow: bool = False
     vocabulary: str = "auto"
@@ -162,9 +174,10 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
+                "history_import": HISTORY,
                 "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
-    _MIN = {"toolprune_quiet_minutes": 0}
+    _MIN = {"toolprune_quiet_minutes": 0, "history_max_sessions": 0}
 
     def as_dict(self):
         d = asdict(self)
@@ -196,6 +209,8 @@ class LiveConfig:
                 value = "off"
             else:
                 value = _VALUE_ALIASES.get(key, {}).get(word, value)
+        if key == "history_dirs" and isinstance(value, (list, tuple)):
+            value = os.pathsep.join(str(v) for v in value)
         cur = getattr(self, key)
         try:
             if isinstance(cur, bool):
@@ -259,7 +274,9 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
-        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout"}
+        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
+        "TE_HISTORY_IMPORT": "history_import", "TE_HISTORY_DIRS": "history_dirs",
+        "TE_HISTORY_MAX_SESSIONS": "history_max_sessions"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 

@@ -17,6 +17,14 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_history(monkeypatch):
+    """No test reads the person's own agent logs: a session start would import whatever
+    `~/.claude` holds. A test names its logs with `history_dirs`."""
+    from tokeneconomizer.plugin import history
+    monkeypatch.setattr(history, "default_dirs", lambda host_name, env=None: [])
+
+
+@pytest.fixture(autouse=True)
 def _no_model_calls(request, monkeypatch):
     """No test reaches a real agent CLI. With the loop guard on, a stuck-looking turn wakes its
     judge: the plugin's side calls answer nothing here, and a judge job runs inline instead of

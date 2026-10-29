@@ -256,6 +256,12 @@ repository have been idle for *q* minutes (or, at the latest, a day after the li
 conversation resumed after its tools change must write its whole history to the prompt cache again
 instead of reading it, and after an idle hour that cache has expired anyway.
 
+On Claude Code, the first session in a repository also learns from that repository's earlier
+sessions, read from Claude Code's own logs in `~/.claude`, without any model call (at most the
+50 most recent; `history_import=off` to learn only from new sessions, `history_dirs` for logs
+kept elsewhere; see [Settings](plugin/README.md#earlier-sessions)). A deny list those earlier
+sessions propose waits for `toolprune apply`, even under `auto`.
+
 Besides `on` and `off`, two modes are useful: `toolprune=propose` only proposes the deny list, and
 nothing changes until you run `toolprune apply`; `microskills=envfacts` learns facts only from
 repeated failures, with no model calls.

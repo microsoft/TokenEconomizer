@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; the first time in a repository, hands its sessions from before the plugin (Claude Code's own logs) to a detached `te history import` | microskills, toolprune |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -43,6 +43,21 @@ re-tuned. Three things it adds:
 * The **stuck judge and nudge writer run in a detached `te judge` job**, not in
   the hook. The hook starts the job and returns; a later PostToolUse picks up the verdict, with
   the redirect already written. Each job's spend is charged to the ledger when it is spent.
+
+`te history import` folds a repository's sessions from before the plugin through the same
+`fold_session`, oldest first: the logs under `~/.claude/projects/` (or `history_dirs`) whose
+first named directory resolves to the repository, finished (quiet for ten minutes), never
+folded, and with no record of the plugin's own, up to the `history_max_sessions` most recent.
+`folded.json` keys each by session id, as every session, so none is counted twice however
+often the import runs; `history.json` records that it ran, so it runs by itself once per
+repository and agent. An imported session never runs the paid proposer, and its ledger record
+says `imported`, so `te status` counts it apart from the sessions run with the plugin. Its
+evidence counts toward tool pruning, but `toolprune=auto` does not write what an import
+proposed: those items (`untool.json`'s `from_history`) are announced at the next session start
+and wait for `toolprune apply`. A history at install can span weeks of other work and other
+tool sets -- on one recorded repository, 35 earlier sessions proposed about 300 tools at once --
+and a deny list that size should be the person's call. Items the plugin's own sessions add to
+the proposal are written by `auto` as before.
 
 Every hook fails open: any error becomes an empty output (no change) and a traceback in
 `~/.tokeneconomizer/errors.log`. The hooks are stdlib only, and none waits on a model call.
@@ -539,6 +554,11 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   keys counts once, at its later fold. Nothing is deleted: a merged directory moves to
   `merged/`, displaced learned state to `premerge-*`. `te repos merge KEY [INTO]` joins two by
   hand, for state whose checkouts are gone.
+
+Besides the logs of the sessions it sees, the plugin reads, once per repository, Claude Code's
+logs of that repository's earlier sessions (`history_import`, on by default); it reads the first
+directory every other log there names, to tell which are this repository's, and nothing more of
+them.
 
 The state directory, like the agents' own session logs it is derived from, is private to you:
 the plugin creates it `0700` and its files `0600`, and tightens a looser one it finds.

@@ -351,6 +351,7 @@ repository is not used by Codex there), while settings are shared by every agent
 | `config set KEY=VALUE … [--global]` | change settings for this repository (or every one); see [Settings](#settings) |
 | `config unset KEY … [--global]` | remove the setting at this level, so the global value (or the default) applies |
 | `repomap` / `repomap refresh` | the cached repository map / make it now (see [Repository map](#repository-map)) |
+| `history` / `history import [--dir D] [--max N]` | Claude Code: this repository's sessions from before the plugin, in the agent's own logs / fold them now (runs by itself, once, at the first session start in a repository; see [Earlier sessions](#earlier-sessions)) |
 | `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
 | `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
 | `repos merge KEY [INTO]` | merge one repository's state into another's (default: this one), for state whose checkouts are gone |
@@ -458,6 +459,23 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | `repomap_tokens` | `2048` | the map's size, in tokens |
 | `repomap_python` | auto | the Python that has aider installed |
 | `repomap_timeout` | `8` | seconds the first prompt may wait for a ranked map before the cached one is used |
+
+<a id="earlier-sessions"></a>**Earlier sessions** (Claude Code). The first session start in a repository folds that
+repository's sessions from before the plugin, read from Claude Code's own logs
+(`~/.claude/projects/`), in a background `te history import`: oldest first, each once, and
+without any model call (micro-skills' proposer waits for sessions the plugin sees end). After
+that, learning carries on from new sessions as before. A log belongs to the repository the first
+directory it names is in, and a log written in the last ten minutes is left to its own session.
+A deny list the earlier sessions propose is only proposed, even with `toolprune=auto`: the next
+session start says so, and nothing changes until you run `toolprune apply`. Tools that sessions
+run with the plugin add to the list are applied as usual. `history` shows what was imported and
+what is still waiting; `history import` runs it again, taking only logs not yet folded.
+
+| Key | Default | What it sets |
+|---|---|---|
+| `history_import` | `on` | `off`: learn only from sessions the plugin sees end |
+| `history_dirs` | `""` | where the logs are, when not `~/.claude` (or `CLAUDE_CONFIG_DIR`): an agent home, its `projects/` directory, or one project's folder; several separated by `:` (`;` on Windows), or a JSON list in a config file |
+| `history_max_sessions` | `50` | only the most recent this many earlier sessions are folded; `0` for all |
 
 **Other settings:**
 

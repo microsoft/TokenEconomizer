@@ -18,6 +18,11 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
+    te history [show]                 sessions from before the plugin, found in the agent's own
+                                      logs: what was imported, and what is still unfolded
+    te history import [--dir D] [--max N]
+                                      fold this repository's earlier sessions now (runs by
+                                      itself, once, at the first session start here)
     te repos                          every repository with state here: how it was identified,
                                       its agents and sessions, the checkouts seen
     te repos migrate                  send state recorded under earlier keys where it belongs
@@ -42,7 +47,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall,
+               toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -153,7 +159,9 @@ def cmd_status(args):
     print(f"  sessions     {ledger['sessions']} folded, "
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
-          f"({ledger['overhead_frac']:.1%})")
+          f"({ledger['overhead_frac']:.1%})"
+          + (f"; {ledger['imported_sessions']} earlier session(s) imported from the agent's "
+             f"logs" if ledger["imported_sessions"] else ""))
     i = out["microskills"]
     print(f"  microskills  {i['injected_lines']} fact(s) injected at session start "
           f"({i['sessions_folded']} sessions learned from)")
@@ -210,6 +218,10 @@ def _toolprune_show(ctx, unt):
         print(f"pending: written once this repository's sessions have been idle "
               f"{ctx.config.toolprune_quiet_minutes} minutes, so that no conversation you "
               f"resume re-reads its cached prompt (`toolprune apply` writes it now)")
+    held = [t for t in unt.get("from_history") or [] if t in _proposal(ctx, unt)]
+    if held and ctx.config.toolprune == "auto":
+        print(f"from earlier sessions: proposed by the import of sessions from before the "
+              f"plugin, so written only when you run `toolprune apply`: {', '.join(held)}")
     kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
     if kept:
         print(f"kept, as you gave them back (`toolprune apply NAME` removes one again): "
@@ -441,6 +453,9 @@ def _config_view(cfg):
                       "toolprune_min_sessions": d.pop("toolprune_min_sessions"),
                       "toolprune_sessions": d.pop("toolprune_sessions"),
                       "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes")},
+        "history": {"history_import": d.pop("history_import"),
+                    "history_dirs": d.pop("history_dirs"),
+                    "history_max_sessions": d.pop("history_max_sessions")},
         "loopguard": {
             "state": "off" if cfg.loopguard == "off" else "on",
             "loopguard": d.pop("loopguard"), "loopguard_aggr": d.pop("loopguard_aggr"),
@@ -509,6 +524,36 @@ def cmd_fold(args):
         rec = fold.fold_session(ctx, sid)
         if rec is not None and args.verbose:
             print(json.dumps(rec, default=str))
+    return 0
+
+
+def cmd_history(args):
+    ctx = _ctx(args)
+    if not history.supports(ctx.host.name):
+        print(f"importing earlier sessions is not available on {ctx.host.name} yet")
+        return 0
+    dirs = ([os.path.abspath(os.path.expanduser(d)) for d in args.dir] if args.dir
+            else history.dirs_for(ctx))
+    if args.action == "import":
+        st = history.run(ctx, dirs=dirs, exclude=args.exclude or (), limit=args.max)
+        if not args.quiet:
+            last = st["last"]
+            print(f"{ctx.repo.label}: imported {last['imported']} earlier session(s) from "
+                  f"{', '.join(dirs) or '-'}"
+                  + (f"; {last['over_limit']} older one(s) left out by the limit"
+                     if last["over_limit"] else "")
+                  + (f"; {last['unfolded']} not folded (another fold held the lock: run again)"
+                     if last["unfolded"] else ""))
+        return 0
+    st = ctx.store.read(history.STATE) or {}
+    waiting = history.candidates(ctx, dirs)
+    print(f"{ctx.repo.label}: history_import={ctx.config.history_import}, "
+          f"looking in {', '.join(dirs) or '-'}")
+    print("  imported     " + (f"{st.get('imported', 0)} earlier session(s), last on "
+                               f"{_when(st['done'])}" if st.get("done") else "not yet"))
+    print(f"  not folded   {len(waiting)} earlier session(s) of this repository"
+          + (f" (`te history import` folds the most recent "
+             f"{ctx.config.history_max_sessions or 'all'})" if waiting else ""))
     return 0
 
 
@@ -733,6 +778,13 @@ def build_parser():
     p.add_argument("--session", action="append")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_fold)
+    p = add("history")
+    p.add_argument("action", nargs="?", default="show", choices=("show", "import"))
+    p.add_argument("--dir", action="append")
+    p.add_argument("--max", type=int, default=None)
+    p.add_argument("--exclude", action="append")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(fn=cmd_history)
     p = add("judge")
     p.add_argument("--session", required=True)
     p.add_argument("--job", required=True)
