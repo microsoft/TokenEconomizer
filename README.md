@@ -235,6 +235,7 @@ are these settings:
 | *m* | `toolprune_min_sessions` | 2 | sessions those prompts must span |
 | *s* | `toolprune_sessions` | 5 | or this many sessions, of any length |
 | *q* | `toolprune_quiet_minutes` | 60 | minutes your sessions here must be idle before a deny list is written |
+| | `backfill_sessions` | 50 | earlier Claude Code sessions in this repository learned from at install (0: none) |
 | *e* | `loopguard.envelope_min_samples` | 5 | turns here that ended well (no failing check after the last edit) before the loop guard acts |
 | *c* | `loopguard.judge_confidence` | 0.7 | how sure the judge must be that a turn is stuck |
 | *r* | `loopguard_nudges` | 1 | redirects per turn before the guard only tells you |

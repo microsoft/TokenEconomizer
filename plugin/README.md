@@ -425,6 +425,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
 | `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
 | `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it (a list is written at the latest a day after it formed); `0` writes at once |
+| `backfill_sessions` | `50` | on Claude Code, how many of the repository's earlier sessions (newest first, from `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`) the first session start learns from, in the background, so a new install does not begin empty; they are folded oldest first by the free layer only (no model call). `0` turns it off; `te backfill` reads again |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
 | `loopguard_nudges` | `1` | redirects per turn before the guard only tells you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |

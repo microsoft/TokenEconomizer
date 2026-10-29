@@ -158,13 +158,14 @@ class LiveConfig:
     paid_model: str = ""
     shadow: bool = False
     vocabulary: str = "auto"
+    backfill_sessions: int = 50
     warnings: list = field(default_factory=list)
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
                 "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
-    _MIN = {"toolprune_quiet_minutes": 0}
+    _MIN = {"toolprune_quiet_minutes": 0, "backfill_sessions": 0}
 
     def as_dict(self):
         d = asdict(self)
@@ -256,6 +257,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",
         "TE_TOOLPRUNE_SESSIONS": "toolprune_sessions",
+        "TE_BACKFILL_SESSIONS": "backfill_sessions",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",

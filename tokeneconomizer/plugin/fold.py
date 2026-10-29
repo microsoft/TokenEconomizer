@@ -63,7 +63,7 @@ def _run_dir(workdir, trace_path):
     return run
 
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, paid=True):
     profile = ctx.config.microskills
     if profile == "off":
         return None
@@ -76,7 +76,7 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns.
     runner = (sidecall.runner_for(ctx.host.name, ctx.config)
-              if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
+              if icfg.paid and paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
@@ -355,8 +355,11 @@ def schedule_pending(ctx):
 CODEX_HIGH_RISK = frozenset({"image_media"})
 
 
-def fold_session(ctx, session_id, transcript_path=None):
-    """Fold one finished session. Returns the ledger record, or None if already folded."""
+def fold_session(ctx, session_id, transcript_path=None, history=False):
+    """Fold one finished session. Returns the ledger record, or None if already folded.
+    `history` marks a session read from the agent's old logs (`backfill`) rather than seen by a
+    hook: it is learned from by the free layer only, so reading a long history makes no model
+    call, and its ledger record says so."""
     sess_name = os.path.join("sessions", f"{session_id}.json")
     with ctx.store.locked("fold", timeout=FOLD_LOCK_WAIT_S) as got:
         if not got:
@@ -370,6 +373,8 @@ def fold_session(ctx, session_id, transcript_path=None):
                   "repo": ctx.repo.label, "folded_at": time.time(),
                   "started": sess.get("started"), "ended": sess.get("ended"),
                   "shadow": ctx.config.shadow}
+        if history:
+            record["history"] = True
         workdir = tempfile.mkdtemp(prefix="te-fold-")
         try:
             trace_path = ctx.host.mechanism_trace(transcript, workdir) if transcript else None
@@ -386,7 +391,8 @@ def fold_session(ctx, session_id, transcript_path=None):
                                       catalog=load_catalog(ctx.root, ctx.host.name))
                 with ctx.store.locked("mechanisms"):
                     inj = _fold_microskills(ctx, adapter, run_dir, session_id,
-                                            injected=sess.get("injected_ids"))
+                                            injected=sess.get("injected_ids"),
+                                            paid=not history)
                     # A session that ran no prompt is no evidence about the tools.
                     unt = None if prompts == 0 else _fold_toolprune(
                         ctx, adapter, run_dir, session_id, transcript=transcript,

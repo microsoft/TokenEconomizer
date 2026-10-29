@@ -20,6 +20,13 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 | `Stop` | Closes the turn; a turn that *ended green* feeds the per-repository envelope | loopguard |
 | `SessionEnd` | Hands the session to a detached `te fold` and returns at once | microskills, toolprune, ledger |
 
+The first `SessionStart` in a repository also starts a detached `te backfill`: Claude Code keeps
+every session's log under `~/.claude/projects/`, each naming the directory it started in, so the
+repository's earlier sessions (the newest `backfill_sessions`, 50 by default) are folded oldest
+first and the install does not begin empty. History is learned from by the free layer only (no
+model call; the proposer runs on sessions that end from now on), and its ledger records carry
+`history: true`. The loop guard's envelope comes from Stop hooks and is not seeded from history.
+
 `te fold` runs the **same classes the experiments ran** over the finished session's log:
 `PrefixStage` (with micro-skills on, the free envfacts layer under the proposer) and
 `ToolingStage` (evidence pruning). The loop guard (`loopguard.TurnGuard`) is the benchmark
