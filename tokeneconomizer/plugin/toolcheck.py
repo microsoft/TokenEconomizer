@@ -60,7 +60,9 @@ def _init_tools(extra_args, cli="claude", timeout=60):
     env = dict(os.environ, TE_SIDECALL="1")
     cmd = [cli, "-p", "Reply with OK", "--output-format", "stream-json", "--verbose",
            "--model", "haiku", "--max-turns", "1"] + claude_flags(cli) + list(extra_args)
-    with tempfile.TemporaryDirectory(prefix="te-probe-") as cwd:
+    # On Windows the CLI's children (node, the session's MCP servers) outlive `p.kill()` and keep
+    # the folder open, so its removal fails; that must not throw away the tools already read.
+    with tempfile.TemporaryDirectory(prefix="te-probe-", ignore_cleanup_errors=True) as cwd:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=env,
                              cwd=cwd)
@@ -78,6 +80,10 @@ def _init_tools(extra_args, cli="claude", timeout=60):
                 if time.time() > deadline:
                     break
         finally:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000)    # CREATE_NO_WINDOW
             p.kill()
             p.wait()
     return tools, version

@@ -63,7 +63,7 @@ def _run_dir(workdir, trace_path):
     return run
 
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, paid=True):
     profile = ctx.config.microskills
     if profile == "off":
         return None
@@ -74,9 +74,10 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
                            max_facts=ctx.config.microskills_max_facts,
                            max_tokens=ctx.config.microskills_max_tokens)
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
-    # still learns.
+    # still learns. A backfill fold passes `paid=False`: history already written is no reason
+    # to call a model now.
     runner = (sidecall.runner_for(ctx.host.name, ctx.config)
-              if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
+              if paid and icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
@@ -107,15 +108,18 @@ def enough_evidence(sessions, prompts, cfg, high_risk=False):
 
 
 def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=None,
-                    prompts=None):
+                    prompts=None, backfill=False):
     """Tool pruning's evidence: the sessions a tool went unused (`ToolingStage`'s streaks) and
     the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
     applies from a later session, since a running session keeps the tools it started with.
-    `prompts` is None where the log does not say, and the session counts as one prompt."""
+    `prompts` is None where the log does not say, and the session counts as one prompt. A
+    `backfill` fold records evidence and the proposal but applies nothing: no deny list is
+    held, written or restored, and no pending write is scheduled."""
     if not denylist.supports(ctx.host.name) or ctx.config.toolprune == "off":
         return None
     if ctx.host.name == "codex":
-        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts)
+        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts,
+                                     backfill=backfill)
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
     from tokeneconomizer.toolprune import ToolingStage
@@ -141,7 +145,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     # person wrote, and only in the direction of giving a tool back.
     protected = adapter.protected_tools()
     restored = []
-    if any(t in protected for t in applied) and not ctx.config.shadow:
+    if not backfill and any(t in protected for t in applied) and not ctx.config.shadow:
         try:
             restored = denylist.restore(ctx.repo.root, ctx.store,
                                       [t for t in applied if t in protected], host=host)
@@ -184,7 +188,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
         proposal = [t for t in raw if t not in applied and t not in kept]
     doc["proposal"] = proposal
     doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
-    if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
+    if not backfill and ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
         _hold(doc, st, proposal, ctx.repo.root)
     if restored:
         doc["restored_protected"] = restored
@@ -211,7 +215,8 @@ def _server_summary(stage, servers, prompt_streaks):
     return out
 
 
-def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts=None):
+def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts=None,
+                          backfill=False):
     """Codex: the experiments' capability controller (`codex_untool.CodexUntoolProfile`, driven
     through `ToolingStage`) decides which packages went unused, over a trace that carries the
     model's own `exec` calls (`trace.codex_capability_trace`). Two live adaptations:
@@ -270,7 +275,7 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
            "loaded_prompts": loaded_prompts,
            "proposal": proposal, "updated": time.time(),
            "new_in_proposal": sorted(set(proposal) - set(prior.get("proposal", [])))}
-    if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
+    if not backfill and ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
         _hold(doc, prior, proposal, ctx.repo.root)
     ctx.store.write("untool.json", doc)
     return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
@@ -323,7 +328,10 @@ def apply_pending(ctx, now=None):
         root = pend.get("root") or ctx.repo.root
         done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
         done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
-        items = [t for t in pend.get("items") or [] if t not in done]
+        # A tool protected since the list was held (`toolprune_protect`) is never written.
+        protected = LiveAdapter(ctx.host, ctx.repo.root,
+                                protect=ctx.config.toolprune_protect).protected_tools()
+        items = [t for t in pend.get("items") or [] if t not in done and t not in protected]
         if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
             idle = now - last_activity(ctx)
             quiet_s = ctx.config.toolprune_quiet_minutes * 60
@@ -355,8 +363,13 @@ def schedule_pending(ctx):
 CODEX_HIGH_RISK = frozenset({"image_media"})
 
 
-def fold_session(ctx, session_id, transcript_path=None):
-    """Fold one finished session. Returns the ledger record, or None if already folded."""
+def fold_session(ctx, session_id, transcript_path=None, backfill=False):
+    """Fold one finished session. Returns the ledger record, or None if already folded.
+
+    `backfill` folds a session from before the plugin was installed: the free layers learn and
+    gather evidence, but no paid model call is made and nothing is applied or scheduled. The
+    record and the `folded.json` entry say `backfill: true`, and a transcript's own first and
+    last timestamps stand in for a live session record's `started` and `ended`."""
     sess_name = os.path.join("sessions", f"{session_id}.json")
     with ctx.store.locked("fold", timeout=FOLD_LOCK_WAIT_S) as got:
         if not got:
@@ -370,6 +383,12 @@ def fold_session(ctx, session_id, transcript_path=None):
                   "repo": ctx.repo.label, "folded_at": time.time(),
                   "started": sess.get("started"), "ended": sess.get("ended"),
                   "shadow": ctx.config.shadow}
+        if backfill:
+            record["backfill"] = True
+            if transcript and (record["started"] is None or record["ended"] is None):
+                first, last = trace.claude_session_span(transcript)
+                record["started"] = record["started"] if record["started"] is not None else first
+                record["ended"] = record["ended"] if record["ended"] is not None else last
         workdir = tempfile.mkdtemp(prefix="te-fold-")
         try:
             trace_path = ctx.host.mechanism_trace(transcript, workdir) if transcript else None
@@ -387,16 +406,17 @@ def fold_session(ctx, session_id, transcript_path=None):
                                       protect=ctx.config.toolprune_protect)
                 with ctx.store.locked("mechanisms"):
                     inj = _fold_microskills(ctx, adapter, run_dir, session_id,
-                                            injected=sess.get("injected_ids"))
+                                            injected=sess.get("injected_ids"), paid=not backfill)
                     # A session that ran no prompt is no evidence about the tools.
                     unt = None if prompts == 0 else _fold_toolprune(
                         ctx, adapter, run_dir, session_id, transcript=transcript,
-                        workdir=workdir, prompts=prompts)
+                        workdir=workdir, prompts=prompts, backfill=backfill)
                 record["injection"] = inj
                 record["untool"] = unt
-                if unt and unt.get("pending"):
+                if unt and unt.get("pending") and not backfill:
                     schedule_pending(ctx)
-                ctx.host.settle(transcript)
+                if not backfill:
+                    ctx.host.settle(transcript)
                 usage = ctx.host.session_usage(transcript)
                 eff, priced_by = accounting.effective(usage)
                 record.update({k: usage.get(k) for k in (
@@ -415,7 +435,10 @@ def fold_session(ctx, session_id, transcript_path=None):
                     "spiral_judge_tokens": float(sess.get("judge_tokens", 0) or 0),
                     "spiral_nudge_writer_tokens": float(sess.get("writer_tokens", 0) or 0)}})
             ctx.store.append("ledger.jsonl", record)
-            folded[session_id] = {"at": time.time(), "transcript": transcript}
+            entry = {"at": time.time(), "transcript": transcript}
+            if backfill:
+                entry["backfill"] = True
+            folded[session_id] = entry
             ctx.store.write("folded.json", folded)
             if sess:
                 sess["folded"] = True

@@ -133,6 +133,10 @@ WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT"
 
 def _hook_env(tmp_path, **extra):
     env = {k: os.environ[k] for k in WINDOWS_ENV if os.name == "nt" and k in os.environ}
+    # The hook's first SessionStart may read Claude Code history; keep it in the test's empty
+    # history, never the developer's own (conftest points these at a tmp directory).
+    env.update({k: os.environ[k] for k in ("CLAUDE_CONFIG_DIR", "HOME", "USERPROFILE")
+                if k in os.environ})
     env.update({"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
                 "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"})
     env.update(extra)

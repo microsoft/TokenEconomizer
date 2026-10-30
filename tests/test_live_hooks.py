@@ -741,6 +741,14 @@ def test_a_pending_deny_list_leaves_out_what_was_given_back_meanwhile(env, repo,
     assert _deny(repo) == ["CronCreate", "ShareOnboardingGuide"]
 
 
+def test_a_pending_deny_list_leaves_out_what_was_protected_meanwhile(env, repo, tmp_path):
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    ctx = LiveContext.build(hosts.ClaudeCode(), repo,
+                            dict(env, TE_TOOLPRUNE_PROTECT="Cron*,Workflow"))
+    assert fold.apply_pending(ctx, now=time.time() + 3700) is None
+    assert _deny(repo) == ["ShareOnboardingGuide"]
+
+
 def test_a_pending_deny_list_is_dropped_once_toolprune_is_no_longer_auto(env, repo, tmp_path):
     env, ctx = _pending_repo(env, repo, tmp_path)
     ctx = LiveContext.build(hosts.ClaudeCode(), repo, dict(env, TE_TOOLPRUNE="propose"))

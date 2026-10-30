@@ -31,16 +31,22 @@ def overhead_total(overhead):
 
 
 def summarize(records):
-    """Aggregate ledger records into the numbers `te status` prints."""
-    sessions = [r for r in records if r.get("kind") == "session"]
+    """Aggregate ledger records into the numbers `te status` prints.
+
+    Records a history backfill folded (`backfill: true`) were never live sessions: they are
+    counted separately as `backfilled`, and left out of every other count and sum."""
+    sessions = [r for r in records if r.get("kind") == "session" and not r.get("backfill")]
+    backfilled = sum(1 for r in records
+                     if r.get("kind") == "session" and r.get("backfill"))
     priced = [r for r in sessions if isinstance(r.get("effective_tokens"), (int, float))]
     exec_total = sum(r["effective_tokens"] for r in priced)
     # `overhead` records are paid calls charged as they happened (the background stuck judge),
     # so a call that outlived its session's fold is still in the account.
     oh_total = sum(overhead_total(r.get("overhead")) for r in records
-                   if r.get("kind") in ("session", "overhead"))
+                   if r.get("kind") in ("session", "overhead") and not r.get("backfill"))
     return {
         "sessions": len(sessions),
+        "backfilled": backfilled,
         "priced_sessions": len(priced),
         "effective_tokens": exec_total,
         "overhead_tokens": oh_total,

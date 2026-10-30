@@ -342,6 +342,16 @@ applied to the ones that follow. Facts and the deny list take effect when a sess
 loop guard acts during a turn. Each agent learns on its own (what Claude Code learned in a
 repository is not used by Codex there), while settings are shared by every agent.
 
+On a repository's first use, Claude Code's earlier finished sessions from the last
+`backfill_days` (365 by default), up to `backfill_max_per_repo` (200) per repository, are also
+folded in, oldest first, so tool-pruning evidence and the loop guard's envelope start from the
+history already there. That backfill makes no model call and writes no deny list; it skips
+one-prompt `claude -p` / SDK runs unless `backfill_headless=on`, reads extra Claude Code `projects`
+folders named by `backfill_dirs`, and one session start says how many sessions it learned from.
+`te backfill --dry-run` shows the plan, `te backfill --status` the record, and `backfill=off`
+turns it off. Claude Code deletes transcripts older than its `cleanupPeriodDays` (30 days by
+default), so a backfill can only read what is still on disk.
+
 - **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
   any language or toolchain. The first needs no model call: the same environment failure in a few
   sessions (a tool, interpreter, build or test command that fails as typed and works spelled
@@ -402,6 +412,7 @@ repository is not used by Codex there), while settings are shared by every agent
 | `config set KEY=VALUE … [--global]` | change settings for this repository (or every one); see [Settings](#settings) |
 | `config unset KEY … [--global]` | remove the setting at this level, so the global value (or the default) applies |
 | `repomap` / `repomap refresh` | the cached repository map / make it now (see [Repository map](#repository-map)) |
+| `backfill` / `backfill --dry-run` / `backfill --status` | fold in earlier finished Claude Code sessions / show the plan without writing / show the last run |
 | `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
 | `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
 | `repos merge KEY [INTO]` | merge one repository's state into another's (default: this one), for state whose checkouts are gone |
@@ -417,8 +428,8 @@ How to run them:
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 
-`doctor` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
-Codex skill for them.
+`doctor`, `repomap` and `backfill` run from a terminal (or as `/te …` on Pi); there is no slash
+command or Codex skill for them.
 
 Inside an agent, each command is one model turn; from a terminal it costs nothing. Codex asks
 before a command that changes something (`config set`, `toolprune restore`, ...), since it
@@ -516,6 +527,11 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 
 | Key | Default | Values |
 |---|---|---|
+| `backfill` | `on` | `on`: fold a repository's earlier finished Claude Code sessions in at first use, with no model call and nothing applied; `off`: leave that history alone |
+| `backfill_days` | `365` | days of finished Claude Code sessions the first-use backfill reads; older transcripts are skipped |
+| `backfill_max_per_repo` | `200` | the most recent sessions kept per repository in one backfill run |
+| `backfill_dirs` | `""` | extra Claude Code `projects` folders to read besides the default, separated by `;` (always `;`, because Windows paths contain `:`); a WSL folder's POSIX paths are translated to the Windows side; missing folders are skipped |
+| `backfill_headless` | `off` | `off`: skip one-prompt `claude -p` / SDK runs (an SDK session with several prompts is kept), whose restricted tool set and long autonomous turns would mislead pruning and the envelope; `on`: include them |
 | `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
@@ -527,6 +543,10 @@ thresholds; `TE_DISABLE=1` turns the whole plugin off. Otherwise the repository'
 settings win over the global ones, and those over the defaults; `unset` goes back one level. A
 change applies from the agent's next hook call: the guard at the next tool call, facts and the
 deny list at the next session start. A new fact-size cap shows once the next session has ended.
+
+The four `backfill_*` settings are read from the global config and the environment only, not a
+repository's config: the history is read before any repository context exists. `backfill=off`
+still applies to one repository.
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges`, `spiral.<name>` and

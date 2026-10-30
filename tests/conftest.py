@@ -25,6 +25,19 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_claude_history(tmp_path_factory, monkeypatch):
+    """No test reads the developer's own `~/.claude` history: the plugin now folds earlier
+    Claude Code sessions in at session start, and the tests use synthetic ones only."""
+    config = tmp_path_factory.mktemp("claude-config")
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    # The commands build their environment from explicit dicts that may omit the variable;
+    # an empty home keeps `~/.claude` out of reach for those too.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.fixture(autouse=True)
 def _no_model_calls(request, monkeypatch):
     """No test reaches a real agent CLI. With the loop guard on, a stuck-looking turn wakes its
     judge: the plugin's side calls answer nothing here, and a judge job runs inline instead of

@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; on a repository's first use, starts a backfill of its earlier finished Claude Code sessions, from the last `backfill_days` and in `backfill_dirs` (§4) | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -539,6 +539,24 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   keys counts once, at its later fold. Nothing is deleted: a merged directory moves to
   `merged/`, displaced learned state to `premerge-*`. `te repos merge KEY [INTO]` joins two by
   hand, for state whose checkouts are gone.
+* **Earlier history is folded in once.** On a repository's first start, its finished Claude Code
+  sessions are folded in, oldest first: those at least ten minutes old and from the last
+  `backfill_days` (365 by default), at most `backfill_max_per_repo` (200) per repository per run.
+  The default folder is `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`); `backfill_dirs`
+  adds further Claude Code `projects` folders, separated by `;`, including a WSL distribution's
+  (a transcript's POSIX cwd is translated to the Windows path it names). Automated one-prompt `claude -p` /
+  SDK sessions are skipped unless `backfill_headless=on`, because their restricted tool set and
+  long autonomous turns would mislead tool pruning and the envelope. The free fact layer,
+  tool-pruning evidence and the loop guard's envelope learn from the rest; no model call is made,
+  no deny list is applied or scheduled, and subagent logs are left with the session that spawned
+  them. `<root>/backfill.json` records each host's run (`running`, `done`, or `partial`, which the
+  next start resumes), `backfill.log` its progress, and `.backfilling-<host>` keeps concurrent
+  starts from piling up. A record the backfill wrote says `"backfill": true` in `ledger.jsonl`,
+  and `te status` counts those sessions separately. `te backfill --dry-run` prints the plan and
+  writes nothing, `te backfill --status` prints the record, and `backfill=off` turns the first-use
+  run off. The four `backfill_*` settings are read from the global settings and the environment,
+  not a repository's own config. Claude Code deletes transcripts older than its
+  `cleanupPeriodDays` (30 days by default), so the backfill can only read what is still on disk.
 
 The state directory, like the agents' own session logs it is derived from, is private to you:
 the plugin creates it `0700` and its files `0600`, and tightens a looser one it finds.
@@ -566,6 +584,13 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 
 ## 5. Known limitations
 
+* **Earlier history** — the first-use backfill reads Claude Code's own session logs only, from
+  the last `backfill_days` (365 by default) and in the folders named by `backfill_dirs`; Codex,
+  the Copilot CLI, Pi and opencode histories are not read. Claude Code deletes transcripts older
+  than its `cleanupPeriodDays` (30 days by default), so older sessions may already be gone.
+  Automated one-prompt `claude -p` / SDK sessions are skipped (an SDK session with several prompts is a person talking through a front end, and is kept) unless `backfill_headless=on`. With
+  `microskills=off` (the default) history feeds tool-pruning evidence and the loop guard's
+  envelope, not facts: facts are learned only while micro-skills is turned on.
 * **Copilot CLI** — the real-model checks used one model (Claude Haiku 4.5, over BYOK). A
   per-tool deny list waits on Copilot gaining a persistent per-tool filter.
 * **The loop guard, live** — both rungs have run on a provoked loop on every agent (2026-10-21),

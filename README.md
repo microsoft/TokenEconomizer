@@ -178,6 +178,16 @@ records every tool a session loads (without a model call), so that tool pruning 
 of them. Keep the marketplace path absolute, as above: the Copilot CLI reads a relative path such
 as `./TokenEconomizer` as the name of a GitHub repository.
 
+On first use in a repository, Claude Code's finished sessions from the last 365 days
+(`backfill_days`) are also folded in, oldest first, up to 200 per repository
+(`backfill_max_per_repo`), so tool-pruning evidence and the loop guard's envelope start from the
+history already there. That backfill makes no model call and applies nothing; it skips
+one-prompt `claude -p` / SDK runs by default (`backfill_headless=off`), can read extra Claude Code
+history folders (`backfill_dirs`), and
+`~/.tokeneconomizer/bin/te --host claude backfill --dry-run` shows the plan. `backfill=off` turns
+it off. Claude Code deletes transcripts older than its `cleanupPeriodDays` (30 days by default),
+so a backfill can only read what is still on disk.
+
 To update:
 
 | Agent | Update |

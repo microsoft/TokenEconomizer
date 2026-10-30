@@ -13,6 +13,7 @@ and results included; read as calls, every call counted twice.
 import glob
 import json
 import os
+from datetime import datetime
 
 from .jsonl import lines as _lines
 
@@ -90,6 +91,89 @@ def claude_prompt_count(transcript_path):
         n += isinstance(ev, dict) and _is_prompt(ev)
     return n
 
+
+def claude_projects_dir(env=None):
+    """Where Claude Code files its session logs: `$CLAUDE_CONFIG_DIR/projects`, else
+    `~/.claude/projects`."""
+    env = os.environ if env is None else env
+    base = env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(base, "projects")
+
+
+def claude_entrypoint(transcript_path, limit=20):
+    """The front end a Claude Code session named in its first records: `sdk-cli` for an
+    automated SDK / `claude -p` run, `cli` for the terminal UI, "" when it names none."""
+    for n, line in enumerate(_lines(transcript_path)):
+        if n >= limit:
+            break
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        ep = ev.get("entrypoint")
+        if not isinstance(ep, str):
+            ep = (ev.get("message") or {}).get("entrypoint")
+        if isinstance(ep, str) and ep.strip():
+            return ep.strip()
+    return ""
+
+
+def claude_history(projects_dir):
+    """(session_id, path, mtime) for every finished TOP-LEVEL session log under
+    `projects_dir`: `<project>/<session-id>.jsonl`.
+
+    A session's subagents are not sessions of their own -- their calls and tokens already count
+    with the session that spawned them (`claude_session_usage`, `claude_tool_usage`) -- so the
+    `<session-id>/subagents/` files are never listed."""
+    try:
+        projects = sorted(os.listdir(projects_dir))
+    except OSError:
+        return
+    for project in projects:
+        d = os.path.join(projects_dir, project)
+        if not os.path.isdir(d):
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(d, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            yield os.path.splitext(name)[0], path, mtime
+
+
+def claude_session_span(transcript_path):
+    """The first and last `timestamp` of a Claude Code transcript, as epoch seconds; None for
+    either when the log has none. Used when a session was never recorded live (see the
+    plugin's history backfill)."""
+    first = last = None
+    for line in _lines(transcript_path):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        ts = ev.get("timestamp") if isinstance(ev, dict) else None
+        if not isinstance(ts, str):
+            continue
+        try:
+            stamp = datetime.fromisoformat(ts[:-1] + "+00:00" if ts.endswith("Z") else ts)
+            stamp = stamp.timestamp()
+        except (ValueError, OverflowError, OSError):
+            continue
+        if first is None:
+            first = stamp
+        last = stamp
+    return first, last
 
 
 def claude_subagent_files(transcript_path):
