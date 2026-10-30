@@ -328,7 +328,10 @@ def apply_pending(ctx, now=None):
         root = pend.get("root") or ctx.repo.root
         done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
         done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
-        items = [t for t in pend.get("items") or [] if t not in done]
+        # A tool protected since the list was held (`toolprune_protect`) is never written.
+        protected = LiveAdapter(ctx.host, ctx.repo.root,
+                                protect=ctx.config.toolprune_protect).protected_tools()
+        items = [t for t in pend.get("items") or [] if t not in done and t not in protected]
         if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
             idle = now - last_activity(ctx)
             quiet_s = ctx.config.toolprune_quiet_minutes * 60
