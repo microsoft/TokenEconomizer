@@ -42,7 +42,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from . import (accounting, backfill, denylist, fold, hosts, paths, repomap, repos, sidecall,
+               toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -513,6 +514,23 @@ def cmd_fold(args):
     return 0
 
 
+def cmd_backfill(args):
+    """Fold this repository's earlier sessions from the agent's own history (see backfill.py)."""
+    ctx = _ctx(args)
+    if args.sessions:
+        ctx.config.backfill_sessions = args.sessions
+    if ctx.host.name != "claude":
+        print(f"backfill reads Claude Code's history only; nothing to do for {ctx.host.name}")
+        return 0
+    if args.dry_run:
+        for started, sid, path, _ in backfill.history(ctx):
+            print(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(started))}  {sid}  {path}")
+        return 0
+    recs = backfill.run(ctx, exclude=args.exclude or ())
+    print(f"backfill: folded {len(recs)} earlier session(s) of {ctx.repo.label}")
+    return 0
+
+
 def cmd_judge(args):
     """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
@@ -736,6 +754,11 @@ def build_parser():
     p.add_argument("--session", action="append")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_fold)
+    p = add("backfill")
+    p.add_argument("--exclude", action="append")
+    p.add_argument("--sessions", type=int, default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=cmd_backfill)
     p = add("judge")
     p.add_argument("--session", required=True)
     p.add_argument("--job", required=True)

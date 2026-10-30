@@ -13,12 +13,21 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; on a repository's first Claude Code start, hands its earlier `~/.claude/projects` logs to a detached `te backfill` (below) | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
 | `Stop` | Closes the turn; a turn that *ended green* feeds the per-repository envelope | loopguard |
 | `SessionEnd` | Hands the session to a detached `te fold` and returns at once | microskills, toolprune, ledger |
+
+`te backfill` (`plugin/backfill.py`) folds the sessions a repository ran before the plugin was
+installed. Claude Code keeps each session's log at
+`~/.claude/projects/<encoded cwd>/<session id>.jsonl` (`$CLAUDE_CONFIG_DIR` when set); the
+encoded name is lossy, so a log's repository is read from the `cwd` its records carry and keyed as
+a live session is. It folds the most recent `backfill_sessions` (30) oldest first through the same
+`fold_session`, skips a log written in the last ten minutes (it may be running), runs once per
+repository (`backfill.json`), and never folds a session twice. The loop guard's envelope is not
+backfilled: it is fed only by live `Stop` hooks.
 
 `te fold` runs the **same classes the experiments ran** over the finished session's log:
 `PrefixStage` (with micro-skills on, the free envfacts layer under the proposer) and

@@ -2,6 +2,7 @@
 
     SessionStart      inject the repository's micro-skills (cached by the last fold), and
                       fold any earlier session that ended without its SessionEnd being seen;
+                      on a repository's first start, fold the agent's earlier logs (`backfill`);
                       with `repomap` on, refresh a stale map in the background
     UserPromptSubmit  open a prompt-turn for the loop guard; on a session's first prompt, add
                       the repository map (`repomap=on`)
@@ -24,7 +25,7 @@ import os
 import time
 
 from .. import loopguard
-from . import denylist, fold, repomap, repos, sidecall
+from . import backfill, denylist, fold, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -170,6 +171,9 @@ class LiveController:
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
+        if backfill.due(self.ctx):
+            # The sessions this repository ran before the plugin was installed.
+            backfill.spawn(self.ctx, exclude=(self.sid,))
         return merge_outputs(*outputs)
 
     def _toolprune_notices(self, seen):
