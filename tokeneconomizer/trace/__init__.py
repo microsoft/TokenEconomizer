@@ -16,8 +16,10 @@ from .calls import RTK_PREFIX_RE, call_cwds, load_trajectory, strip_rtk_prefix, 
 from .catalog import (CODEX_DEFAULT_TOOL_CATALOG, catalog_sources, parse_catalog,
                       parse_catalog_with_source, parse_tool_catalog, parse_tool_catalog_claude,
                       parse_tool_catalog_flat, parse_tool_names_copilot)
-from .claude import (claude_calls, claude_deferred_tools, claude_prompt_count,
-                     claude_session_usage, claude_subagent_files, claude_tool_usage)
+from .claude import (claude_calls, claude_deferred_tools, claude_entrypoint,
+                     claude_history, claude_projects_dir, claude_prompt_count,
+                     claude_session_span, claude_session_usage, claude_subagent_files,
+                     claude_tool_usage)
 from .codex import (codex_capability_trace, codex_exec_calls, codex_prompt_count,
                     codex_rollout_to_exec, codex_session_meta, codex_session_usage,
                     rollout_item_to_exec)
@@ -34,7 +36,8 @@ __all__ = [
     "CODEX_DEFAULT_TOOL_CATALOG", "catalog_sources", "parse_catalog", "parse_catalog_with_source",
     "parse_tool_catalog", "parse_tool_catalog_claude", "parse_tool_catalog_flat",
     "parse_tool_names_copilot",
-    "claude_calls", "claude_deferred_tools", "claude_prompt_count", "claude_session_usage",
+    "claude_calls", "claude_deferred_tools", "claude_entrypoint", "claude_history",
+    "claude_projects_dir", "claude_prompt_count", "claude_session_span", "claude_session_usage",
     "claude_subagent_files", "claude_tool_usage",
     "codex_capability_trace", "codex_exec_calls", "codex_prompt_count", "codex_rollout_to_exec",
     "codex_session_meta", "codex_session_usage", "rollout_item_to_exec",

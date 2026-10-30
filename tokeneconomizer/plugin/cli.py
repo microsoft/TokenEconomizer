@@ -18,6 +18,9 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
+    te backfill [--dry-run | --status ...]
+                                      fold in earlier finished Claude Code sessions for the
+                                      repositories they name (no model calls, nothing applied)
     te repos                          every repository with state here: how it was identified,
                                       its agents and sessions, the checkouts seen
     te repos migrate                  send state recorded under earlier keys where it belongs
@@ -42,10 +45,12 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from . import (accounting, backfill, denylist, fold, hosts, paths, repomap, repos, sidecall,
+               toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
+from .store import Store
 
 
 def _ctx(args, env=None, session_id=None):
@@ -150,7 +155,9 @@ def cmd_status(args):
         print(f"  warning      {w}")
     if out["session_note"]:
         print(f"  note         {out['session_note']}")
-    print(f"  sessions     {ledger['sessions']} folded, "
+    print(f"  sessions     {ledger['sessions']} folded"
+          + (f" (+{ledger['backfilled']} from earlier history)"
+             if ledger.get("backfilled") else "") + ", "
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
           f"({ledger['overhead_frac']:.1%})")
@@ -520,6 +527,40 @@ def cmd_judge(args):
     return 0
 
 
+# ---- backfill ------------------------------------------------------------------------------
+def cmd_backfill(args):
+    host = hosts.HOSTS[args.host]()
+    root = state_root()
+    if args.status:
+        entry = (Store(root).read(backfill.STATE) or {}).get(host.name)
+        if not entry:
+            print(f"no backfill recorded for {host.name}")
+            return 0
+        print(json.dumps(entry, indent=2, default=str))
+        return 0
+    env = dict(os.environ)
+    if args.dry_run:
+        groups = backfill.plan(host, env, now=time.time(), days=args.days,
+                               max_per_repo=args.max_per_repo, exclude=args.exclude)
+        if not groups:
+            print("nothing to learn from earlier Claude Code sessions")
+            return 0
+        for group in groups:
+            print(f"{group['label']}  [{group['key']}]  {group['cwd']}")
+            print(f"  sessions  {len(group['sessions'])}")
+            if group["sessions"]:
+                print("  folds     " + ", ".join(sid for sid, _p, _m in group["sessions"]))
+            for reason, n in sorted(group["skipped"].items()):
+                print(f"  skipped   {reason}: {n}")
+        return 0
+    res = backfill.run(host, env, days=args.days, max_per_repo=args.max_per_repo,
+                       budget_s=args.budget_min * 60.0, exclude=args.exclude,
+                       current_cwd=args.cwd, log=None if args.quiet else print)
+    if not args.quiet:
+        print(f"backfill {res['state']}: {res['sessions']} session(s) folded")
+    return 0
+
+
 # ---- repos ----------------------------------------------------------------------------------
 def _when(ts):
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
@@ -749,6 +790,18 @@ def build_parser():
     p = add("repomap")
     p.add_argument("action", nargs="?", default="show", choices=("show", "refresh"))
     p.set_defaults(fn=cmd_repomap)
+    p = add("backfill")
+    p.add_argument("--dry-run", action="store_true")
+    defaults = backfill.settings(os.environ)
+    p.add_argument("--days", type=int, default=defaults["days"],
+                   help="how far back to read; default: the backfill_days setting")
+    p.add_argument("--max-per-repo", type=int, default=defaults["max_per_repo"],
+                   help="most recent sessions per repository; default: backfill_max_per_repo")
+    p.add_argument("--budget-min", type=float, default=backfill.BUDGET_S / 60.0)
+    p.add_argument("--exclude", action="append", default=[])
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--status", action="store_true")
+    p.set_defaults(fn=cmd_backfill)
     p = add("probe")
     p.add_argument("--sessions", type=int, default=6)
     p.add_argument("--model", default=None)

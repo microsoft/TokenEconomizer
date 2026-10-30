@@ -45,6 +45,8 @@ import shlex
 import time
 
 from .. import trace
+from .config import load_config
+from .paths import state_root
 
 _RESPONSE_KEYS = ("stdout", "stderr", "output", "aggregated_output", "formatted_output",
                   "content", "result", "error", "message", "text_result_for_llm")
@@ -184,6 +186,11 @@ class Host:
         """How many prompts the finished session ran; None where the log does not say."""
         return None
 
+    def history(self, env=None):
+        """Finished session logs this agent kept BEFORE the plugin was installed:
+        [(session_id, path, mtime, source_dir)]. Hosts with no such store return nothing."""
+        return []
+
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
 
@@ -254,6 +261,19 @@ class ClaudeCode(Host):
 
     def prompt_count(self, transcript_path):
         return trace.claude_prompt_count(transcript_path)
+
+    def history(self, env=None):
+        env = os.environ if env is None else env
+        cfg = load_config(state_root(env), env=env)
+        dirs = [trace.claude_projects_dir(env)]
+        dirs += [d.strip() for d in (cfg.backfill_dirs or "").split(";") if d.strip()]
+        seen = set()
+        for source in dirs:
+            for sid, path, mtime in trace.claude_history(source):
+                if sid in seen:             # the first history folder holding it wins
+                    continue
+                seen.add(sid)
+                yield sid, path, mtime, source
 
     def tool_usage(self, trace_path):
         return trace.claude_tool_usage(os.path.realpath(trace_path))

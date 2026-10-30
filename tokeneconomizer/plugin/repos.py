@@ -175,7 +175,9 @@ def _sessions(st):
         if name.endswith(".json"):
             rec = st.read(os.path.join("sessions", name))
             out[name[:-5]] = rec if isinstance(rec, dict) else {}
-    for sid in st.read("folded.json") or {}:
+    for sid, entry in (st.read("folded.json") or {}).items():
+        if isinstance(entry, dict) and entry.get("backfill"):
+            continue                    # history learned, not a live session
         out.setdefault(sid, {})
     return out
 
@@ -183,7 +185,7 @@ def _sessions(st):
 _CWD_RE = re.compile(r'"cwd"\s*:\s*("(?:[^"\\]|\\.)*")')
 
 
-def _transcript_cwd(path):
+def transcript_cwd(path):
     """The first directory a session log names (every agent's log records where it started)."""
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -193,12 +195,15 @@ def _transcript_cwd(path):
         return None
 
 
+_transcript_cwd = transcript_cwd      # the name the module used before it was public
+
+
 def session_cwd(rec, folded=None):
     """Where a recorded session started: the first directory its log names, else its record's
     `cwd`. The log comes first because every fragment of a session (0.1.0 filed one wherever
     the agent had moved) shares it, and because 0.1.0 rewrote a record's `cwd` at every
     SessionStart, a compaction's included."""
-    return _transcript_cwd(_transcript_of(rec, folded)) or rec.get("cwd") or None
+    return transcript_cwd(_transcript_of(rec, folded)) or rec.get("cwd") or None
 
 
 def _transcript_of(rec, folded_entry):

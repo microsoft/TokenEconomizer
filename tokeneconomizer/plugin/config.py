@@ -45,7 +45,16 @@ person can tune by hand:
   * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
-  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map.
+  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
+  * backfill    -- `on` (the default) folds in the finished Claude Code sessions a repository
+                   already had when the plugin was installed, on first use, oldest first; `off`
+                   leaves that history alone and stops the one-line notice;
+  * backfill_days, backfill_max_per_repo -- how far back that first-use read goes (365 days)
+                   and how many of its most recent sessions one repository keeps (200);
+  * backfill_dirs -- extra Claude Code `projects` directories to read, separated by `;` (always
+                   `;`, since Windows paths contain `:`); missing directories are skipped;
+  * backfill_headless -- `off` (the default) skips one-prompt `claude -p` / SDK runs, which run with a
+                   restricted tool set and long autonomous turns; `on` includes them.
 
 The names before the mechanisms were renamed are read too, so an existing config file keeps
 working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
@@ -54,10 +63,10 @@ settings (`inject_max_facts`, `untool_evidence`, `spiral.<name>`, ...) and envir
 
 Sources, lowest precedence first: built-in defaults, `<root>/config.json`, the repository's
 `config.json`, then environment variables (`TE_MICROSKILLS`, `TE_TOOLPRUNE`, `TE_LOOPGUARD`,
-`TE_MODE`, `TE_SHADOW`, `TE_DISABLE`, and one per setting; `TE_LOOPGUARD_THRESHOLDS` takes
-JSON). Within one source a new name wins over its old one. An invalid value is ignored with
-a warning recorded in the result rather than raised: a typo in a config file must not break the
-agent's hooks.
+`TE_MODE`, `TE_SHADOW`, `TE_BACKFILL`, `TE_DISABLE`, and one per setting;
+`TE_LOOPGUARD_THRESHOLDS` takes JSON). Within one source a new name wins over its old one. An
+invalid value is ignored with a warning recorded in the result rather than raised: a typo in a
+config file must not break the agent's hooks.
 """
 import json
 import os
@@ -67,12 +76,14 @@ MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
+BACKFILL = ("off", "on")
+BACKFILL_HEADLESS = ("off", "on")
 MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
 # What `on` turns each mechanism to, and the words read as on / off.
 ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard": "nudge",
-            "repomap": "on"}
+            "repomap": "on", "backfill": "on", "backfill_headless": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
 # Values renamed with their mechanism.
@@ -159,13 +170,19 @@ class LiveConfig:
     repomap_tokens: int = 2048
     repomap_python: str = ""
     repomap_timeout: int = 8
+    backfill: str = "on"
+    backfill_days: int = 365
+    backfill_max_per_repo: int = 200
+    backfill_dirs: str = ""
+    backfill_headless: str = "off"
     paid_model: str = ""
     shadow: bool = False
     vocabulary: str = "auto"
     warnings: list = field(default_factory=list)
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
-                "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
+                "loopguard": LOOPGUARD, "repomap": REPOMAP, "backfill": BACKFILL,
+                "backfill_headless": BACKFILL_HEADLESS, "loopguard_aggr": AGGR,
                 "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
     _MIN = {"toolprune_quiet_minutes": 0}
@@ -267,7 +284,10 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
-        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout"}
+        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
+        "TE_BACKFILL": "backfill", "TE_BACKFILL_DAYS": "backfill_days",
+        "TE_BACKFILL_MAX_PER_REPO": "backfill_max_per_repo",
+        "TE_BACKFILL_DIRS": "backfill_dirs", "TE_BACKFILL_HEADLESS": "backfill_headless"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 

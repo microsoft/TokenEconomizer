@@ -24,7 +24,7 @@ import os
 import time
 
 from .. import loopguard
-from . import denylist, fold, repomap, repos, sidecall
+from . import backfill, denylist, fold, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -154,6 +154,11 @@ class LiveController:
         if note and not self.cfg.shadow:
             outputs.append(self.host.notice(note))
 
+        if not self.cfg.shadow:
+            note = backfill.notice(self.ctx.root, self.host.name, self._cmd("status"))
+            if note:
+                outputs.append(self.host.notice(note))
+
         if self.cfg.repomap != "off":
             if repomap.stale(self.ctx):
                 repomap.spawn_refresh(self.ctx)
@@ -170,6 +175,10 @@ class LiveController:
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
+        try:
+            backfill.start(self.ctx, exclude=(self.sid,))
+        except Exception:
+            repos._record_error(self.ctx.root)
         return merge_outputs(*outputs)
 
     def _toolprune_notices(self, seen):
