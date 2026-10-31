@@ -25,7 +25,9 @@ so no extra API key is needed and the call is billed where the session is:
   * Pi: `pi --print --mode json` with nothing loaded but the model -- no tools, extensions,
     skills, prompt templates, context files, MCP servers or saved session. With no `paid_model`
     it runs on the person's own default provider and model, under whatever login Pi holds for
-    it (a subscription signed in with `/login`, or an API key).
+    it (a subscription signed in with `/login`, or an API key). A model whose provider an
+    extension registers needs that extension loaded (`pi_extensions`); `pi_cli` names the `pi`
+    to run, where the first on PATH is a wrapper the calls should not go through.
 
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
@@ -221,11 +223,23 @@ PI_FLAGS = ("--print", "--mode", "json", "--no-session", "--no-tools", "--no-ext
             "--no-skills", "--no-prompt-templates", "--no-context-files", "--offline")
 
 
-def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S):
+def pi_extension_args(extensions):
+    """`--extension <path>` for each extension a side call loads despite `--no-extensions` (Pi
+    loads explicit ones still): a provider registered by an extension -- a company gateway, a
+    package's -- has no model in the call otherwise. Paths are made absolute, since the call runs
+    in a throwaway directory; `builtin:<name>` is passed as it is. `--no-tools` keeps any tools
+    such an extension adds out of the call."""
+    return [a for p in extensions or () for a in (
+        "--extension",
+        p if p.startswith("builtin:") else os.path.abspath(os.path.expanduser(p)))]
+
+
+def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     model_args = ["--model", model] if model else []
+    ext_args = pi_extension_args(extensions)
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
         for extra in (["--no-mcp"], []):
-            cmd = [cli, *PI_FLAGS, *extra, *model_args, "--", prompt]
+            cmd = [cli, *PI_FLAGS, *extra, *ext_args, *model_args, "--", prompt]
             out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
                                  timeout=timeout, env=_env(), cwd=cwd,
                                  stdin=subprocess.DEVNULL)
@@ -374,7 +388,10 @@ def runner_for(host_name, config):
     when micro-skills is on, the loop guard's judge when the guard is."""
     model = config.paid_model
     if host_name == "pi":
-        return lambda prompt, _m="agent": pi_call(prompt, model=model)
+        cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"
+        extensions = list(config.pi_extensions)
+        return lambda prompt, _m="agent": pi_call(prompt, model=model, cli=cli,
+                                                  extensions=extensions)
     if host_name == "opencode":
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "codex":
