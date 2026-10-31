@@ -414,14 +414,43 @@ class Cursor(Host):
         "sessionEnd": "SessionEnd",
     }
 
+    def session_id(self, p):
+        return str(p.get("session_id") or p.get("conversation_id") or "")
+
+    def cwd(self, p, env):
+        roots = p.get("workspace_roots")
+        root = roots[0] if isinstance(roots, list) and roots else ""
+        return p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or root or os.getcwd()
+
+    def turn_key(self, p):
+        return str(p.get("generation_id") or p.get("prompt_id") or "")
+
+    def context(self, event, text):
+        return {"additional_context": text}
+
+    def notice(self, text):
+        return {"additional_context": self.relay(text)}
+
+    def transcript(self, p):
+        if p.get("transcript_path"):
+            return p["transcript_path"]
+        sid = self.session_id(p)
+        if not sid:
+            return ""
+        from .paths import state_root
+        safe_id = os.path.basename(sid)
+        return os.path.join(state_root(), "cursor-sessions", safe_id + ".jsonl")
+
     def prepare(self, payload, env):
         p = dict(payload or {})
         p["session_id"] = p.get("conversation_id") or p.get("session_id") or ""
-        roots = p.get("workspace_roots")
-        root = roots[0] if isinstance(roots, list) and roots else ""
-        p["cwd"] = p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or root or os.getcwd()
+        p["cwd"] = (p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or
+                    ((p.get("workspace_roots") or [""])[0]) or os.getcwd())
         p["hook_event_name"] = self._EVENTS.get(p.get("hook_event_name"), "")
-        p["transcript_path"] = self.transcript(p)
+        if p.get("session_id"):
+            from .paths import state_root
+            p["transcript_path"] = os.path.join(
+                state_root(env), "cursor-sessions", os.path.basename(p["session_id"]) + ".jsonl")
         if p["hook_event_name"] == "SessionStart":
             p["source"] = "startup"
         if p["hook_event_name"] == "UserPromptSubmit":
@@ -448,31 +477,6 @@ class Cursor(Host):
                 if p.get("failure_type") == "permission_denied":
                     p["error"] = "Permission denied: " + str(p["error"])
         return p
-
-    def session_id(self, p):
-        return str(p.get("session_id") or p.get("conversation_id") or "")
-
-    def cwd(self, p, env):
-        roots = p.get("workspace_roots")
-        root = roots[0] if isinstance(roots, list) and roots else ""
-        return p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or root or os.getcwd()
-
-    def turn_key(self, p):
-        return str(p.get("generation_id") or p.get("prompt_id") or "")
-
-    def context(self, event, text):
-        return {"additional_context": text}
-
-    def notice(self, text):
-        return {"additional_context": self.relay(text)}
-
-    def transcript(self, p):
-        sid = self.session_id(p)
-        if not sid:
-            return ""
-        from .paths import state_root
-        safe_id = os.path.basename(sid)
-        return os.path.join(state_root(), "cursor-sessions", safe_id + ".jsonl")
 
     def record_event(self, payload):
         event = payload.get("hook_event_name")

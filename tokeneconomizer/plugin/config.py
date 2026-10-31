@@ -8,10 +8,12 @@ The defaults:
                                 calls a model through the agent's own CLI (charged to the
                                 ledger) to write facts beyond them, as in the experiments.
                                 "envfacts" alone makes no model call;
-  * toolprune   = "off"      -- no tools or MCP servers are removed by default. Set it to `auto`
-                                to apply a deny list after the evidence forms and the repository's
-                                sessions have been idle, or to `propose` to wait for `toolprune
-                                apply`;
+  * toolprune   = "auto"     -- a deny list is applied once the evidence forms it and the
+                                repository's sessions have been idle (toolprune_quiet_minutes),
+                                from the next session, and announced once at that session's start;
+                                `toolprune restore` gives it back. "propose" only proposes it,
+                                and writes nothing to the agent's settings until the person
+                                runs `toolprune apply`;
   * loopguard   = "nudge"    -- a turn that shows signs of looping is put to a judge, a model
                                 called through the agent's own CLI, and redirected mid-turn only
                                 when the judge finds it stuck (the redirect written by that
@@ -149,7 +151,7 @@ class LiveConfig:
     microskills_max_facts: int = 4
     microskills_max_tokens: int = 150
     microskills_propose_every: int = 3
-    toolprune: str = "off"
+    toolprune: str = "auto"
     toolprune_evidence: int = 10
     toolprune_min_sessions: int = 2
     toolprune_sessions: int = 5

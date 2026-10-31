@@ -211,7 +211,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | current command-hook schema | no version range verified |
-| opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
+| opencode (experimental) | 1.19.5, 2.1.4, and 2.2.0 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
@@ -220,7 +220,7 @@ have not been tested yet.
 - **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
   `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`, using your clone's
   full path; `git pull` in the clone updates it.
-- **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
+- **opencode** support is experimental: it was tested on 1.19.5, 2.1.4, and 2.2.0, and not in the
   2.x terminal UI.
 - **Cursor Agent** support is experimental; the hook event mapping has not yet been verified in
   the live Cursor app.
@@ -254,11 +254,10 @@ Inside an agent, a command costs one model turn; from a terminal it is free. The
 
 ## Settings
 
-The loop guard is on by default. Tool pruning is off by default and never removes tools or MCP
-servers unless you explicitly enable it. With these defaults, the plugin calls a model only when a
-turn shows signs of looping: the judge, and the redirect it writes if it finds the turn stuck.
-Micro-skills is off by default, because its proposer adds model calls and how much it saves depends
-on the repository and the work you do there. Each mechanism has its own switch
+Tool pruning and the loop guard are on by default; with these defaults, the plugin calls a model
+only when a turn shows signs of looping: the judge, and the redirect it writes if it finds the
+turn stuck. Micro-skills is off by default, because its proposer adds model calls and how much it
+saves depends on the repository and the work you do there. Each mechanism has its own switch
 (`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
 are these settings:
 
