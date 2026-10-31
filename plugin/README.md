@@ -338,9 +338,27 @@ the side call denies only `bash`, `edit`, `webfetch` and `websearch`.
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
-applied to the ones that follow. Facts and the deny list take effect when a session starts; the
+applied to the ones that follow. On its **first session in a repository** it also learns from
+the history that predates it, by reading the agent's own transcripts (below), so it does not
+start from nothing. Facts and the deny list take effect when a session starts; the
 loop guard acts during a turn. Each agent learns on its own (what Claude Code learned in a
 repository is not used by Codex there), while settings are shared by every agent.
+
+- **Earlier history.** A repository worked in for months would otherwise start empty at
+  install: no tool evidence, no facts, no envelope. So the first session here starts `te
+  backfill` in the background, which reads the agent's own logs of earlier sessions in this
+  repository -- Claude Code's `~/.claude/projects/**`, Codex's `~/.codex/sessions/**`, the
+  Copilot CLI's `~/.copilot/session-state/**` -- and folds them with the same code a session's
+  end uses, newest first: the facts, the tool evidence, the ledger, and (on Claude Code) the
+  loop guard's envelope. Only sessions whose own log records a directory inside this repository
+  are read, only logs quiet for five minutes (a running session is left to its own fold), and a
+  session already folded is skipped, so nothing is learned twice. It makes **no model call**
+  (the free fact layer learns; the paid proposer waits for the live folds), and is capped at
+  `backfill_sessions` sessions (200 by default; 0 reads the whole history). `te status` says
+  what it read. To run it inside a session, use `/tokeneconomizer:backfill` (on Codex,
+  `$tokeneconomizer:backfill`), with `--limit N` to cap the sessions read or `--force` to
+  include logs that are still being written; `config set backfill=off` turns the automatic
+  first-session read off. Each agent backfills its own state, as it learns on its own.
 
 - **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
   any language or toolchain. The first needs no model call: the same environment failure in a few
@@ -405,6 +423,7 @@ repository is not used by Codex there), while settings are shared by every agent
 | `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
 | `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
 | `repos merge KEY [INTO]` | merge one repository's state into another's (default: this one), for state whose checkouts are gone |
+| `backfill [--limit N] [--force]` | fold the agent's own logs of earlier sessions in this repository (the plugin does this once, at a repository's first session; no model call) |
 | `doctor` | check Python, the state directory, the agents found, how this directory was identified, and the error log |
 
 How to run them:
@@ -412,7 +431,7 @@ How to run them:
 | Agent | Inside the agent | From a terminal, in the repository |
 |---|---|---|
 | Claude Code | `/tokeneconomizer:<command>` | `~/.tokeneconomizer/bin/te --host claude <command>` |
-| Codex | `$tokeneconomizer:<command>` (`status`, `microskills`, `toolprune`, `config`, `repos`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
+| Codex | `$tokeneconomizer:<command>` (`status`, `microskills`, `toolprune`, `config`, `repos`, `backfill`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
@@ -502,6 +521,13 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | `judge_confidence` | 0.85 | 0.7 | 0.55 | how sure the judge must be that a turn is stuck |
 | `gate_min_turns` | 24 | 18 | 12 | tool calls before the judge is asked (never fewer than `min_turns`) |
 | `gate_error_outputs` | 8 | 8 | 8 | failing results that ask the judge without a repeated failure |
+
+**Earlier history** (see [What to expect](#what-to-expect)):
+
+| Key | Default | What it sets |
+|---|---|---|
+| `backfill` | `on` | `on`: the first session in a repository starts a background read of the agent's earlier logs there (no model call); `off`: learn only from sessions from install onwards |
+| `backfill_sessions` | `200` | the most recent sessions read; `0` reads the whole history |
 
 **Repository map** (off by default; see [Repository map](#repository-map)):
 

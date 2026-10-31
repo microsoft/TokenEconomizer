@@ -16,6 +16,8 @@
                                       `loopguard.min_turns=12` (this repository; `--global` for
                                       every repository)
     te config unset KEY ...           back to the next source down (the global file, then default)
+                                      (backfill=on|off, backfill_sessions=N: the read of the
+                                      agent's earlier logs at a repository's first session)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
     te repos                          every repository with state here: how it was identified,
@@ -25,6 +27,10 @@
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
     te doctor                         check the installation
+    te backfill                       learn this repository's history from the agent's own
+                                      session logs (the plugin does this once, at the first
+                                      session here; `--limit N` caps the sessions, newest first,
+                                      `--force` rereads now)
     te --host copilot probe           real Copilot sessions in a throwaway repository: does a
                                       learned fact change what the model does, and what does the
                                       deny list save (makes model calls; see plugin/probe.py)
@@ -42,7 +48,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from . import (accounting, backfill, denylist, fold, hosts, paths, repomap, repos, sidecall,
+               toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -105,13 +112,25 @@ def _session_note(ctx, env=None):
 
 
 # ---- status / microskills ------------------------------------------------------------------
+def backfill_oneline(state):
+    """What `te backfill` did, in one line for `te status` (None: not run yet)."""
+    if not state:
+        return None
+    if state.get("skipped"):
+        return f"skipped ({state['skipped']})"
+    return (f"{state.get('sessions', 0)} session(s) of this repository's earlier history "
+            f"read from the agent's logs" + (f" ({len(state['errors'])} skipped)"
+                                             if state.get("errors") else ""))
+
+
 def cmd_status(args):
     ctx = _ctx(args)
     cfg = ctx.config
     out = {"repo": ctx.repo.label, "repo_root": ctx.repo.root, "repo_key": ctx.repo.key,
            "identified_by": ctx.repo.how, "host": ctx.host.name,
            "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings,
-           "session_note": _session_note(ctx)}
+           "session_note": _session_note(ctx),
+           "backfill": backfill_oneline(ctx.store.read(backfill.STATE))}
     inj = ctx.store.read("injection.json") or {}
     unt = ctx.store.read("untool.json") or {}
     env_tracker = loopguard.load_envelope(ctx.store, cfg.loopguard_aggr,
@@ -150,6 +169,8 @@ def cmd_status(args):
         print(f"  warning      {w}")
     if out["session_note"]:
         print(f"  note         {out['session_note']}")
+    if out["backfill"]:
+        print(f"  backfill     {out['backfill']}")
     print(f"  sessions     {ledger['sessions']} folded, "
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
@@ -513,6 +534,13 @@ def cmd_fold(args):
     return 0
 
 
+def cmd_backfill(args):
+    ctx = _ctx(args)
+    state = backfill.run(ctx, limit=args.limit, force=args.force)
+    print(json.dumps(state, indent=2, default=str))
+    return 0 if state.get("done") else 1
+
+
 def cmd_judge(args):
     """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
@@ -741,6 +769,10 @@ def build_parser():
     p.add_argument("--job", required=True)
     p.set_defaults(fn=cmd_judge)
     add("doctor").set_defaults(fn=cmd_doctor)
+    p = add("backfill")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_backfill)
     p = add("repos")
     p.add_argument("action", nargs="?", default="list", choices=("list", "migrate", "merge"))
     p.add_argument("keys", nargs="*")

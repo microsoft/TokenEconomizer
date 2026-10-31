@@ -73,7 +73,7 @@ AGGR = ("conservative", "default", "aggressive")
 
 # What `on` turns each mechanism to, and the words read as on / off.
 ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard": "nudge",
-            "repomap": "on"}
+            "repomap": "on", "backfill": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
 # Values renamed with their mechanism.
@@ -156,6 +156,8 @@ class LiveConfig:
     loopguard_aggr: str = "default"
     loopguard_nudges: int = 1
     loopguard_thresholds: dict = field(default_factory=dict)
+    backfill: str = "on"
+    backfill_sessions: int = 200
     repomap: str = "off"
     repomap_tokens: int = 2048
     repomap_python: str = ""
@@ -167,9 +169,10 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
+                "backfill": ("on", "off"),
                 "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
-    _MIN = {"toolprune_quiet_minutes": 0}
+    _MIN = {"toolprune_quiet_minutes": 0, "backfill_sessions": 0}
 
     def as_dict(self):
         d = asdict(self)
@@ -269,6 +272,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_TOOLPRUNE_PROTECT": "toolprune_protect",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
+        "TE_BACKFILL": "backfill", "TE_BACKFILL_SESSIONS": "backfill_sessions",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")

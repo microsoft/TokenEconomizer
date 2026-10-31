@@ -63,7 +63,11 @@ def _run_dir(workdir, trace_path):
     return run
 
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, allow_sidecalls=True):
+    """Learn from one finished session and render the block the next one gets.
+
+    `allow_sidecalls=False` folds without the paid proposer, for a backfill of a long history
+    that must cost no model call; the facts that need none are still learned."""
     profile = ctx.config.microskills
     if profile == "off":
         return None
@@ -76,7 +80,8 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns.
     runner = (sidecall.runner_for(ctx.host.name, ctx.config)
-              if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
+              if allow_sidecalls and icfg.paid
+              and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}

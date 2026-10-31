@@ -1,7 +1,7 @@
 {
   "name": "tokeneconomizer",
   "displayName": "TokenEconomizer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Experience-driven black-box cost control for coding agents: micro-skills (short repository facts learned from earlier sessions) injected at session start, tool pruning that leaves out tools a repository's sessions never use (one command gives them back), and a guard that redirects a turn stuck in a failing loop.",
   "author": {
     "name": "TokenEconomizer authors"

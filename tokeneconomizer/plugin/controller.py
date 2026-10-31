@@ -24,7 +24,7 @@ import os
 import time
 
 from .. import loopguard
-from . import denylist, fold, repomap, repos, sidecall
+from . import backfill, denylist, fold, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -169,6 +169,14 @@ class LiveController:
         repos.note_repo(self.ctx.root, self.ctx.repo)
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
+        # The first session here learns from the agent's own logs of earlier ones (once per
+        # repository and agent), so what was learned before install is not lost; then the
+        # ordinary sweep of sessions whose end was never seen.
+        if backfill.should_run(self.ctx):
+            try:
+                backfill.spawn(self.ctx)
+            except Exception:
+                pass
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
 

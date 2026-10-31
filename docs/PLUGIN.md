@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; on a repository's **first** session here, starts `te backfill` (detached) to learn from the agent's own logs of earlier sessions | microskills, toolprune, loopguard |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -43,6 +43,27 @@ re-tuned. Three things it adds:
 * The **stuck judge and nudge writer run in a detached `te judge` job**, not in
   the hook. The hook starts the job and returns; a later PostToolUse picks up the verdict, with
   the redirect already written. Each job's spend is charged to the ledger when it is spent.
+
+`te backfill` is the history that predates install (`plugin/backfill.py`). Every mechanism
+learns from the sessions the hooks watch, so a repository worked in for months would start
+empty: no tool evidence, facts forming only from the first folds, no envelope. The agent's own
+logs already hold those sessions. On the first session of a repository here, a detached
+`te backfill` reads them -- Claude Code's `$CLAUDE_CONFIG_DIR/projects/*/*.jsonl` (a session's
+repository comes from the `cwd` its own log records, never from the projects folder's lossy
+name) with each session's `subagents/*.jsonl` appended, Codex's `$CODEX_HOME/sessions/**/
+rollout-*.jsonl` (the repository from `trace.codex_session_meta`), and the Copilot CLI's
+`$COPILOT_HOME/session-state/<id>/events.jsonl` -- and folds them, most recent first, with the
+folds' own `_fold_microskills` and `_fold_toolprune`, plus `loopguard.record_turn` for each of a
+Claude log's prompt-turns that ended green. It reads only sessions whose log records a
+directory inside the repository, only logs quiet for `BACKFILL_MIN_AGE_S` (300 s: a running
+session is left to its own fold), skips any id already in `folded.json`, and marks each session
+it reads folded -- so the fold its own end hands off never learns from it twice. It takes no
+model call (the free fact layer learns; the distiller folds with no runner), is capped at
+`backfill_sessions` (200; 0 = all), takes the fold lock per session (so a live fold is never held
+off for the length of a long history), and writes `backfill.json`, which keeps it to once. It is
+`/tokeneconomizer:backfill` (Codex: `$tokeneconomizer:backfill`, Pi: `/te backfill`, Copilot's
+slash command) when a person wants it now, with `--limit N` and `--force`. OpenCode and Pi
+backfill from their first live session only: their stores have no pinned reader here.
 
 Every hook fails open: any error becomes an empty output (no change) and a traceback in
 `~/.tokeneconomizer/errors.log`. The hooks are stdlib only, and none waits on a model call.
@@ -585,7 +606,12 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   * The free fact layer has no family for "this tool is absent here, with no working
     alternative" (a missing `ruff`, `mypy` or `pre-commit`, say).
   * Test runs launched from a script are not recognised as verification.
-  * `refresh-catalog` is manual, once per machine and agent; until it runs, evidence pruning
+  * **Backfill reads only what a log records.** A session that changed directory is read into the
+  repository it started in, as its live pin does; logs of OpenCode and Pi are not read back.
+  The envelope learned from Claude Code's history counts prompt-turns the live guard never saw,
+  so it can be warm from the first turn; it is the same evidence the guard would have gathered,
+  only earlier.
+* `refresh-catalog` is manual, once per machine and agent; until it runs, evidence pruning
     sees only the tools sessions used (plus, on Claude Code, the deferred ones). Running it at
     an agent's first session on a machine would close that gap.
 * Windows beyond Claude Code (Codex, the Copilot CLI and Pi there are untested; Copilot's `-p` is
