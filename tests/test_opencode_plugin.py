@@ -24,11 +24,13 @@ pytestmark = pytest.mark.skipif(
     reason="drives opencode's own runtime: set TE_OPENCODE_E2E=1 and TE_OPENCODE_BIN to the "
            "opencode binary (CI's opencode job)")
 
-# Imported by every hook's Python (through PYTHONPATH): whether it has a console window.
-PROBE = '''import json, os
+# Imported by every Python the hooks start (through PYTHONPATH): whether it has a console window,
+# and whether it is a hook the plugin started (`te_bootstrap.py hook ...`) or something the hook
+# itself started in the background (a detached `te`, through `winspawn` on Windows).
+PROBE = '''import json, os, sys
 log = os.environ.get("TE_CONSOLE_PROBE")
 if log:
-    rec = {"pid": os.getpid()}
+    rec = {"pid": os.getpid(), "hook": sys.argv[1:2] == ["hook"]}
     if os.name == "nt":
         import ctypes
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
@@ -80,7 +82,7 @@ def _run(tmp_path, plugin_file, name):
         if log.exists() else []
     print(f"{name}: {recs}")
     # SessionStart, UserPromptSubmit, PostToolUse, and SessionEnd as the process exits
-    assert len(recs) >= 4, (name, recs, out.stderr[-1500:])
+    assert len([r for r in recs if r["hook"]]) >= 4, (name, recs, out.stderr[-1500:])
     return recs
 
 
@@ -91,7 +93,8 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
         return                                    # the round trip is what is checked here
     assert not [r for r in recs if r["visible"]], recs
     # The control: the same plugin without `windowsHide`, next to a copy of its launchers. Each
-    # hook gets a console of its own, so this test would see the windows the fix removes.
+    # hook it starts gets a console window of its own, shown: the windows the fix removes. (What
+    # a hook starts in the background has none either way.)
     copy = tmp_path / "plugin"
     shutil.copytree(os.path.join(REPO, "plugin", "scripts"), copy / "scripts")
     (copy / "opencode").mkdir()
@@ -101,4 +104,4 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
     (copy / "opencode" / "tokeneconomizer.ts").write_text(
         text.replace("windowsHide: true", "windowsHide: false"), encoding="utf-8")
     control = _run(tmp_path, copy / "opencode" / "tokeneconomizer.ts", "control")
-    assert all(r["console_window"] for r in control), control
+    assert all(r["visible"] for r in control if r["hook"]), control
