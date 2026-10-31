@@ -63,8 +63,9 @@ mechanisms:
   turn is still stuck after that, TokenEconomizer tells you how to stop it; it never stops a turn
   itself.
 
-TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode**. Each italic letter above is a setting, shown with its
+TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI**, **Pi**, and
+**Cursor Agent**, with experimental support for **opencode**. Cursor support uses Cursor's command
+hooks and is experimental in this fork. Each italic letter above is a setting, shown with its
 default ([Settings](#settings)), and each mechanism can be turned on or off. The plugin announces
 each action in one line, and if any part of it fails, your session carries on as if it were not
 installed. Its model calls (the fact proposer, and the judge with the redirect it writes) run
@@ -161,6 +162,18 @@ pi install git:github.com/microsoft/TokenEconomizer
 
 Start `pi` and run `/te status`.
 
+**Cursor Agent** (experimental)
+
+```sh
+python scripts/build_plugin.py --out ~/.cursor/plugins/local/
+```
+
+Reload Cursor, confirm `tokeneconomizer` appears in Customize, then send a prompt in a repository.
+Check its state from a terminal with `~/.tokeneconomizer/bin/te --host cursor status`. Cursor's
+published hooks provide session, prompt, tool-result and completion events. Its transcript format
+and per-session token usage are not a supported public interface, so the adapter records needed
+hook events locally and reports session cost as unavailable.
+
 **opencode** (experimental)
 
 ```sh
@@ -197,6 +210,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
+| Cursor Agent (experimental) | current command-hook schema | no version range verified |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
@@ -208,6 +222,8 @@ have not been tested yet.
   full path; `git pull` in the clone updates it.
 - **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
   2.x terminal UI.
+- **Cursor Agent** support is experimental; the hook event mapping has not yet been verified in
+  the live Cursor app.
 
 ### Everyday commands
 
@@ -220,6 +236,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Codex | `$tokeneconomizer:<command>` |
 | Pi | `/te <command>` |
 | opencode | from a terminal: `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
 | Command | What it does |
@@ -237,10 +254,11 @@ Inside an agent, a command costs one model turn; from a terminal it is free. The
 
 ## Settings
 
-Tool pruning and the loop guard are on by default; with these defaults, the plugin calls a model
-only when a turn shows signs of looping: the judge, and the redirect it writes if it finds the
-turn stuck. Micro-skills is off by default, because its proposer adds model calls and how much it
-saves depends on the repository and the work you do there. Each mechanism has its own switch
+The loop guard is on by default. Tool pruning is off by default and never removes tools or MCP
+servers unless you explicitly enable it. With these defaults, the plugin calls a model only when a
+turn shows signs of looping: the judge, and the redirect it writes if it finds the turn stuck.
+Micro-skills is off by default, because its proposer adds model calls and how much it saves depends
+on the repository and the work you do there. Each mechanism has its own switch
 (`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
 are these settings:
 
@@ -295,6 +313,7 @@ what it can leave out differs:
 | Codex | capability packages | `.codex/config.toml` |
 | Copilot CLI | whole MCP servers | `.github/copilot/settings.local.json` |
 | Pi | nothing (Pi loads only four tools) | — |
+| Cursor Agent | nothing yet | — |
 | opencode | nothing yet | — |
 
 Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it

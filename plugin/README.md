@@ -1,12 +1,12 @@
 # TokenEconomizer plugin
 
-How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi and
-(experimental) opencode. What the plugin does and why is in the [main README](../README.md); its
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
+(experimental), and opencode (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi)
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -300,6 +300,33 @@ is a wrapper the calls should not run, set `pi_cli` to the real one.
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed
 from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokeneconomizer`.
 
+## Cursor
+
+**1. Install.** From the TokenEconomizer checkout, build a local Cursor plugin:
+
+```sh
+python scripts/build_plugin.py --out ~/.cursor/plugins/local/
+```
+
+Reload Cursor. In **Customize**, confirm `tokeneconomizer` is installed, then open a repository and
+send a prompt.
+
+**2. Check it.** From a terminal in that repository:
+
+```sh
+~/.tokeneconomizer/bin/te --host cursor status
+```
+
+Cursor's command hooks provide the session, prompt, successful and failed tool, and completion
+events used by the adapter. The transcript format is private and its hooks do not report per-session
+token usage. TokenEconomizer records only the relevant hook events under its private state folder,
+uses them to learn repository facts and watch for loops, and reports Cursor session cost as
+unavailable. The loop guard's model calls use `cursor-agent` in read-only Ask mode; their token
+usage is also unavailable in the current CLI output.
+
+Tool pruning is off by default and is not applied to Cursor. Cursor commands run from a terminal:
+`~/.tokeneconomizer/bin/te --host cursor <command>`.
+
 ## opencode
 
 **1. Install.** One plugin file serves opencode 1.x (the `server` entry) and 2.x (the `setup`
@@ -467,7 +494,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills (off by default) | `microskills` | `envfacts+distiller`: facts found without model calls, plus a model proposing facts every `microskills_propose_every` sessions | `off`; `envfacts`: only the facts found without model calls; `distiller`: only the proposer |
-| Tool pruning | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes` (or a day after it formed), from the next session, which announces it | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
+| Tool pruning (off by default) | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes` (or a day after it formed), from the next session, which announces it | `off`: never remove tools or MCP servers; `propose`: only proposed, applied when you run `toolprune apply` |
 | Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, up to `loopguard_nudges` mid-turn redirects, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**

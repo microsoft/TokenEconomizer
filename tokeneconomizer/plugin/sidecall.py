@@ -313,6 +313,29 @@ def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
     return text, eff
 
 
+def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
+    """Use Cursor Agent's read-only Ask mode for optimizer calls in an empty directory.
+
+    Cursor's current CLI JSON result does not expose token usage, so the call is useful for the
+    judge/proposer but its cost remains unpriced in TokenEconomizer's ledger.
+    """
+    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+        cmd = [cli, "--print", "--output-format", "json", "--mode", "ask", "--trust"]
+        if model:
+            cmd += ["--model", model]
+        cmd.append(prompt)
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    try:
+        data = json.loads(out.stdout or "{}")
+    except ValueError:
+        data = {}
+    text = data.get("result") if isinstance(data, dict) else ""
+    if not text:
+        _no_reply("cursor", out)
+    return text or "", None
+
+
 # Everything the Copilot CLI offers (1.0.83 names), so the completion is offered nothing; a name
 # the installed CLI does not know is ignored.
 COPILOT_TOOLS = ("bash", "read_bash", "write_bash", "stop_bash", "list_bash", "view", "grep",
@@ -394,6 +417,8 @@ def runner_for(host_name, config):
                                                   extensions=extensions)
     if host_name == "opencode":
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
+    if host_name == "cursor":
+        return lambda prompt, _m="agent": cursor_call(prompt, model=model)
     if host_name == "codex":
         return lambda prompt, _m="agent": codex_call(prompt, model=model)
     if host_name == "copilot":
