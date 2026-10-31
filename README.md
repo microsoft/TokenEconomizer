@@ -222,8 +222,8 @@ been tested. OpenCode versions tested are listed individually.
   full path; `git pull` in the clone updates it.
 - **opencode** support is experimental: it was tested on 1.19.5, 2.1.4, and 2.2.0, and not in the
   2.x terminal UI.
-- **Cursor Agent** support is experimental; the hook event mapping has not yet been verified in
-  the live Cursor app.
+- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
+  from a live Agent session has not yet been verified.
 
 ### Everyday commands
 
