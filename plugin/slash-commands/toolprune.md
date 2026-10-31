@@ -1,6 +1,6 @@
 ---
 description: Review the tools TokenEconomizer left out of this repository's sessions, give them back, or apply a waiting proposal
-argument-hint: "[show | apply [TOOL ...] | restore [TOOL ...] | refresh-catalog | measure]"
+argument-hint: "[show | apply [TOOL ...] | restore [TOOL ...] | refresh-catalog | measure [--applied]]"
 ---
 The arguments I typed after the command are: "$ARGUMENTS" (it shows the proposal when there are none).
 Run this exact command with the Bash tool, then show me its output verbatim in a code block:

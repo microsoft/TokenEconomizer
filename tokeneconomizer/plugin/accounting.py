@@ -53,6 +53,17 @@ def summarize(records):
     }
 
 
+def sessions_with(records, tools):
+    """(sessions, requests) the ledger recorded with exactly `tools` left out."""
+    want = sorted(tools)
+    sessions = requests = 0
+    for r in records:
+        if r.get("kind") == "session" and sorted(r.get("untool_applied") or []) == want:
+            sessions += 1
+            requests += int(r.get("requests") or 0)
+    return sessions, requests
+
+
 def fmt_tokens(n):
     """A token count as a person reads it: 1.2M, 340k, 512."""
     if n is None:

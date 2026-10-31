@@ -483,7 +483,7 @@ def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
     root = os.path.join(PLUGIN, "codex-skills")
     subcommands = set(cli.build_parser()._subparsers._group_actions[0].choices)
     names = sorted(os.listdir(root))
-    assert names == ["config", "microskills", "repos", "status", "toolprune"]
+    assert names == ["config", "microskills", "repos", "savings", "status", "toolprune"]
     for name in names:
         text = open(os.path.join(root, name, "SKILL.md"), encoding="utf-8").read()
         assert text.startswith(f'---\nname: "{name}"\ndescription: >\n')
