@@ -118,7 +118,7 @@ jobs:
           status=0
           python -m pytest tests/test_opencode_plugin.py -rfEsP --tb=short 2>&1 | tee pytest.log \
             || status=$?
-          grep -hE '^(plugin|control): ' pytest.log | sed 's/^/::notice title=hook consoles::/' \
+          grep -hE '^(service-)?(plugin|control): ' pytest.log | sed 's/^/::notice title=hook consoles::/' \
             || true
           if [ "$status" -ne 0 ]; then
             msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \

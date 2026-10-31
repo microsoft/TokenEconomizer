@@ -6,6 +6,9 @@ window: the terminal "flickered" while the agent worked. These load the plugin's
 opencode's binary run as Bun (`BUN_BE_BUN=1`), from a parent started without a console as the
 service is, drive one prompt and one tool call through it, and read back from each hook process
 whether it was given a console window. A copy of the plugin without `windowsHide` is the control.
+The second test does the same through the real service (`opencode service start`, then
+`opencode run`), with the plugin installed in opencode's config directory and a local stand-in
+for the model.
 """
 import json
 import os
@@ -13,6 +16,9 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -104,4 +110,126 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
     (copy / "opencode" / "tokeneconomizer.ts").write_text(
         text.replace("windowsHide: true", "windowsHide: false"), encoding="utf-8")
     control = _run(tmp_path, copy / "opencode" / "tokeneconomizer.ts", "control")
+    assert all(r["visible"] for r in control if r["hook"]), control
+
+
+class _Chat(BaseHTTPRequestHandler):
+    """An OpenAI-compatible chat endpoint that answers every request with "done"."""
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, kind, body):
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        self._send("application/json", json.dumps({"object": "list", "data": [
+            {"id": "te-model", "object": "model"}]}).encode())
+
+    def do_POST(self):
+        req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        usage = {"prompt_tokens": 100, "completion_tokens": 1, "total_tokens": 101}
+        if not req.get("stream"):
+            self._send("application/json", json.dumps({
+                "id": "c", "object": "chat.completion", "created": 0, "model": "te-model",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": "done"}}],
+                "usage": usage}).encode())
+            return
+
+        def chunk(choice, **extra):
+            return "data: " + json.dumps(dict(id="c", object="chat.completion.chunk", created=0,
+                                              model="te-model", choices=[choice], **extra)) + "\n\n"
+        self._send("text/event-stream", (
+            chunk({"index": 0, "delta": {"role": "assistant", "content": "done"},
+                   "finish_reason": None})
+            + chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=usage)
+            + "data: [DONE]\n\n").encode())
+
+
+@pytest.fixture
+def chat():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Chat)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    server.shutdown()
+    server.server_close()
+
+
+def _service_run(tmp_path, chat, name, hide=True):
+    """One prompt through opencode's own background service, with the plugin installed in its
+    config directory (beside a copy of its launchers) and the stand-in model; the probe's
+    records of the Pythons the service's hooks started."""
+    home, work = tmp_path / f"home-{name}", tmp_path / f"work-svc-{name}"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    probe_dir, log = tmp_path / "probe", tmp_path / f"probe-svc-{name}.jsonl"
+    probe_dir.mkdir(exist_ok=True)
+    (probe_dir / "sitecustomize.py").write_text(PROBE, encoding="utf-8")
+    env = dict(os.environ, XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
+               XDG_CACHE_HOME=str(home / "cache"), XDG_STATE_HOME=str(home / "state"),
+               TE_PYTHON=sys.executable, TOKENECONOMIZER_HOME=str(tmp_path / f"te-svc-{name}"),
+               TE_CORE_PATH=REPO, PYTHONPATH=str(probe_dir), TE_CONSOLE_PROBE=str(log))
+    for var in ("TE_DISABLE", "BUN_BE_BUN"):
+        env.pop(var, None)
+
+    def oc(*args, timeout=120):
+        return subprocess.run([OPENCODE, *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", stdin=subprocess.DEVNULL, cwd=str(work), env=env,
+                              timeout=timeout)
+
+    # Where this opencode keeps its configuration and logs, as it says itself.
+    paths = dict(ln.split(None, 1) for ln in oc("debug", "paths").stdout.splitlines()
+                 if len(ln.split(None, 1)) == 2)
+    config = pathlib.Path(paths["config"].strip())
+    shutil.copytree(os.path.join(REPO, "plugin", "scripts"), config / "scripts")
+    text = open(os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+                encoding="utf-8").read()
+    (config / "plugins").mkdir(parents=True, exist_ok=True)
+    (config / "plugins" / "tokeneconomizer.ts").write_text(
+        text if hide else text.replace("windowsHide: true", "windowsHide: false"),
+        encoding="utf-8")
+    (config / "opencode.json").write_text(json.dumps({
+        "provider": {"te": {"npm": "@ai-sdk/openai-compatible", "name": "TE stand-in",
+                            "options": {"baseURL": chat, "apiKey": "none"},
+                            "models": {"te-model": {"name": "TE model"}}}},
+        "model": "te/te-model", "small_model": "te/te-model",
+        "autoupdate": False, "share": "disabled"}), encoding="utf-8")
+    service_log = pathlib.Path(paths["log"].strip()) / "opencode.log"
+    run = None
+    try:
+        oc("service", "stop")
+        started = oc("service", "start")
+        try:
+            run = oc("run", "-m", "te/te-model", "Say hi.", timeout=240)
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(3)                                   # the turn's last hook
+    finally:
+        oc("service", "stop")
+    recs = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()] \
+        if log.exists() else []
+    print(f"service-{name}: {recs}")
+    tail = (service_log.read_text(encoding="utf-8", errors="replace")[-3000:]
+            if service_log.exists() else "no service log")
+    assert run is not None and run.returncode == 0, (
+        name, started.stdout[-500:], started.stderr[-500:],
+        run and run.stdout[-800:], run and run.stderr[-800:], tail)
+    # SessionStart and UserPromptSubmit when the prompt arrives; Stop when the turn ends
+    assert len([r for r in recs if r["hook"]]) >= 2, (name, recs, tail)
+    return recs
+
+
+def test_hooks_from_opencodes_background_service_open_no_console_window(tmp_path, chat):
+    """The real service, as the TUI and `opencode run` use it: on Windows it has no console of
+    its own, so without `windowsHide` each hook it starts is shown a console window."""
+    recs = _service_run(tmp_path, chat, "plugin")
+    if os.name != "nt":
+        return
+    assert not [r for r in recs if r["visible"]], recs
+    control = _service_run(tmp_path, chat, "control", hide=False)
     assert all(r["visible"] for r in control if r["hook"]), control
