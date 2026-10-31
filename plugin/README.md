@@ -311,6 +311,11 @@ repository. opencode has no plugin slash commands, so every command runs from a 
 pruning does not apply. Micro-skills is off by default: `te --host opencode config set
 microskills=on` (or `envfacts`, without model calls).
 
+**Environment variables on 2.x.** opencode 2.x runs plugins in its background service, not in
+the terminal you start it from, so a `TE_` variable you set there (`TE_DISABLE=1`, `TE_PYTHON`,
+...) reaches the plugin only once the service restarts: `opencode service restart` from a shell
+where it is set. Settings made with `te config` need no restart.
+
 **How it hands a session over.** On 1.x the plugin exports the session with `opencode export` at
 the end of every turn and sends the path; on 2.x, which has no export command, it records the
 session from its events and writes the same JSON. A headless `opencode run` is folded when its
