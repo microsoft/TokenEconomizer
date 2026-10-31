@@ -213,8 +213,8 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Cursor Agent (experimental) | current command-hook schema | no version range verified |
 | opencode (experimental) | 1.19.5, 2.1.4, and 2.2.0 | not tested |
 
-The commands above were tested on the oldest and newest version in each range; newer versions
-have not been tested yet.
+The listed version ranges were tested at their oldest and newest releases; newer releases have not
+been tested. OpenCode versions tested are listed individually.
 
 - **Codex before 0.141.0** does not run plugin hooks at all.
 - **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
