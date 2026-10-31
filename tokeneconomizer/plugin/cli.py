@@ -8,6 +8,7 @@
                                       MCP servers (Copilot)
     te toolprune restore [ITEM ...]   remove entries this plugin added
     te toolprune refresh-catalog      record the tool list a fresh session loads (Claude, Copilot)
+    te savings                        how much tool pruning has saved, in three lines
     te toolprune measure              measure the request with and without the proposal
     te toolprune apply-pending        write a pending `auto` deny list once the repository has
                                       been idle long enough (the fold starts it, detached)
@@ -381,9 +382,43 @@ def cmd_toolprune(args):
             print("no proposal to measure")
             return 1
         res = toolcheck.measure(tools, host=host)
+        per_request = res.get("saved_per_request") or res.get("saved_tokens_per_request_est")
+        if per_request is not None:
+            ctx.store.write(MEASURED, {"tools": sorted(tools), "saved_per_request": per_request})
         print(json.dumps(res, indent=2))
         return 0
     return 2
+
+
+# ---- savings ------------------------------------------------------------------------------
+MEASURED = "untool_measure.json"
+
+
+def cmd_savings(args):
+    """How much tool pruning has saved, in three lines. It reads the ledger and the last
+    `toolprune measure`; it makes no model call."""
+    ctx = _ctx(args)
+    records = ctx.store.read_lines("ledger.jsonl")
+    ledger = accounting.summarize(records)
+    applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
+    measured = ctx.store.read(MEASURED) or {}
+    per_request = measured.get("saved_per_request") if measured.get("tools") == sorted(applied) else None
+    if not applied:
+        print("Nothing saved yet: tool pruning has not been applied in this repository.")
+        return 0
+    if per_request is None:
+        print("Not measured yet. Run `te toolprune measure` once (about 1 cent), then ask again.")
+        return 1
+    won = accounting.tool_pruning_savings(records, per_request)
+    net = won["effective_saved"] - ledger["overhead_tokens"]
+    basis = ledger["effective_tokens"] + won["effective_saved"]
+    print(f"TokenEconomizer saved about {accounting.fmt_tokens(net)} tokens "
+          f"({net / basis if basis else 0:.1%} of what this repository would have used), "
+          f"after its own {accounting.fmt_tokens(ledger['overhead_tokens'])} cost.")
+    print(f"How: tool pruning keeps {accounting.fmt_tokens(per_request)} tokens out of each of "
+          f"{won['requests']:,} requests ({len(applied)} unused tools hidden).")
+    print("Not counted: micro-skills and the loop guard, whose savings are not measured.")
+    return 0
 
 
 # ---- repomap ------------------------------------------------------------------------------
@@ -720,6 +755,7 @@ def build_parser():
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)
     add("microskills", "facts").set_defaults(fn=cmd_microskills)
+    add("savings").set_defaults(fn=cmd_savings)
     p = add("toolprune", "untool")
     p.add_argument("action", nargs="?", default="show",
                    choices=("show", "apply", "restore", "refresh-catalog", "measure",

@@ -53,6 +53,26 @@ def summarize(records):
     }
 
 
+def tool_pruning_savings(records, per_request):
+    """What the deny list kept out of the requests of sessions that ran with it.
+
+    `per_request` is the measured prompt-token difference. Those tokens sit in the cached prompt
+    prefix, so they are priced as cache reads on each session's own weight table."""
+    requests = raw = effective_saved = 0
+    for r in records:
+        if r.get("kind") != "session" or not r.get("untool_applied"):
+            continue
+        n = int(r.get("requests") or 0)
+        try:
+            weights = pricing.weights_for(r)
+        except ValueError:
+            weights = FALLBACK_WEIGHTS
+        requests += n
+        raw += per_request * n
+        effective_saved += per_request * n * weights["cache_read"]
+    return {"requests": requests, "tokens_kept_out": raw, "effective_saved": effective_saved}
+
+
 def fmt_tokens(n):
     """A token count as a person reads it: 1.2M, 340k, 512."""
     if n is None:
