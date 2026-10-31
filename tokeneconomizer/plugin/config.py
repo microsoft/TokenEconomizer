@@ -45,7 +45,10 @@ person can tune by hand:
   * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
-  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map.
+  * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
+  * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
+                                   custom provider's, whose model they could not reach otherwise;
+                                   comma-separated paths), and the `pi` they run.
 
 The names before the mechanisms were renamed are read too, so an existing config file keeps
 working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
@@ -161,6 +164,8 @@ class LiveConfig:
     repomap_python: str = ""
     repomap_timeout: int = 8
     paid_model: str = ""
+    pi_extensions: list = field(default_factory=list)
+    pi_cli: str = ""
     shadow: bool = False
     vocabulary: str = "auto"
     warnings: list = field(default_factory=list)
@@ -270,7 +275,8 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
-        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout"}
+        "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
+        "TE_PI_EXTENSIONS": "pi_extensions", "TE_PI_CLI": "pi_cli"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 
