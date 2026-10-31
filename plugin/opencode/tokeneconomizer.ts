@@ -69,6 +69,12 @@ function launch(
 
 const childEnv = () => ({ ...process.env, PYTHONUTF8: "1", TE_OPENCODE_MODE: mode() });
 
+/** Every child starts with `windowsHide`. opencode 2.x runs plugins in its background service,
+ * which on Windows has no console, so each `python` the hooks start (one per prompt, tool call
+ * and turn) was given a console window of its own: the terminal flickered while the agent
+ * worked. Elsewhere the option does nothing. */
+const HIDDEN = { windowsHide: true } as const;
+
 /** One dispatcher call; `{}` (no change) on any failure. */
 function hook(payload: Record<string, unknown>): Promise<any> {
   if (disabled()) return Promise.resolve({});
@@ -77,7 +83,11 @@ function hook(payload: Record<string, unknown>): Promise<any> {
     let child;
     try {
       const [program, argv] = launch("te-hook", ["--host", "opencode"]);
-      child = spawn(program, argv, { env: childEnv(), stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(program, argv, {
+        ...HIDDEN,
+        env: childEnv(),
+        stdio: ["pipe", "pipe", "ignore"],
+      });
     } catch {
       done({});
       return;
@@ -112,6 +122,7 @@ function hookSync(payload: Record<string, unknown>) {
   try {
     const [program, argv] = launch("te-hook", ["--host", "opencode"]);
     spawnSync(program, argv, {
+      ...HIDDEN,
       env: childEnv(),
       input: JSON.stringify(payload),
       timeout: HOOK_TIMEOUT_MS,
@@ -136,6 +147,7 @@ function exportSession(sessionID: string, cwd: string): string {
       ? "opencode"
       : process.execPath;
     const res = spawnSync(exe, ["export", sessionID], {
+      ...HIDDEN,
       cwd,
       encoding: "utf8",
       timeout: HOOK_TIMEOUT_MS,
