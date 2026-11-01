@@ -1405,6 +1405,31 @@ def test_copilot_trust_is_read_from_its_config(tmp_path, repo):
     assert denylist.copilot_folder_trusted(repo, env) is False
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows paths are case-insensitive")
+def test_copilot_trust_matches_paths_with_different_case_on_windows(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "copilot-home"
+    home.mkdir()
+    env = {"COPILOT_HOME": str(home)}
+
+    repo = tmp_path / "MixedCaseRepo"
+    repo.mkdir()
+
+    configured_path = str(repo).lower()
+    assert configured_path != str(repo)
+
+    (home / "config.json").write_text(
+        json.dumps({"trustedFolders": [configured_path]})
+    )
+
+    # Preserve the input casing so the test exercises normcase().
+    monkeypatch.setattr(
+        denylist.os.path, "realpath", lambda path: os.fspath(path)
+    )
+
+    assert denylist.copilot_folder_trusted(repo, env) is True
+
 # ---- a failed call reaches the guard on Claude Code -------------------------------------------
 # Claude Code 2.1.299 reports a failed call -- a non-zero exit, a refused command -- only as
 # PostToolUseFailure, with an `error` string and no `tool_response` (payload as captured). Before

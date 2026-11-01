@@ -484,9 +484,9 @@ def copilot_folder_trusted(path, env=None):
     folders = copilot_trusted_folders(env)
     if folders is None:
         return None
-    real = os.path.realpath(path)
+    real = os.path.normcase(os.path.realpath(path))
     for f in folders:
-        f = os.path.realpath(f)
+        f = os.path.normcase(os.path.realpath(f))
         if real == f or real.startswith(f.rstrip(os.sep) + os.sep):
             return True
     return False
