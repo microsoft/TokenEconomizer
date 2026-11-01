@@ -58,5 +58,15 @@ def test_a_probe_that_exits_non_zero_raises_even_with_usage(monkeypatch):
 
     monkeypatch.setattr(toolcheck.subprocess, "run", run)
     monkeypatch.setattr(toolcheck, "claude_flags", lambda cli=None: [])
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError, match="exited 1: boom"):
         toolcheck.measure(["mcp__x__y"], cli="claude")
+
+
+@pytest.mark.parametrize("lean_stdout", ["", None])
+def test_a_codex_probe_that_prints_nothing_raises(monkeypatch, lean_stdout):
+    # An empty lean render would otherwise count as 0 characters: the whole request "saved".
+    replies = iter(["x" * 1000, lean_stdout])
+    monkeypatch.setattr(toolcheck.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=next(replies), stderr=""))
+    with pytest.raises(RuntimeError):
+        toolcheck.measure(["web_search"], cli="codex", host="codex")

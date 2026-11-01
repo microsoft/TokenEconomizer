@@ -1496,3 +1496,15 @@ def test_an_answer_to_a_failed_call_names_the_failure_event(env, repo):
             answered.append((p["hook_event_name"], o["hookSpecificOutput"]["hookEventName"]))
     assert answered and all(sent == named for sent, named in answered)
     assert any(sent == "PostToolUseFailure" for sent, _ in answered)
+
+
+def test_measure_reports_a_failed_probe_in_one_line(env, repo, monkeypatch, capsys):
+    from tokeneconomizer.plugin import cli
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+    def fail(tools, **kw):
+        raise RuntimeError("`claude -p` exited 1: boom")
+    monkeypatch.setattr(toolcheck, "measure", fail)
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "measure", "Workflow"]) == 1
+    assert capsys.readouterr().out.strip() == "not measured: `claude -p` exited 1: boom"

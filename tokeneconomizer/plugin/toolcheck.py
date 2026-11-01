@@ -232,7 +232,8 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
                                              "cache_creation_input_tokens"))
     if out.returncode or data.get("is_error") or not total:
         # A failed probe would otherwise count as 0 tokens, and the whole request as saved.
-        raise RuntimeError("`claude -p` reported no usage: "
+        what = f"exited {out.returncode}" if out.returncode else "reported no usage"
+        raise RuntimeError(f"`claude -p` {what}: "
                            + ((out.stderr or out.stdout or "").strip()[:300] or "no output"))
     return total, data.get("total_cost_usd")
 
@@ -241,10 +242,11 @@ def _codex_prompt_chars(overrides, cli="codex", timeout=60):
     cmd = [cli, "debug", "prompt-input"]
     for table, key, value in overrides:
         cmd += ["-c", f"{table}.{key}={value}" if table else f"{key}={value}"]
-    with tempfile.TemporaryDirectory(prefix="te-measure-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-measure-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd + ["OK"], capture_output=True, encoding="utf-8", errors="replace",
                              cwd=cwd, timeout=timeout, env=dict(os.environ, TE_SIDECALL="1"))
-    return len(out.stdout or "") if out.returncode == 0 else None
+    # Empty output is a failed probe too: counted as 0, the whole request would read as saved.
+    return len(out.stdout) if out.returncode == 0 and out.stdout else None
 
 
 def measure(tools, cli=None, host="claude"):
