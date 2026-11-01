@@ -30,8 +30,7 @@ def run(payload, env, host_hint=None):
         payload = host.prepare(payload, env)
     ctx = LiveContext.build(host, host.cwd(payload, env), env,
                             session_id=host.session_id(payload) or None, settle=False)
-    if ctx.config.repositories and os.path.realpath(ctx.repo.root) not in {
-            os.path.realpath(path) for path in ctx.config.repositories}:
+    if not ctx.config.enabled:
         return {}
     if hasattr(host, "record_event"):
         host.record_event(payload)

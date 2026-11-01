@@ -322,7 +322,9 @@ events used by the adapter. The transcript format is private and its hooks do no
 token usage. TokenEconomizer records only the relevant hook events under its private state folder,
 uses them to learn repository facts and watch for loops, and reports Cursor session cost as
 unavailable. The loop guard's model calls use `cursor-agent` in read-only Ask mode; their token
-usage is also unavailable in the current CLI output.
+usage is also unavailable in the current CLI output. Cursor support is macOS and Linux only.
+On Windows, Cursor runs these hook commands through PowerShell, which cannot run the POSIX
+`te-hook` launcher.
 
 Tool pruning follows the global setting and is not applied to Cursor. Cursor commands run from a terminal:
 `~/.tokeneconomizer/bin/te --host cursor <command>`.
@@ -494,7 +496,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills (off by default) | `microskills` | `envfacts+distiller`: facts found without model calls, plus a model proposing facts every `microskills_propose_every` sessions | `off`; `envfacts`: only the facts found without model calls; `distiller`: only the proposer |
-| Tool pruning (on by default) | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes` (or a day after it formed), from the next session, which announces it | `off`: never remove tools or MCP servers; `propose`: only proposed, applied when you run `toolprune apply` |
+| Tool pruning | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes` (or a day after it formed), from the next session, which announces it | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
 | Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, up to `loopguard_nudges` mid-turn redirects, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**

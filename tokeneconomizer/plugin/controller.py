@@ -80,10 +80,6 @@ class LiveController:
         # leave an "unknown" session behind.
         if not self.cfg.enabled or not self.host.session_id(self.p):
             return {}
-        if self.cfg.repositories:
-            allowed = {os.path.realpath(path) for path in self.cfg.repositories}
-            if os.path.realpath(self.ctx.repo.root) not in allowed:
-                return {}
         self.ctx.settle()
         self.cfg = self.ctx.config
         event = self.p.get("hook_event_name") or ""
@@ -274,7 +270,7 @@ class LiveController:
         if self.cfg.loopguard == "off" or self.p.get("stop_hook_active"):
             return {}
         s = self._session()
-        summary = self._close_turn(s, stopped_normally=True)
+        summary = self._close_turn(s, stopped_normally=self.host.stopped_normally(self.p))
         if summary:
             self._log("turn", **summary)
         self._save(s)

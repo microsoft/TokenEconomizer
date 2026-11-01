@@ -172,7 +172,9 @@ Reload Cursor, confirm `tokeneconomizer` appears in Customize, then send a promp
 Check its state from a terminal with `~/.tokeneconomizer/bin/te --host cursor status`. Cursor's
 published hooks provide session, prompt, tool-result and completion events. Its transcript format
 and per-session token usage are not a supported public interface, so the adapter records needed
-hook events locally and reports session cost as unavailable.
+hook events locally and reports session cost as unavailable. Cursor support is macOS and Linux
+only: on Windows, Cursor runs hook commands through PowerShell, and this plugin's launcher is a
+POSIX shell script.
 
 **opencode** (experimental)
 
@@ -211,16 +213,16 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | current command-hook schema | no version range verified |
-| opencode (experimental) | 1.19.5, 2.1.4, and 2.2.0 | not tested |
+| opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 
-The listed version ranges were tested at their oldest and newest releases; newer releases have not
-been tested. OpenCode versions tested are listed individually.
+The commands above were tested on the oldest and newest version in each range; newer versions
+have not been tested yet.
 
 - **Codex before 0.141.0** does not run plugin hooks at all.
 - **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
   `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`, using your clone's
   full path; `git pull` in the clone updates it.
-- **opencode** support is experimental: it was tested on 1.19.5, 2.1.4, and 2.2.0, and not in the
+- **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
   2.x terminal UI.
 - **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
   from a live Agent session has not yet been verified.

@@ -146,6 +146,9 @@ class Host:
     def stop_hint(self, headless):
         return self.end_run if headless else self.interrupt
 
+    def stopped_normally(self, p):
+        return True
+
     # Whether the loop guard's still-stuck notice must also go through the model, because the
     # agent does not put hook messages where the person looks.
     relays_notices = False
@@ -485,9 +488,24 @@ class Cursor(Host):
         path = self.transcript(payload)
         if not path:
             return
+        # The adapter reads these fields only. Cursor also sends user_email and the raw
+        # tool_output; neither is stored. Tool text is capped where the guard folds it.
+        row = {}
+        for key in ("hook_event_name", "prompt", "cwd", "tool_use_id", "generation_id",
+                    "tool_name", "tool_input", "error"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                row[key] = value
+        response = payload.get("tool_response")
+        if isinstance(response, dict):
+            response = dict(response)
+            content = response.get("content")
+            if isinstance(content, str):
+                response["content"] = content[:RESULT_CAP]
+            row["tool_response"] = response
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         try:
             os.chmod(path, 0o600)
         except OSError:
@@ -504,11 +522,25 @@ class Cursor(Host):
     def session_usage(self, transcript_path):
         return {}
 
+    def settle(self, transcript_path):
+        # The fold has already read this private spool. It is not the agent's transcript.
+        if not transcript_path:
+            return
+        if os.path.basename(os.path.dirname(os.path.realpath(transcript_path))) != "cursor-sessions":
+            return
+        try:
+            os.remove(transcript_path)
+        except OSError:
+            pass
+
     def tool_call(self, p):
         name, args, text, code = super().tool_call(p)
         if name.lower() == "shell":
             return "Bash", args, text, code
         return name, args, text, code
+
+    def stopped_normally(self, p):
+        return (p or {}).get("status") == "completed"
 
 
 def copilot_home(env=None):

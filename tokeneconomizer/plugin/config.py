@@ -38,8 +38,6 @@ person can tune by hand:
   * toolprune_protect           -- tools never proposed, by name or pattern (`mcp__headroom__*`),
                                    comma-separated; a deny rule the plugin added for one is
                                    removed at the next fold;
-  * repositories               -- optional absolute checkout paths where hooks are active;
-                                   empty means all repositories;
   * toolprune_quiet_minutes     -- how long every session of the repository must have been idle
                                    before `auto` writes a deny list (0: at once), so that no
                                    conversation resumed with a warm prompt cache loses it;
@@ -157,7 +155,6 @@ class LiveConfig:
     toolprune_sessions: int = 5
     toolprune_quiet_minutes: int = 60
     toolprune_protect: list = field(default_factory=list)
-    repositories: list = field(default_factory=list)
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
     loopguard_nudges: int = 1

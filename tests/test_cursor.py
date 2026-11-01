@@ -3,17 +3,15 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from tokeneconomizer import trace
-from tokeneconomizer.plugin.config import LiveConfig
-from tokeneconomizer.plugin.hosts import Cursor
+from tokeneconomizer.plugin.hosts import (
+    ClaudeCode, Codex, Copilot, Cursor, OpenCode, Pi,
+)
 from tokeneconomizer.plugin.hook import run
-from tokeneconomizer.plugin.paths import state_root
-
-
-def test_tool_pruning_can_be_disabled_by_a_user_config():
-    config = LiveConfig()
-    assert config.toolprune == "auto"
-    assert config.set("toolprune", "off") and config.toolprune == "off"
+from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
+from tokeneconomizer.plugin.store import Store
 
 
 def test_cursor_translates_prompt_and_tool_hook_schemas(tmp_path):
@@ -68,36 +66,6 @@ def test_cursor_plugin_declares_all_supported_hook_events():
                for entries in hooks.values() for hook in entries)
 
 
-def test_cursor_records_only_allowlisted_repository_events(tmp_path):
-    allowed = tmp_path / "allowed"
-    (allowed / ".git" / "info").mkdir(parents=True)
-    (allowed / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    (allowed / ".git" / "config").write_text(
-        '[remote "origin"]\n\turl = https://github.com/acme/widget.git\n')
-    excluded = tmp_path / "excluded"
-    (excluded / ".git" / "info").mkdir(parents=True)
-    (excluded / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    (excluded / ".git" / "config").write_text(
-        '[remote "origin"]\n\turl = https://github.com/acme/other.git\n')
-    state = tmp_path / "state"
-    os.makedirs(state)
-    (state / "config.json").write_text(json.dumps({"repositories": [str(allowed)]}))
-    env = {"TOKENECONOMIZER_HOME": str(state), "TE_LOOPGUARD": "off",
-           "GIT_CEILING_DIRECTORIES": str(tmp_path), "PATH": os.environ.get("PATH", "")}
-
-    event = {"hook_event_name": "beforeSubmitPrompt", "conversation_id": "conversation-a",
-             "generation_id": "generation-a", "prompt": "Fix the issue",
-             "workspace_roots": [str(excluded)]}
-    assert run(event, env, host_hint="cursor") == {}
-    assert not os.path.exists(state_root(env) + "/cursor-sessions")
-
-    event["workspace_roots"] = [str(allowed)]
-    assert run(event, env, host_hint="cursor") == {}
-    spool = state / "cursor-sessions" / "conversation-a.jsonl"
-    rows = [json.loads(line) for line in spool.read_text().splitlines()]
-    assert len(rows) == 1 and rows[0]["prompt"] == "Fix the issue"
-
-
 def test_cursor_events_reconstruct_tool_results_and_count_prompts(tmp_path):
     source, target = tmp_path / "events.jsonl", tmp_path / "trace.jsonl"
     events = [
@@ -117,4 +85,71 @@ def test_cursor_events_reconstruct_tool_results_and_count_prompts(tmp_path):
     assert [(name, args, ok) for name, args, _result, ok in calls] == [
         ("Bash", {"command": "pytest"}, True),
         ("Read", {"file_path": "missing"}, False),
+    ]
+
+
+@pytest.fixture
+def cursor_env(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git" / "info").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (repo / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/acme/widget.git\n')
+    state = tmp_path / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    env = {
+        "TOKENECONOMIZER_HOME": str(state),
+        "CURSOR_PROJECT_DIR": str(repo),
+        "TE_LOOPGUARD": "off",
+        "PATH": os.environ.get("PATH", ""),
+        "GIT_CEILING_DIRECTORIES": str(tmp_path),
+    }
+    store = Store(repo_state_dir(repo_identity(str(repo), env), "cursor", env))
+    return str(repo), env, store
+
+
+@pytest.mark.parametrize("host_cls", [ClaudeCode, Codex, Copilot, OpenCode, Pi])
+def test_host_stopped_normally_default(host_cls):
+    assert host_cls().stopped_normally({}) is True
+
+
+@pytest.mark.parametrize("status,expected_normal", [
+    ("completed", True), ("aborted", False), ("error", False), (None, False), ("unknown", False),
+])
+def test_cursor_stop_lifecycle_status_handling(cursor_env, status, expected_normal):
+    repo, env, store = cursor_env
+    env = dict(env, TE_LOOPGUARD="on")
+    base = {"conversation_id": "c1", "generation_id": "g1", "workspace_roots": [repo]}
+    run(dict(base, hook_event_name="beforeSubmitPrompt", prompt="check"), env, host_hint="cursor")
+    run(dict(base, hook_event_name="postToolUse", tool_name="Shell", tool_use_id="t1",
+             tool_input={"command": "pytest"},
+             tool_output=json.dumps({"output": "1 passed", "exitCode": 0})), env, host_hint="cursor")
+    stop = dict(base, hook_event_name="stop")
+    if status is not None:
+        stop["status"] = status
+    assert run(stop, env, host_hint="cursor") == {}
+
+    sess = store.read("sessions/c1.json")
+    assert sess and sess.get("turn") is None and len(sess.get("turns", [])) == 1
+    assert sess["turns"][0]["resolved_proxy"] is expected_normal
+    envelope = store.read("envelope.json") or {}
+    assert envelope.get("resolved_turns", []) == ([1] if expected_normal else [])
+
+
+def test_cursor_native_shell_json_output_positive_and_negative(tmp_path, cursor_env):
+    repo, env, _ = cursor_env
+    base = {"conversation_id": "c-shell", "generation_id": "g-shell", "workspace_roots": [repo]}
+    run(dict(base, hook_event_name="beforeSubmitPrompt", prompt="build & test"), env, host_hint="cursor")
+    calls = [("t1", "make build", {"output": "ok\n", "exitCode": 0}),
+             ("t2", "pytest -q", {"output": "failed\n", "exitCode": 1})]
+    for tid, cmd, out in calls:
+        run(dict(base, hook_event_name="postToolUse", tool_name="Shell", tool_use_id=tid,
+                 tool_input={"command": cmd}, tool_output=json.dumps(out)), env, host_hint="cursor")
+
+    host = Cursor()
+    tp = host.transcript(host.prepare(dict(base, session_id="c-shell"), env))
+    trace_path = host.mechanism_trace(tp, str(tmp_path))
+    assert trace.load_trajectory(trace_path) == [
+        ("Bash", {"command": "make build"}, "ok\n", True),
+        ("Bash", {"command": "pytest -q"}, "failed\n", False),
     ]
