@@ -494,7 +494,8 @@ def cmd_config(args):
           "has been folded")
     if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
             ctx.host.name, ctx.root):
-        print(f"the plugin's model calls through `{ctx.host.name} -p` will be tried again")
+        print(f"the plugin's model calls through `{sidecall.call_name(ctx.host.name)}` will be "
+              f"tried again")
     if "distiller" in str(cur.get("microskills", "")):
         every = cur.get("microskills_propose_every") or ctx.config.microskills_propose_every
         print(f"note: micro-skills calls a model through this agent every {every} sessions to "
@@ -638,9 +639,9 @@ def cmd_doctor(args):
         pause = sidecall.paused(h, root)
         if pause:
             print(f"{h:11s} model calls paused since "
-                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: `{h} -p` said "
-                  f"it is not signed in; `config set microskills=on` (or `loopguard=on`) "
-                  f"tries again")
+                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: "
+                  f"`{sidecall.call_name(h)}` said it is not signed in; "
+                  f"`config set microskills=on` (or `loopguard=on`) tries again")
     if "claude" in agents:
         cat = os.path.join(root, "hosts", "claude", "catalog.json")
         print(f"claude      catalog {'present' if os.path.exists(cat) else 'not probed'}")

@@ -556,6 +556,7 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 
 | Key | Default | Values |
 |---|---|---|
+| `enabled` | `true` | `false`: the whole plugin is off; its hooks return at once and record nothing |
 | `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
@@ -569,6 +570,14 @@ thresholds; `TE_DISABLE=1` turns the whole plugin off. Otherwise the repository'
 settings win over the global ones, and those over the defaults; `unset` goes back one level. A
 change applies from the agent's next hook call: the guard at the next tool call, facts and the
 deny list at the next session start. A new fact-size cap shows once the next session has ended.
+
+**Only in some repositories.** Turn the plugin off everywhere, then back on in each repository
+you choose; in a repository left off, the plugin records nothing:
+
+```text
+~/.tokeneconomizer/bin/te config set enabled=false --global
+~/.tokeneconomizer/bin/te config set enabled=true          # in each chosen repository
+```
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges`, `spiral.<name>` and

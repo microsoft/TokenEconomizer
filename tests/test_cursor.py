@@ -153,3 +153,10 @@ def test_cursor_native_shell_json_output_positive_and_negative(tmp_path, cursor_
         ("Bash", {"command": "make build"}, "ok\n", True),
         ("Bash", {"command": "pytest -q"}, "failed\n", False),
     ]
+
+
+def test_notices_name_each_agents_side_call_command():
+    from tokeneconomizer.plugin import sidecall
+    hosts = ("claude", "codex", "copilot", "pi", "opencode", "cursor")
+    assert [sidecall.call_name(h) for h in hosts] == [
+        "claude -p", "codex exec", "copilot -p", "pi -p", "opencode run", "cursor-agent -p"]

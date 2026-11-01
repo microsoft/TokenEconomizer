@@ -213,3 +213,22 @@ def test_the_quiet_window_before_a_deny_list_is_written_may_be_zero():
     assert not cfg.set("toolprune_evidence", "0")             # other numbers still start at 1
     assert load_config("/nonexistent", env={"TE_TOOLPRUNE_QUIET_MINUTES": "15"}
                        ).toolprune_quiet_minutes == 15
+
+
+def test_off_everywhere_and_on_in_one_repository_runs_only_there(env, repo, tmp_path):
+    """`enabled=false --global`, then `enabled=true` in a repository: the plugin runs there, and
+    a repository left off gets no state at all."""
+    other = tmp_path / "other"
+    (other / ".git" / "info").mkdir(parents=True)
+    (other / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (other / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/acme/other.git\n')
+    home = env["TOKENECONOMIZER_HOME"]
+    on = repo_identity(repo, env).key
+    os.makedirs(os.path.join(home, "repos", on))
+    write_config(os.path.join(home, "config.json"), {"enabled": False})
+    write_config(os.path.join(home, "repos", on, "config.json"), {"enabled": True})
+    for checkout, sid in ((repo, "s-on"), (str(other), "s-off")):
+        run_session(env, checkout, sid, str(tmp_path / f"{sid}.jsonl"))
+    assert os.listdir(os.path.join(home, "repos")) == [on]
+    assert os.listdir(os.path.join(home, "repos", on)) != ["config.json"]   # it ran there

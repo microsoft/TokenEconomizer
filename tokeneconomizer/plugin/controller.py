@@ -143,7 +143,8 @@ class LiveController:
             byok = (" (with your own model key, Copilot does not pass it to the plugin's hooks)"
                     if self.host.name == "copilot" else "")
             outputs.append(self.host.notice(
-                f"TokenEconomizer: the plugin's own model calls go through `{self.host.name} -p`, "
+                f"TokenEconomizer: the plugin's own model calls go through "
+                f"`{sidecall.call_name(self.host.name)}`, "
                 f"which answered that it is not signed in{byok}, so they are paused; facts that "
                 f"need no model call are still learned, and the loop guard redirects only at its "
                 f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "

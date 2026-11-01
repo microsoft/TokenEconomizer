@@ -159,6 +159,16 @@ def test_recording_caps_tool_output(recording_env):
     assert "user_email" not in row
 
 
+def test_recording_caps_tool_input_and_keeps_its_short_fields(recording_env):
+    repo, state, env = recording_env
+    payload = _make_tool_payload(repo, "conv-input")
+    payload.update(tool_name="Write",
+                   tool_input={"file_path": "src/big.py", "contents": "y" * (RESULT_CAP + 40)})
+    assert _call_hook(payload, env) == (0, {})
+    row = json.loads((state / "cursor-sessions" / "conv-input.jsonl").read_text().splitlines()[0])
+    assert row["tool_input"] == {"file_path": "src/big.py", "contents": "y" * RESULT_CAP}
+
+
 def test_settle_deletes_processed_session_file(tmp_path):
     spool = tmp_path / "cursor-sessions" / "conv.jsonl"
     spool.parent.mkdir()
