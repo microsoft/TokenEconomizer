@@ -20,6 +20,7 @@ import json
 import os
 import re
 
+from ..names import repo_filename
 from ..trace import call_cwds
 from ..trace.claude import CONVERSATION
 from .lifecycle import Lifecycle, edited_files, edited_pyfiles
@@ -748,7 +749,7 @@ class Distiller:
     def _path(root, repo):
         d = os.path.join(root, STATE_SUBDIR)
         os.makedirs(d, exist_ok=True)
-        return os.path.join(d, repo.replace("/", "__") + ".json")
+        return os.path.join(d, repo_filename(repo) + ".json")
 
     def save(self, root):
         # The window goes with the facts: a proposer reloaded for each session (the plugin's

@@ -190,7 +190,8 @@ def normalize_remote(url):
     u = (url or "").strip()
     u = re.sub(r"^[a-z+]+://", "", u)            # scheme
     u = re.sub(r"^[^@/]+@", "", u)               # user@
-    u = u.replace(":", "/", 1) if re.match(r"^[^/]+:[^/\d]", u) else u   # scp-style host:path
+    u = re.sub(r"/+", "/", u.replace("\\", "/"))  # local Windows remotes, including git's escaped slashes
+    u = u.replace(":", "/", 1) if not re.match(r"^[a-zA-Z]:/", u) and re.match(r"^[^/]+:[^/\d]", u) else u
     u = re.sub(r"\.git$", "", u.rstrip("/"))
     return u.lower()
 
