@@ -230,7 +230,7 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
     u = data.get("usage") or {}
     total = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
                                              "cache_creation_input_tokens"))
-    if data.get("is_error") or not total:
+    if out.returncode or data.get("is_error") or not total:
         # A failed probe would otherwise count as 0 tokens, and the whole request as saved.
         raise RuntimeError("`claude -p` reported no usage: "
                            + ((out.stderr or out.stdout or "").strip()[:300] or "no output"))

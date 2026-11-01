@@ -44,3 +44,19 @@ def test_a_failed_probe_raises_instead_of_counting_zero(monkeypatch, stdout):
     _fake_claude(monkeypatch, [], stdout=stdout)
     with pytest.raises(RuntimeError):
         toolcheck.measure(["mcp__x__y"], cli="claude")
+
+
+def test_a_probe_that_exits_non_zero_raises_even_with_usage(monkeypatch):
+    # A crashed lean probe can still print usage; counting it would report 80 tokens saved.
+    replies = iter([(0, 100, ""), (1, 20, "boom")])
+
+    def run(cmd, **kw):
+        code, tokens, err = next(replies)
+        return subprocess.CompletedProcess(
+            cmd, code, stdout=json.dumps({"is_error": False, "usage": {"input_tokens": tokens}}),
+            stderr=err)
+
+    monkeypatch.setattr(toolcheck.subprocess, "run", run)
+    monkeypatch.setattr(toolcheck, "claude_flags", lambda cli=None: [])
+    with pytest.raises(RuntimeError, match="boom"):
+        toolcheck.measure(["mcp__x__y"], cli="claude")
