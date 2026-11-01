@@ -380,7 +380,11 @@ def cmd_toolprune(args):
         if not tools:
             print("no proposal to measure")
             return 1
-        res = toolcheck.measure(tools, host=host)
+        try:
+            res = toolcheck.measure(tools, host=host)
+        except RuntimeError as e:
+            print(f"not measured: {e}")
+            return 1
         print(json.dumps(res, indent=2))
         return 0
     return 2
