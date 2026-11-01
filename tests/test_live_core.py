@@ -1011,6 +1011,38 @@ def test_a_pi_side_call_is_a_bare_run_on_the_persons_own_pi(monkeypatch):
     assert calls[-1][0][-4:-2] == ["--model", "openrouter/anthropic/claude-haiku-4.5"]
 
 
+@pytest.mark.real_sidecalls
+def test_a_pi_side_call_loads_the_provider_extensions_and_the_pi_the_person_names(
+        monkeypatch, tmp_path):
+    """A model whose provider an extension registers is not there under `--no-extensions`; Pi
+    still loads an explicit `--extension`, and `--no-tools` keeps the extension's tools out."""
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="\n".join(json.dumps(e) for e in PI_JSON_RUN), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    cfg = live_config.load_config(str(tmp_path / "te"), env={
+        "TE_PI_EXTENSIONS": "ext/gateway.ts, builtin:web", "TE_PI_CLI": "/opt/pi/bin/pi",
+        "TE_PAID_MODEL": "gateway/claude-haiku"})
+    assert not cfg.warnings
+    text, _ = sidecall.runner_for("pi", cfg)("propose facts")
+    cmd = calls[-1]
+    assert text == "- use python -m pytest" and cmd[0] == "/opt/pi/bin/pi"
+    assert "--no-extensions" in cmd and "--no-tools" in cmd
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--extension"] == [
+        os.path.join(os.getcwd(), "ext", "gateway.ts"), "builtin:web"]  # the call runs elsewhere
+    assert cmd[-4:] == ["--model", "gateway/claude-haiku", "--", "propose facts"]
+    # unset, the call is what it was: the first `pi` on PATH, no extension
+    sidecall.runner_for("pi", live_config.LiveConfig())("propose facts")
+    assert calls[-1][0] == "pi" and "--extension" not in calls[-1]
+
+
 def test_a_copilot_notice_is_a_progress_line_before_the_hook_output():
     import io
     from tokeneconomizer.plugin import hook

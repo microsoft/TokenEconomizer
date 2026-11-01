@@ -85,3 +85,47 @@ jobs:
         env:
           TE_CODEX_E2E: "1"
           COLUMNS: "200"
+
+  opencode:
+    # The opencode plugin under opencode's own runtime, its binary run as Bun
+    # (tests/test_opencode_plugin.py). opencode 2.x runs plugins in its background service, which
+    # on Windows has no console: there the hooks are started from a parent with none, and must not
+    # each get a console window. No model is called.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      # Pinned: a new opencode can change how it runs plugins; move it on purpose.
+      - run: npm install -g @opencode/cli@2.2.5
+      - run: python -m pip install pytest
+      # What each hook process was given goes out as a notice, and on failure the summary lines
+      # as an error, all shown on the check run without signing in.
+      - run: |
+          set -o pipefail
+          export TE_OPENCODE_BIN="$(npm root -g)/@opencode/cli/bin/opencode.exe"
+          status=0
+          python -m pytest tests/test_opencode_plugin.py -rfEsP --tb=short 2>&1 | tee pytest.log \
+            || status=$?
+          grep -hE '^(service-)?(plugin|control): ' pytest.log | sed 's/^/::notice title=hook consoles::/' \
+            || true
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \
+                  | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=pytest::${msg}"
+          fi
+          exit $status
+        env:
+          TE_OPENCODE_E2E: "1"
+          COLUMNS: "200"

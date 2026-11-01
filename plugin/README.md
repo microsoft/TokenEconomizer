@@ -289,6 +289,12 @@ after the loop guard's redirect gets a notice: press **Esc** to abort it, or Ctr
 
 **3. Work normally.** See [What to expect](#what-to-expect).
 
+**Model calls.** The proposer and the loop guard's judge run `pi --print` with no extensions,
+on your default model (`paid_model` names another). If that model's provider comes from an
+extension (a company gateway, a package's provider), list the extension's file in
+`pi_extensions` so the calls can reach it; it loads with no tools. If the first `pi` on your PATH
+is a wrapper the calls should not run, set `pi_cli` to the real one.
+
 **Update.** `pi update --extensions` (plain `pi update` does not update extensions).
 
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed
@@ -310,6 +316,11 @@ ln -s /path/to/TokenEconomizer/plugin/opencode/tokeneconomizer.ts ~/.config/open
 repository. opencode has no plugin slash commands, so every command runs from a terminal. Tool
 pruning does not apply. Micro-skills is off by default: `te --host opencode config set
 microskills=on` (or `envfacts`, without model calls).
+
+**Environment variables on 2.x.** opencode 2.x runs plugins in its background service, not in
+the terminal you start it from, so a `TE_` variable you set there (`TE_DISABLE=1`, `TE_PYTHON`,
+...) reaches the plugin only once the service restarts: `opencode service restart` from a shell
+where it is set. Settings made with `te config` need no restart.
 
 **How it hands a session over.** On 1.x the plugin exports the session with `opencode export` at
 the end of every turn and sends the path; on 2.x, which has no export command, it records the
@@ -517,6 +528,8 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | Key | Default | Values |
 |---|---|---|
 | `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
+| `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
 
