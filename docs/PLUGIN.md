@@ -47,6 +47,17 @@ re-tuned. Three things it adds:
 Every hook fails open: any error becomes an empty output (no change) and a traceback in
 `~/.tokeneconomizer/errors.log`. The hooks are stdlib only, and none waits on a model call.
 
+**A repository with a history is replayed.** The plugin learns from the sessions it sees end, so
+a checkout that ran opencode for weeks before the plugin was installed would start knowing
+nothing. On the first session of a process, `SessionStart` starts a detached `te import --cwd
+<dir>` (once per process, and once per repository per `backfill.MAX_AGE_H`), which reads
+opencode's own database (`session_v2`, `session_message`) and folds every session of the last
+`TE_BACKFILL_DAYS` (3) days through the same `te fold` a live session ends into. The running
+session is excluded, a session still active is left to its own end, and the replay runs with
+`microskills=envfacts` so it makes no model call: the facts it learns are the free ones, and the
+proposer picks the repository up on its next live session. `te import --all --dry-run` counts
+what a replay would fold; `--paid` lets the proposer run during it.
+
 ## 2. What changes relative to the experimental setting
 
 | | Experiments | Plugin | Why |

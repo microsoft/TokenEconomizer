@@ -428,6 +428,28 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
         return {"moved": len(incoming), "refold": len(refold)}
 
 
+def _set_aside(root, src_dir, aside, attempts=4):
+    """Move a merged state directory under `<root>/merged/`; False when it would not move.
+
+    Windows refuses to rename a directory while any handle is open inside it -- an agent's
+    watcher, a virus scanner, the hook that is settling it a moment after the merge closed its
+    last file -- and the refusal is transient, so it is retried with a growing pause. What it
+    cannot do is abort the settle: the merge is already done and the emptied directory costs
+    nothing where it stands."""
+    pause = 0.05
+    for attempt in range(attempts):
+        try:
+            os.replace(src_dir, aside)
+            return True
+        except OSError:
+            if attempt == attempts - 1:
+                _record_error(root)
+                return False
+        time.sleep(pause)
+        pause *= 2
+    return False
+
+
 def merge_whole(root, src_key, dst_key, label="", timeout=LOCK_WAIT_S):
     """Merge every agent's state under `src_key` into `dst_key` and set `src_key` aside under
     `<root>/merged/`. The caller holds the index lock. Returns {host: counts}, or None."""
@@ -447,7 +469,11 @@ def merge_whole(root, src_key, dst_key, label="", timeout=LOCK_WAIT_S):
             shutil.copyfile(os.path.join(src_dir, name), os.path.join(dst_dir, name))
     aside = os.path.join(root, "merged", f"{src_key}.{time.strftime('%Y%m%d-%H%M%S')}")
     os.makedirs(os.path.dirname(aside), exist_ok=True)
-    os.replace(src_dir, aside)
+    if not _set_aside(root, src_dir, aside):
+        # The state is merged; only the emptied directory would not move. No redirect yet: a
+        # session pinned to the old key must not point at a key whose directory is still here,
+        # and the next settle merges the (now empty) directory again and retries the move.
+        return out
     # A session pinned to the old key follows it (`pinned`).
     idx = Store(root).read(INDEX) or {}
     redirects = {k: v for k, v in (idx.get("redirects") or {}).items()

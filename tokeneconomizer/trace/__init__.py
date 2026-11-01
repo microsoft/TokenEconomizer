@@ -8,10 +8,13 @@ here and nowhere else:
   * `catalog`  -- the tool list a session loaded, from whichever source the agent publishes;
   * `claude`, `codex`, `copilot`, `opencode`, `pi` -- each agent's own session file: usage,
                   metadata, prompt-turns, and the conversions that let the readers above handle
-                  it.
+                  it;
+  * `opencode_db` -- opencode's own database, read to rebuild the export of a session the plugin
+                  never watched end (`te import`).
 
 Stdlib only.
 """
+from . import opencode_db
 from .calls import RTK_PREFIX_RE, call_cwds, load_trajectory, strip_rtk_prefix, tool_usage
 from .catalog import (CODEX_DEFAULT_TOOL_CATALOG, catalog_sources, parse_catalog,
                       parse_catalog_with_source, parse_tool_catalog, parse_tool_catalog_claude,
@@ -30,6 +33,7 @@ from .pi import (pi_active_branch, pi_json_reply, pi_prompt_count, pi_session_he
                  pi_session_to_claude, pi_session_usage)
 
 __all__ = [
+    "opencode_db",
     "RTK_PREFIX_RE", "call_cwds", "load_trajectory", "strip_rtk_prefix", "tool_usage",
     "CODEX_DEFAULT_TOOL_CATALOG", "catalog_sources", "parse_catalog", "parse_catalog_with_source",
     "parse_tool_catalog", "parse_tool_catalog_claude", "parse_tool_catalog_flat",

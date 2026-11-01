@@ -88,6 +88,38 @@ def test_store_writes_atomically_and_logs(tmp_path):
     assert not [f for f in os.listdir(s.base) if f.endswith(".tmp")]
 
 
+def test_a_write_retries_while_a_reader_holds_the_target(tmp_path, monkeypatch):
+    """Windows: a concurrent hook or `te status` has the file open without `FILE_SHARE_DELETE`,
+    so the replace fails; the reader is short-lived and the write must not be lost."""
+    from tokeneconomizer.plugin import store as store_mod
+    s = Store(str(tmp_path / "st"))
+    s.write("a.json", {"x": 1})
+    real_replace, calls = os.replace, {"n": 0}
+
+    def held_by_a_reader(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError(13, "held by a reader", dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(store_mod.os, "replace", held_by_a_reader)
+    monkeypatch.setattr(store_mod, "REPLACE_FIRST_WAIT_S", 0.0)
+    monkeypatch.setattr(store_mod, "REPLACE_MAX_WAIT_S", 0.0)
+    s.write("a.json", {"x": 2})
+    assert s.read("a.json") == {"x": 2} and calls["n"] == 3   # the third attempt landed
+    assert not [f for f in os.listdir(s.base) if f.endswith(".tmp")]
+
+    # a permission problem that does not go away is still reported, not swallowed
+    def denied(src, dst):
+        raise PermissionError(13, "denied", dst)
+
+    monkeypatch.setattr(store_mod.os, "replace", denied)
+    with pytest.raises(PermissionError):
+        s.write("a.json", {"x": 3})
+    assert s.read("a.json") == {"x": 2}                     # the old document stands
+    assert not [f for f in os.listdir(s.base) if f.endswith(".tmp")]
+
+
 def test_config_layers_and_never_raises_on_bad_values(tmp_path):
     root = str(tmp_path)
     repo_dir = os.path.join(root, "repos", "r")

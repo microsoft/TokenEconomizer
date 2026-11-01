@@ -222,6 +222,61 @@ def test_a_clone_under_another_folder_name_is_carried_over_whole(tmp_path, env):
     assert repos.adopt(root, repo, env) == []
 
 
+def test_a_directory_windows_will_not_move_is_retried_and_the_merge_stands(tmp_path, env,
+                                                                         monkeypatch):
+    """`os.replace` of a directory fails on Windows while a handle is open inside it (a scanner,
+    an agent's watcher): the error in `errors.log`. The retry moves it, and the merge -- which
+    already happened -- is not repeated."""
+    clone = git_repo(str(tmp_path / "TE_MSR"), "https://github.com/acme/widget")
+    old = repos.legacy_key(clone, env)
+    st = state(env, old)
+    legacy_session(st, "s1", transcript(tmp_path / "s1.jsonl", clone))
+    learned(st, "acme/widget")
+    root = env["TOKENECONOMIZER_HOME"]
+    repo = paths.repo_identity(clone, env)
+    real_replace = os.replace
+    attempts = []
+
+    def flaky(src, dst):
+        if os.path.isdir(src) and os.path.basename(src) == old:
+            attempts.append(src)
+            if len(attempts) == 1:
+                raise PermissionError(13, "Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(repos.os, "replace", flaky)
+    repos.adopt(root, repo, env)
+    assert len(attempts) == 2
+    assert not os.path.isdir(os.path.join(root, "repos", old))
+    assert os.listdir(os.path.join(root, "merged"))[0].startswith(old)
+    assert state(env, repo.key).read("injection.json")["rendered"] == "- a fact"
+
+
+def test_a_directory_that_never_moves_aborts_nothing_and_writes_no_redirect(tmp_path, env,
+                                                                          monkeypatch):
+    """The merged directory stays where it is, the settle still succeeds, and no redirect sends
+    the sessions pinned to the old key to a key whose directory is still there."""
+    clone = git_repo(str(tmp_path / "TE_MSR"), "https://github.com/acme/widget")
+    old = repos.legacy_key(clone, env)
+    st = state(env, old)
+    legacy_session(st, "s1", transcript(tmp_path / "s1.jsonl", clone))
+    learned(st, "acme/widget")
+    root = env["TOKENECONOMIZER_HOME"]
+    repo = paths.repo_identity(clone, env)
+    real_replace = os.replace
+
+    def refuse(src, dst):
+        if os.path.isdir(src) and os.path.basename(src) == old:
+            raise PermissionError(13, "Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(repos.os, "replace", refuse)
+    repos.adopt(root, repo, env)                     # no exception
+    idx = Store(root).read(repos.INDEX) or {}
+    assert old not in (idx.get("redirects") or {})
+    assert os.path.isdir(os.path.join(root, "repos", old))
+
+
 def test_an_old_remote_carries_its_learned_state_under_the_new_name(tmp_path, env):
     """`aaron-jx-li/tokeneconomizer` moved to `microsoft/tokeneconomizer`: the micro-skill state
     is filed by repository name, so it is renamed with the move."""
