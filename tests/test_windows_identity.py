@@ -38,6 +38,7 @@ class WindowsIdentityTests(unittest.TestCase):
                     file.write('{}')
                 self.assertTrue(os.path.isfile(path))
         self.assertEqual(repo_filename('owner/repo'), 'owner__repo')
+        self.assertEqual(repo_filename('.dotfiles'), '.dotfiles')
 
 
 if __name__ == '__main__':
