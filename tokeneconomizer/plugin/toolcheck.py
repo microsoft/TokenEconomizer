@@ -218,14 +218,23 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
     env = dict(os.environ, TE_SIDECALL="1")
     cmd = [cli, "-p", "Reply with exactly: OK", "--output-format", "json", "--model", "haiku",
            "--max-turns", "1"] + claude_flags(cli) + list(extra_args)
-    with tempfile.TemporaryDirectory(prefix="te-measure-") as cwd:
+    # ignore_cleanup_errors: on Windows an MCP server the session started can still hold the cwd
+    # when `claude` exits (WinError 32), as in `_init_tools`.
+    with tempfile.TemporaryDirectory(prefix="te-measure-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", env=env,
                              cwd=cwd, timeout=timeout)
-    data = json.loads(out.stdout or "{}")
+    try:
+        data = json.loads(out.stdout or "{}")
+    except ValueError:
+        data = {}
     u = data.get("usage") or {}
-    return (sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
-                                              "cache_creation_input_tokens")),
-            data.get("total_cost_usd"))
+    total = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
+                                             "cache_creation_input_tokens"))
+    if data.get("is_error") or not total:
+        # A failed probe would otherwise count as 0 tokens, and the whole request as saved.
+        raise RuntimeError("`claude -p` reported no usage: "
+                           + ((out.stderr or out.stdout or "").strip()[:300] or "no output"))
+    return total, data.get("total_cost_usd")
 
 
 def _codex_prompt_chars(overrides, cli="codex", timeout=60):
@@ -271,7 +280,13 @@ def measure(tools, cli=None, host="claude"):
                 "probe_cost_usd": 0.0}
     cli = cli or claude_cli()
     full, c1 = _prompt_tokens([], cli=cli)
-    lean, c2 = _prompt_tokens(["--disallowed-tools", ",".join(tools)], cli=cli)
+    # The deny list as a settings file, not `--disallowed-tools` on argv: hundreds of names
+    # overflow cmd.exe's 8191-character line when `claude` is the npm `claude.cmd` shim. Bare-name
+    # deny rules remove the same tools (see `denylist`), and are what `toolprune apply` writes.
+    with tempfile.TemporaryDirectory(prefix="te-deny-", ignore_cleanup_errors=True) as d:
+        settings = os.path.join(d, "settings.json")
+        _write_json(settings, {"permissions": {"deny": list(tools)}})
+        lean, c2 = _prompt_tokens(["--settings", settings], cli=cli)
     return {"tools": list(tools), "prompt_tokens_full": full, "prompt_tokens_lean": lean,
             "saved_per_request": full - lean,
             "probe_cost_usd": round((c1 or 0) + (c2 or 0), 4)}
