@@ -241,9 +241,12 @@ class LiveConfig:
         try:
             if isinstance(value, bool):
                 raise ValueError("not a number")
-            if not math.isfinite(float(value)):
+            number = float(value)
+            if not math.isfinite(number):
                 raise ValueError("must be finite")
-            v = kind(float(value)) if kind is int and float(value).is_integer() else kind(value)
+            if kind is int and not number.is_integer():
+                raise ValueError("must be a whole number")
+            v = kind(number) if kind is int else kind(value)
         except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: loopguard.{name}={value!r} rejected ({e})")
             return False
