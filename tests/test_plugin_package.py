@@ -15,6 +15,8 @@ import sys
 
 import pytest
 
+from tokeneconomizer.plugin import paths
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugin")
 # Windows runs no shebang: the launchers go through Git Bash's `sh`.
@@ -147,6 +149,26 @@ def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
                               "cwd": str(work), "source": "startup"}, _hook_env(tmp_path))
     assert code == 0 and json.loads(out) == {}
     assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
+
+
+def test_the_launcher_gets_a_cmd_beside_it_on_windows(tmp_path):
+    """cmd.exe and PowerShell run a `.cmd`, not the `sh` launcher, so a person there has no `te`
+    to run -- the Windows plugins' own README tells them to run one. Session start writes both."""
+    if os.name != "nt":
+        pytest.skip("a .cmd launcher is a Windows file")
+    env = {"TOKENECONOMIZER_HOME": str(tmp_path / "te"), "TE_PLUGIN_ROOT": PLUGIN,
+           "TE_PYTHON": sys.executable}
+    path = paths.ensure_launcher(env)
+    assert path and os.path.isfile(path)                     # the `sh` launcher, as before
+    cmd = path + ".cmd"
+    assert os.path.isfile(cmd)
+    text = open(cmd, encoding="utf-8").read()
+    assert "te_bootstrap.py" in text and sys.executable in text
+    assert text.rstrip().endswith("%*")                      # arguments pass through
+    # Written once: a second session start does not rewrite it.
+    before = os.stat(cmd).st_mtime_ns
+    paths.ensure_launcher(env)
+    assert os.stat(cmd).st_mtime_ns == before
 
 
 def test_the_launcher_fails_open_without_python(tmp_path):

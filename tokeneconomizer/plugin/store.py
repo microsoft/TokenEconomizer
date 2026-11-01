@@ -9,11 +9,22 @@ written by one session only and need no lock.
 Locking uses `fcntl.flock`, and `msvcrt.locking` on Windows. Where neither is available the lock
 degrades to a no-op rather than failing the hook: a lost update is recoverable, a crashed hook is
 not.
+
+`os.replace` is atomic on POSIX even while another process reads the target. On Windows it is
+not: CPython opens a file for reading without `FILE_SHARE_DELETE`, so replacing one that a
+concurrent hook or a `te status` has open fails with `PermissionError` (WinError 5). Those
+readers are short-lived, so the replace is retried briefly rather than lost -- a repository with
+two opencode sessions and a replay (`te import`) running concurrently hit this repeatedly.
 """
 import contextlib
 import json
 import os
 import time
+
+# How long a write waits for a reader to let go of the target: a handful of tries over ~1.3s.
+REPLACE_TRIES = 8
+REPLACE_FIRST_WAIT_S = 0.01
+REPLACE_MAX_WAIT_S = 0.4
 
 try:
     import fcntl
@@ -41,6 +52,21 @@ def _unlock(fh):
     else:
         fh.seek(0)
         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _replace(tmp, target):
+    """`os.replace`, retried while a concurrent reader holds the target (Windows only: see the
+    module). The last failure is raised, so a real permission problem still surfaces."""
+    wait = REPLACE_FIRST_WAIT_S
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(wait)
+            wait = min(wait * 2, REPLACE_MAX_WAIT_S)
 
 
 class Store:
@@ -71,7 +97,7 @@ class Store:
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(obj, fh, indent=2, sort_keys=True)
-            os.replace(tmp, target)
+            _replace(tmp, target)
         finally:
             try:
                 os.unlink(tmp)

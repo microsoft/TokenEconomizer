@@ -136,6 +136,38 @@ function hookSync(payload: Record<string, unknown>) {
 const stateRoot = () =>
   resolve(process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer"));
 
+/** How much of opencode's own history a replay folds on the first session of a run. */
+const BACKFILL_DAYS = (process.env.TE_BACKFILL_DAYS || "3").trim();
+
+/** One replay of the sessions opencode recorded before this plugin watched it (`te import`).
+ *
+ * The plugin learns from sessions it sees end, so a repository that has been worked in for weeks
+ * starts knowing nothing. opencode keeps every session in its own database, and `te import`
+ * hands the old ones to the same fold a live session ends into -- detached, on the first session
+ * of this process, so the user pays one process spawn and never a stall. It runs once per
+ * process here and once per repository in `te import` itself (`backfill.json`, `MAX_AGE_H`), so a
+ * restart does not walk the database again. */
+let replayed = false;
+function replayHistory(sessionID: string, cwd: string): void {
+  if (replayed || disabled()) return;
+  replayed = true;
+  try {
+    const args = ["import", "--since", BACKFILL_DAYS];
+    if (sessionID) args.push("--exclude", sessionID);   // still running: its own end folds it
+    if (cwd) args.push("--cwd", cwd);
+    const [program, argv] = launch("te", ["--host", "opencode", ...args]);
+    const child = spawn(program, argv, {
+      ...HIDDEN,
+      env: childEnv(),
+      stdio: "ignore",
+      detached: true,
+    });
+    child.unref();
+  } catch {
+    /* fail open: the history is worth no broken session */
+  }
+}
+
 /** The session so far, as the JSON the fold reads (`trace/opencode.py`), from `opencode export`.
  * A child process rather than the plugin client: `opencode run` exits as soon as its turn goes
  * idle, without waiting for a plugin to finish, so only a blocking call is sure to complete. The
@@ -191,6 +223,7 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
     if (open.has(sessionID)) return;
     open.add(sessionID);
     prompts.set(sessionID, 0);
+    replayHistory(sessionID, directory);
     const out = await hook({
       ...base(sessionID),
       hook_event_name: "SessionStart",
@@ -360,6 +393,7 @@ const setupV2 = async (ctx: any) => {
     open.add(id);
     records.set(id, []);
     prompts.set(id, 0);
+    replayHistory(id, directory);
     const out = await hook({ ...base(id), hook_event_name: "SessionStart", source: "startup" });
     manuals.set(id, out?.hookSpecificOutput?.additionalContext ?? "");
     notify(out?.systemMessage);

@@ -24,6 +24,9 @@
                                       now (runs by itself, once, after an upgrade)
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
+    te fold                           fold the sessions whose end no hook saw
+    te import                         learn from the sessions opencode recorded before this plugin
+                                      watched them: `--all`, `--since DAYS`, `--dry-run`, `--paid`
     te doctor                         check the installation
     te --host copilot probe           real Copilot sessions in a throwaway repository: does a
                                       learned fact change what the model does, and what does the
@@ -42,7 +45,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from . import (accounting, backfill, denylist, fold, hosts, paths, repomap, repos, sidecall,
+               toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -513,12 +517,42 @@ def cmd_fold(args):
     return 0
 
 
+def cmd_import(args):
+    """Replay the sessions opencode already recorded into this repository's state
+    (see `plugin/backfill.py`): what the plugin would have learned had it watched them."""
+    dirs = None if args.all else [args.cwd]
+    summary = backfill.run(directories=dirs, since_days=args.since, limit=args.limit,
+                          exclude=tuple(args.exclude or ()), dry_run=args.dry_run,
+                          paid=args.paid, force=args.force)
+    if summary.get("missing"):
+        print(f"nothing to import: no opencode database at {summary['db']}")
+        return 1
+    if summary.get("unsupported"):
+        print(f"nothing to import: {summary['db']} is not an opencode 2.x database")
+        return 1
+    results = summary["results"]
+    if not results:
+        print(f"nothing to import: no session in the last {args.since:g} day(s)")
+        return 0
+    folded = already = 0
+    for r in results:
+        if r.get("skipped"):
+            print(f"  {r['directory']}: skipped ({r['skipped']}; --force replays)")
+            continue
+        folded, already = folded + r["folded"], already + r["already"]
+        verb = "would fold" if r.get("dry_run") else "folded"
+        print(f"  {r['directory']}: {verb} {r['folded']}, already folded {r['already']}"
+              + (f", {r['errors']} unreadable" if r.get("errors") else ""))
+    print(f"{folded} of {folded + already} session(s) "
+          f"{'to fold' if args.dry_run else 'folded'} over {args.since:g} day(s)")
+    return 0
+
+
 def cmd_judge(args):
     """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
     judge.run_job(_session_ctx(args, args.session), args.session, args.job)
     return 0
-
 
 # ---- repos ----------------------------------------------------------------------------------
 def _when(ts):
@@ -736,6 +770,20 @@ def build_parser():
     p.add_argument("--session", action="append")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_fold)
+    p = add("import")
+    p.add_argument("--since", type=float, default=3.0, metavar="DAYS",
+                   help="how much of the database's history to replay (default 3)")
+    p.add_argument("--all", action="store_true",
+                   help="every project the database holds, not just --cwd")
+    p.add_argument("--limit", type=int, default=None, help="at most this many per project")
+    p.add_argument("--exclude", action="append", default=[],
+                   help="a session id to leave alone (one still running)")
+    p.add_argument("--dry-run", action="store_true", help="count the sessions, fold none")
+    p.add_argument("--paid", action="store_true",
+                   help="let micro-skills' proposer run its model calls during the replay")
+    p.add_argument("--force", action="store_true",
+                   help="replay even when this repository was replayed recently")
+    p.set_defaults(fn=cmd_import)
     p = add("judge")
     p.add_argument("--session", required=True)
     p.add_argument("--job", required=True)
