@@ -50,6 +50,28 @@ def launcher_path(env=None):
     return os.path.join(state_root(env), "bin", "te")
 
 
+def cmd_launcher_path(env=None):
+    return launcher_path(env) + ".cmd"
+
+
+def _write_launcher(path, body, mode=0o700):
+    """Write `path` when its text differs -- an installed copy's path changes across updates.
+    True when it wrote."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            if fh.read() == body:
+                return False
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    return True
+
+
 def ensure_launcher(env=None):
     """Keep `<state root>/bin/te` pointing at this plugin's `te`. Returns its path, or None.
 
@@ -59,7 +81,11 @@ def ensure_launcher(env=None):
     arrive literally), and its shell exports none of them. So every hook session start writes
     this one-line launcher, the commands fall back to it, and a person on any host has a stable
     `te` to run. The plugin's location comes from the bootstrap (`TE_PLUGIN_ROOT`); the file is
-    rewritten only when it changes, as an installed copy's path does across updates."""
+    rewritten only when it changes, as an installed copy's path does across updates.
+
+    On Windows a `te.cmd` is written beside it: cmd and PowerShell run a `.cmd`, not the `sh`
+    script, and that is the shell a person works in there. It starts the bootstrap directly and
+    passes every argument through."""
     import shlex
     env = os.environ if env is None else env
     plugin = env.get("TE_PLUGIN_ROOT")
@@ -69,18 +95,15 @@ def ensure_launcher(env=None):
     path = launcher_path(env)
     body = ("#!/bin/sh\n# Written by the TokenEconomizer plugin at session start: its `te` "
             "command line.\nexec %s \"$@\"\n" % shlex.quote(target))
-    try:
-        with open(path, encoding="utf-8") as fh:
-            if fh.read() == body:
-                return path
-    except OSError:
-        pass
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(body)
-    os.chmod(tmp, 0o700)
-    os.replace(tmp, path)
+    _write_launcher(path, body)
+    if os.name == "nt":
+        _write_launcher(cmd_launcher_path(env),
+                        "@echo off\r\n"
+                        "rem Written by the TokenEconomizer plugin at session start: its `te` "
+                        "command line.\r\n"
+                        '"%s" "%s" cli %%*\r\n'
+                        % (env.get("TE_PYTHON") or "python",
+                           os.path.join(plugin, "scripts", "te_bootstrap.py")))
     return path
 
 
