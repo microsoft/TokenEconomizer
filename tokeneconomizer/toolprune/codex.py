@@ -29,6 +29,7 @@ import json
 import os
 import re
 from collections import Counter
+from tokeneconomizer.names import repo_filename
 
 
 # ===========================================================================
@@ -346,7 +347,7 @@ class CodexUntoolProfile:
         self.repo = repo
         state_dir = os.path.join(
             os.path.abspath(results_root), "interface_state",
-            repo.replace("/", "__"))
+            repo_filename(repo))
         self.path = os.path.join(state_dir, "codex_untool.json")
         self._pending = None
         self.state = self._new_state()
