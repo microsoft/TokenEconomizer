@@ -8,7 +8,9 @@
                                       MCP servers (Copilot)
     te toolprune restore [ITEM ...]   remove entries this plugin added
     te toolprune refresh-catalog      record the tool list a fresh session loads (Claude, Copilot)
-    te toolprune measure              measure the request with and without the proposal
+    te savings                        what tool pruning leaves out and its last measurement
+    te toolprune measure [--applied]  measure the request with and without the proposal (or,
+                                      with --applied, the list already applied)
     te toolprune apply-pending        write a pending `auto` deny list once the repository has
                                       been idle long enough (the fold starts it, detached)
     te config show                    each mechanism on or off, its settings, the guard's thresholds
@@ -375,15 +377,73 @@ def cmd_toolprune(args):
         print(f"{len(tools)} tools recorded in {path}:\n  " + ", ".join(tools))
         return 0
     if action == "measure":
-        tools = args.tools or _proposal(ctx, unt) or denylist.applied_for(
-            ctx.store, ctx.repo.root, host)
+        applied = denylist.applied_for(ctx.store, ctx.repo.root, host)
+        tools = applied if args.applied else (args.tools or _proposal(ctx, unt) or applied)
         if not tools:
-            print("no proposal to measure")
+            print("no applied list to measure" if args.applied else "no proposal to measure")
             return 1
         res = toolcheck.measure(tools, host=host)
+        _record_measure(ctx, host, tools, res)
         print(json.dumps(res, indent=2))
         return 0
     return 2
+
+
+# ---- savings ------------------------------------------------------------------------------
+# Each measurement is kept under the exact list it measured, so measuring a proposal does not
+# replace the measurement of the list in force, and a changed list is never read with an old one.
+MEASURED = "untool_measure.json"
+LEFT_OUT = {"claude": "tools", "codex": "capabilities", "copilot": "MCP servers"}
+
+
+def _measure_key(host, tools):
+    return f"{host}:{','.join(sorted(tools))}"
+
+
+def _record_measure(ctx, host, tools, res):
+    if res.get("saved_per_request") is not None:
+        per_request, estimated = res["saved_per_request"], False
+    elif res.get("saved_tokens_per_request_est") is not None:
+        per_request, estimated = res["saved_tokens_per_request_est"], True
+    else:
+        return
+    measured = ctx.store.read(MEASURED) or {}
+    measured[_measure_key(host, tools)] = {
+        "per_request": per_request, "estimated": estimated,
+        "measured_on": time.strftime("%Y-%m-%d")}
+    ctx.store.write(MEASURED, measured)
+
+
+def cmd_savings(args):
+    """What tool pruning leaves out of this repository's sessions, the last measurement of that
+    list, and how many recorded sessions ran with it. It reads TokenEconomizer's own state only:
+    no model call, and no estimate of what the sessions would have cost."""
+    ctx = _ctx(args)
+    host = ctx.host.name
+    if not denylist.supports(host):
+        print(f"tool pruning is not available on {host}")
+        return 0
+    what = LEFT_OUT.get(host, "tools")
+    applied = denylist.applied_for(ctx.store, ctx.repo.root, host)
+    if not applied:
+        print("Tool pruning has not left anything out of this repository's sessions.")
+        return 0
+    print(f"Tool pruning leaves {len(applied)} {what} out of this repository's sessions.")
+    m = (ctx.store.read(MEASURED) or {}).get(_measure_key(host, applied))
+    if m is None:
+        cost = ("two small paid `claude -p` requests, about 1 cent" if host == "claude"
+                else "it renders the request locally, at no cost")
+        print("This list has not been measured. `te toolprune measure --applied` measures it "
+              f"({cost}).")
+        return 0
+    size = (f"about {accounting.fmt_tokens(m['per_request'])} tokens smaller (estimated from its "
+            f"size in characters)" if m["estimated"]
+            else f"{accounting.fmt_tokens(m['per_request'])} prompt tokens smaller")
+    print(f"Measured on {m['measured_on']}: one request without them is {size}.")
+    sessions, requests = accounting.sessions_with(ctx.store.read_lines("ledger.jsonl"), applied)
+    print(f"Sessions recorded with this list: {sessions:,} ({requests:,} requests)."
+          if sessions else "No session has been recorded with this list yet.")
+    return 0
 
 
 # ---- repomap ------------------------------------------------------------------------------
@@ -721,11 +781,13 @@ def build_parser():
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)
     add("microskills", "facts").set_defaults(fn=cmd_microskills)
+    add("savings").set_defaults(fn=cmd_savings)
     p = add("toolprune", "untool")
     p.add_argument("action", nargs="?", default="show",
                    choices=("show", "apply", "restore", "refresh-catalog", "measure",
                             "apply-pending"))
     p.add_argument("tools", nargs="*")
+    p.add_argument("--applied", action="store_true")
     p.set_defaults(fn=cmd_toolprune)
     p = add("config")
     p.add_argument("action", nargs="?", default="show", choices=("show", "set", "unset"))
