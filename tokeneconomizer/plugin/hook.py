@@ -26,8 +26,14 @@ def run(payload, env, host_hint=None):
     from .context import LiveContext
     from .controller import LiveController
     host = hosts.detect(payload, env, hint=host_hint)
+    if hasattr(host, "prepare"):
+        payload = host.prepare(payload, env)
     ctx = LiveContext.build(host, host.cwd(payload, env), env,
                             session_id=host.session_id(payload) or None, settle=False)
+    if not ctx.config.enabled:
+        return {}
+    if hasattr(host, "record_event"):
+        host.record_event(payload)
     return LiveController(ctx, payload).handle()
 
 

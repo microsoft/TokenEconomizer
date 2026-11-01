@@ -270,7 +270,7 @@ class LiveController:
         if self.cfg.loopguard == "off" or self.p.get("stop_hook_active"):
             return {}
         s = self._session()
-        summary = self._close_turn(s, stopped_normally=True)
+        summary = self._close_turn(s, stopped_normally=self.host.stopped_normally(self.p))
         if summary:
             self._log("turn", **summary)
         self._save(s)

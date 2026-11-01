@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ],
+    "postToolUse": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ],
+    "postToolUseFailure": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ],
+    "stop": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ],
+    "sessionEnd": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/te-hook\" --host cursor" }
+    ]
+  }
+}

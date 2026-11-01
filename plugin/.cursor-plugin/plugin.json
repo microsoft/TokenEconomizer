@@ -1,0 +1,9 @@
+{
+  "name": "tokeneconomizer",
+  "version": "0.1.0",
+  "description": "Learn repository facts and redirect coding-agent turns that appear stuck.",
+  "author": {
+    "name": "TokenEconomizer authors"
+  },
+  "hooks": "./hooks/cursor-hooks.json"
+}
