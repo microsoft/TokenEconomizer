@@ -1,9 +1,9 @@
 # The plugin: design and verified agent behaviour
 
-How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi, Cursor and OpenCode
-sessions, through the hooks (on Pi, the extension events) each agent exposes: what it does at
-each hook, what differs from the experiments and why, the agent behaviour each choice rests on,
-where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
+How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
+opencode and Cursor sessions, through the hooks (on Pi, the extension events) each agent
+exposes: what it does at each hook, what differs from the experiments and why, the agent
+behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
 [`plugin/README.md`](../plugin/README.md).
 

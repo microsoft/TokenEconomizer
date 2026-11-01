@@ -405,6 +405,15 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
     return text, eff
 
 
+# The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
+_CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p"}
+
+
+def call_name(host_name):
+    """How a notice names this agent's side-call command: `claude -p`, `codex exec`, ..."""
+    return _CALLS.get(host_name, f"{host_name} -p")
+
+
 def runner_for(host_name, config):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer

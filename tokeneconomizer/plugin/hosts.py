@@ -496,6 +496,12 @@ class Cursor(Host):
             value = payload.get(key)
             if value not in (None, ""):
                 row[key] = value
+        # A file write's input holds the whole file, which no mechanism reads.
+        if isinstance(row.get("tool_input"), dict):
+            row["tool_input"] = {k: v[:RESULT_CAP] if isinstance(v, str) else v
+                                 for k, v in row["tool_input"].items()}
+        if isinstance(row.get("error"), str):
+            row["error"] = row["error"][:RESULT_CAP]
         response = payload.get("tool_response")
         if isinstance(response, dict):
             response = dict(response)

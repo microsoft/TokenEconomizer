@@ -63,14 +63,13 @@ mechanisms:
   turn is still stuck after that, TokenEconomizer tells you how to stop it; it never stops a turn
   itself.
 
-TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI**, **Pi**, and
-**Cursor Agent**, with experimental support for **opencode**. Cursor support uses Cursor's command
-hooks and is experimental in this fork. Each italic letter above is a setting, shown with its
-default ([Settings](#settings)), and each mechanism can be turned on or off. The plugin announces
-each action in one line, and if any part of it fails, your session carries on as if it were not
-installed. Its model calls (the fact proposer, and the judge with the redirect it writes) run
-through your own agent, on the same plan or login, and their cost is included in its reports.
-What it learns stays on your machine, in `~/.tokeneconomizer`.
+TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
+with experimental support for **opencode** and **Cursor Agent**. Each italic letter above is a
+setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
+off. The plugin announces each action in one line, and if any part of it fails, your session
+carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
+redirect it writes) run through your own agent, on the same plan or login, and their cost is
+included in its reports. What it learns stays on your machine, in `~/.tokeneconomizer`.
 
 ## Results
 
@@ -212,7 +211,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
-| Cursor Agent (experimental) | current command-hook schema | no version range verified |
+| Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
