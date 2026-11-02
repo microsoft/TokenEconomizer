@@ -216,7 +216,7 @@ def claude_no_mcp(cli, cwd):
 
 def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     cli = cli or claude_cli()
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         # `--mcp-config` takes several values, so an option follows it, never a bare argument.
         cmd = ([cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", ""]
                + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli))
@@ -241,7 +241,7 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
     if model:
         cmd += ["-m", model]
     cmd.append(prompt)
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
                              timeout=timeout, env=_env(), cwd=cwd)
     text, usage = "", None
@@ -291,7 +291,7 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     model_args = ["--model", model] if model else []
     ext_args = pi_extension_args(extensions)
     exe = program(cli)
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         for extra in (["--no-mcp"], []):
             cmd = [*exe, *PI_FLAGS, *extra, *ext_args, *model_args, "--", prompt]
             out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
@@ -346,7 +346,7 @@ def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
     model_args = ["--model", model] if model else []
     env = dict(_env(), OPENCODE_CONFIG_CONTENT=OPENCODE_CONFIG)
     exe = program(cli)
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run([*exe, "run", *opencode_flags(cli), "--format", "json",
                               *model_args, prompt],
                              capture_output=True, encoding="utf-8", errors="replace",
@@ -374,7 +374,7 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     Cursor's current CLI JSON result does not expose token usage, so the call is useful for the
     judge/proposer but its cost remains unpriced in TokenEconomizer's ledger.
     """
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         cmd = [*program(cli), "--print", "--output-format", "json", "--mode", "ask", "--trust"]
         if model:
             cmd += ["--model", model]
@@ -435,7 +435,7 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
         cmd += ["--deny-tool", t, "--excluded-tools", t]
     if model:
         cmd += ["--model", model]
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
                              timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
     text, sid = "", None

@@ -34,7 +34,8 @@ _SLOTS = SpiralState.__slots__
 # jest`): without the optional directories those turns showed no verification at all, so a turn
 # whose last test run failed still counted as ended green and fed the envelope.
 VERIFY_RE = re.compile(
-    r"(?i)(?:^|[\s;&|(])(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|python\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)|"
+    r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*python\d?(?:\.\d+)?\s+)?"
+    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|python\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)|"
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
@@ -53,9 +54,13 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
 # A runner asked for its help, version or test list, not to run the tests.
 _NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
-# What may precede the command itself: `FOO=1 timeout 60 npm test`.
+# What may precede the command itself: `FOO=1 timeout 60 npm test`, and a launcher that runs
+# it in the project's environment, `uv run pytest`, `npx jest`, `bundle exec rspec`.
 _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nice|nohup|command|env|"
-                        r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+)\s+)*")
+                        r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
+                        r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
+                        r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
+                        r"(?:\s+-\S+)*)\s+)*")
 # What only reports on the run before it: `echo "exit=$?"`, `true`, `exit 0`.
 _REPORT_RE = re.compile(r"^\s*(?:echo|printf|true|:|exit)(?:\s|$)")
 _RANK = {"own": 0, "hidden": 1, "mixed": 2}
@@ -137,37 +142,6 @@ def runner_verdict(text):
     if _RUN_FAILED_RE.search(text):
         return True
     return False if _RUN_PASSED_RE.search(text) else None
-    try:
-        parts = shlex.split(cmd)
-    except ValueError:
-        parts = []
-    if (len(parts) >= 3 and os.path.basename(parts[0]) in _SHELLS
-            and parts[1].startswith("-") and "c" in parts[1]):
-        cmd = parts[2]
-    pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
-    while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
-        del pieces[-2:]
-    pipefail = "pipefail" in cmd
-    for i in range(0, len(pieces) - 1, 2):
-        stage = pieces[i]
-        if not VERIFY_RE.match(_PREFIX_RE.sub("", stage)) or _NOT_A_RUN_RE.search(stage):
-            continue
-        hidden = False
-        for sep, then in zip(pieces[i + 1::2], pieces[i + 2::2]):
-            if sep in ("|", "|&"):
-                hidden = not pipefail
-                break
-            if sep == "||":
-                hidden = True
-                break
-            if sep in (";", "\n"):
-                if not _REPORT_RE.match(then):
-                    hidden = False
-                    break
-                hidden = True
-        if hidden:
-            return True
-    return False
 
 
 _EDIT = {"edit", "create"}
@@ -239,7 +213,7 @@ class TurnGuard:
             self.edits += 1
             return
         cmd = (args or {}).get("command") if canon == "bash" else None
-        verifies = isinstance(cmd, str) and bool(VERIFY_RE.search(cmd))
+        verifies = status_of_tests(cmd) is not None
         if shell_edits:
             # `sed -i ... && pytest`: the edit comes first, so the run verifies it.
             self.last_edit = self.cum_turns - (1 if verifies else 0)
