@@ -1119,10 +1119,45 @@ def test_a_runner_named_by_path_counts_as_a_verification(cmd):
     assert g.verifications == 1 and not g.resolved_proxy()
 
 
+@pytest.mark.parametrize("cmd", ["uv run pytest -q", "uv run --frozen python -m pytest x.py",
+                                 "poetry run pytest", "pipenv run pytest", "npx jest src",
+                                 "npx -y vitest run", "pnpm exec jest", "bundle exec rspec",
+                                 "xvfb-run -a pytest", "cd web && npx jest"])
+def test_a_runner_started_by_a_launcher_counts_as_a_verification(cmd):
+    """`uv run`, `npx`, `bundle exec` are passed over like `timeout 60`: the run is the runner's,
+    so its status is the tests' own."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd,status", [("uv run ruff check", None),
+                                        ("npx prettier --check .", None),
+                                        ("pnpm exec jest --help", None),
+                                        ("yarn test", "own"), ("npm test", "own")])
+def test_a_launcher_leaves_what_it_runs_to_decide(cmd, status):
+    """A launcher alone is no test run, and `yarn test`, which names the test script, still is."""
+    assert turn.status_of_tests(cmd) == status
+
+
 @pytest.mark.parametrize("cmd", ["cat /w/pytest.ini", "cat pytest.ini", "ls /w/tests",
                                  "vim tests/runtests.py.bak"])
 def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
     assert not guard.VERIFY_RE.search(cmd)
+
+
+@pytest.mark.parametrize("cmd", ["grep -rn pytest src | head",
+                                 "python -m pytest x.py --collect-only -q | rg test_",
+                                 "bin/test --help | head", 'git commit -m "fix pytest"',
+                                 'echo "run pytest next"'])
+def test_a_non_test_command_mentioning_a_runner_is_not_a_verification(cmd):
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
+    g.fold("Bash", {"command": cmd}, "ok", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
 
 
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
@@ -1141,7 +1176,8 @@ def test_a_test_run_whose_status_was_replaced_is_judged_by_its_output():
     g.fold("bash", {"command": "/bin/bash -lc 'cd /w && timeout 60 go test ./... 2>&1 | tail -3'"},
            "--- FAIL: TestAdd (0.00s)\nFAIL\tacme/x\t0.01s", 0)
     assert g.whole.error_outputs == 1 and not g.resolved_proxy()
-    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true"):
+    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true",
+                "python tests/runtests.py app 2>&1 | tail -5"):
         g = guard.TurnGuard(turn_key="t")
         g.fold("bash", {"command": cmd}, "FAILED (failures=1)\nexit=1", 0)
         assert g.whole.error_outputs == 1 and not g.resolved_proxy()
