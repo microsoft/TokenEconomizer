@@ -1044,6 +1044,27 @@ def test_copilot_side_calls_name_a_model_a_byok_provider_can_serve():
                                   "COPILOT_PROVIDER_TYPE": wire}) == "anthropic/claude-haiku-4.5"
 
 
+@pytest.mark.real_sidecalls
+def test_side_calls_ignore_tempdir_cleanup_errors(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    orig = sidecall.tempfile.TemporaryDirectory.cleanup
+
+    def locked_cleanup(self):
+        orig(self)
+        if not getattr(self, "_ignore_cleanup_errors", False):
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+
+    monkeypatch.setattr(sidecall.tempfile.TemporaryDirectory, "cleanup", locked_cleanup)
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=json.dumps({"result": "OK", "usage": {"input_tokens": 10, "output_tokens": 1},
+                                   "modelUsage": {"claude-haiku-4-5": {}}}), stderr=""))
+    monkeypatch.setattr(sidecall, "_no_reply", lambda *a: None)
+    assert sidecall.claude_call("OK", cli="old")[0] == "OK"
+    assert sidecall.cursor_call("OK")[0] == "OK"
+    for fn in (sidecall.codex_call, sidecall.pi_call, sidecall.opencode_call, sidecall.copilot_call):
+        fn("OK")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the probe trap is made of sh scripts")
 def test_the_probe_repository_carries_its_trap(tmp_path):
     import subprocess
