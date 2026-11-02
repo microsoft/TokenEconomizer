@@ -821,7 +821,7 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
     text, eff = sidecall.copilot_call("propose facts")
     assert text == "- use python -m pytest" and eff and eff > 0
     cmd = seen["cmd"]
-    assert cmd[:3] == ["copilot", "-p", "propose facts"] and "--disable-builtin-mcps" in cmd
+    assert cmd[0] == sidecall.copilot_cli() and cmd[1:3] == ["-p", "propose facts"] and "--disable-builtin-mcps" in cmd
     assert cmd.count("--excluded-tools") == len(sidecall.COPILOT_TOOLS)
     assert seen["env"]["TE_SIDECALL"] == "1"            # its own hooks must not recurse
     cfg = live_config.LiveConfig()
@@ -918,6 +918,45 @@ def test_claude_cli_falls_back_to_the_native_install_when_not_on_path(monkeypatc
     assert sidecall.claude_cli() == str(exe)
     monkeypatch.setattr(sidecall.shutil, "which", lambda name: "/opt/bin/claude")
     assert sidecall.claude_cli() == "/opt/bin/claude"
+
+
+def test_host_clis_resolve_via_shutil_which_and_fallback(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+
+    mapping = {
+        "codex": r"C:\npm\codex.cmd",
+        "copilot": r"C:\npm\copilot.cmd",
+        "opencode": r"C:\npm\opencode.cmd",
+        "pi": r"C:\npm\pi.cmd",
+        "claude": r"C:\npm\claude.cmd",
+        "custom-codex": r"D:\bin\custom-codex.exe",
+    }
+    monkeypatch.setattr(sidecall.shutil, "which", lambda name: mapping.get(name))
+
+    assert sidecall.codex_cli() == r"C:\npm\codex.cmd"
+    assert sidecall.copilot_cli() == r"C:\npm\copilot.cmd"
+    assert sidecall.opencode_cli() == r"C:\npm\opencode.cmd"
+    assert sidecall.pi_cli() == r"C:\npm\pi.cmd"
+    assert sidecall.claude_cli() == r"C:\npm\claude.cmd"
+
+    assert sidecall.codex_cli("custom-codex") == r"D:\bin\custom-codex.exe"
+    assert sidecall.cli_for("codex") == r"C:\npm\codex.cmd"
+    assert sidecall.cli_for("copilot") == r"C:\npm\copilot.cmd"
+    assert sidecall.cli_for("opencode") == r"C:\npm\opencode.cmd"
+    assert sidecall.cli_for("pi") == r"C:\npm\pi.cmd"
+    assert sidecall.cli_for("claude") == r"C:\npm\claude.cmd"
+    assert sidecall.cli_for("other", "custom") == "custom"
+
+    # When which returns None, fallback to bare name
+    monkeypatch.setattr(sidecall.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sidecall.os.path, "isfile", lambda p: False)
+    assert sidecall.codex_cli() == "codex"
+    assert sidecall.copilot_cli() == "copilot"
+    assert sidecall.opencode_cli() == "opencode"
+    assert sidecall.pi_cli() == "pi"
+    assert sidecall.claude_cli() == "claude"
+    assert sidecall.codex_cli("my-codex") == "my-codex"
+    assert sidecall.cli_for("copilot") == "copilot"
 
 
 # `pi --print --mode json` on Pi 1.2.0 through OpenRouter, trimmed: the header, the system and
