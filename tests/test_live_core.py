@@ -1125,6 +1125,18 @@ def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
     assert not guard.VERIFY_RE.search(cmd)
 
 
+@pytest.mark.parametrize("cmd", ["grep -rn pytest src | head",
+                                 "python -m pytest x.py --collect-only -q | rg test_",
+                                 "bin/test --help | head", 'git commit -m "fix pytest"',
+                                 'echo "run pytest next"'])
+def test_a_non_test_command_mentioning_a_runner_is_not_a_verification(cmd):
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
+    g.fold("Bash", {"command": cmd}, "ok", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
 
 
@@ -1141,7 +1153,8 @@ def test_a_test_run_whose_status_was_replaced_is_judged_by_its_output():
     g.fold("bash", {"command": "/bin/bash -lc 'cd /w && timeout 60 go test ./... 2>&1 | tail -3'"},
            "--- FAIL: TestAdd (0.00s)\nFAIL\tacme/x\t0.01s", 0)
     assert g.whole.error_outputs == 1 and not g.resolved_proxy()
-    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true"):
+    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true",
+                "python tests/runtests.py app 2>&1 | tail -5"):
         g = guard.TurnGuard(turn_key="t")
         g.fold("bash", {"command": cmd}, "FAILED (failures=1)\nexit=1", 0)
         assert g.whole.error_outputs == 1 and not g.resolved_proxy()
