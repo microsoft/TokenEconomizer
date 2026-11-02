@@ -1239,3 +1239,46 @@ def test_codex_exec_and_copilot_p_are_told_from_their_terminal_uis(tmp_path, mon
     assert cp.headless({})
     assert cp.stop_hint(True) == "Press Ctrl+C to end the run."
     assert cp.stop_hint(False) == "Press Esc twice to interrupt it."
+
+@pytest.mark.real_sidecalls
+def test_sidecalls_ignore_cleanup_errors(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    created = []
+    real_tempdir = sidecall.tempfile.TemporaryDirectory
+
+    def fake_tempdir(*args, **kw):
+        td = real_tempdir(*args, **kw)
+        created.append(td)
+        return td
+
+    monkeypatch.setattr(sidecall.tempfile, "TemporaryDirectory", fake_tempdir)
+    monkeypatch.setattr(sidecall, "_HELP", {})
+
+    def fake_run(cmd, **kw):
+        if cmd[1:] == ["--help"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="  -p", stderr="")
+        if cmd[0] == "codex":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "item.completed", "item": {"type": "agent_message", "text": "OK"}}), stderr="")
+        if cmd[0] == "copilot":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "assistant.message", "data": {"content": "OK"}}), stderr="")
+        if cmd[0] == "opencode":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "text", "part": {"text": "OK"}}), stderr="")
+        if cmd[0] == "cursor-agent":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "OK"}), stderr="")
+        if cmd[0] == "pi":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "OK"}]}}), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+            "result": "OK", "usage": {"input_tokens": 10, "output_tokens": 1},
+            "modelUsage": {"claude-haiku-4-5": {}}}), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+
+    for caller in (sidecall.claude_call, sidecall.codex_call, sidecall.copilot_call,
+                   sidecall.opencode_call, sidecall.cursor_call, sidecall.pi_call):
+        created.clear()
+        caller("prompt")
+        assert created and all(getattr(td, "_ignore_cleanup_errors", False) for td in created), caller
