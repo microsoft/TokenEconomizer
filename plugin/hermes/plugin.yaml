@@ -1,0 +1,9 @@
+name: tokeneconomizer
+version: 0.1.0
+description: Reads finished sessions and changes what later sessions in the same repository pay for
+author: TokenEconomizer authors
+provides_hooks:
+  - pre_llm_call
+  - transform_tool_result
+  - on_session_end
+  - on_session_finalize

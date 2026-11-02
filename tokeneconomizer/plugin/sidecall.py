@@ -32,8 +32,12 @@ so no extra API key is needed and the call is billed where the session is:
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
+    the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
+    call's prompt holds text a repository controls, and this form offers it no tool. See
+    `hermes_call` for why `TE_SIDECALL` is not how it avoids the plugin's hooks.
 
-Every side call runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
+Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
 returns no reply -- a CLI that is not signed in, say -- leaves one line in the plugin's
 errors.log, which `te doctor` shows. One that answered it is not signed in also pauses that
@@ -70,7 +74,8 @@ def _no_reply(host, out):
     import time
     from .paths import state_root
     stderr = getattr(out, "stderr", "") or ""
-    tail = " ".join(stderr.split())[-300:]
+    # Hermes says why on stdout, with a non-zero exit.
+    tail = " ".join((stderr + " " + (getattr(out, "stdout", "") or "")).split())[-300:]
     try:
         root = state_root()
         os.makedirs(root, exist_ok=True)
@@ -313,6 +318,180 @@ def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
     return text, eff
 
 
+HERMES_SOURCE = "tool"
+# Hermes refuses a `--source` it does not know (`invalid_params`, 0.22.5, though its docs say any
+# value is stored), and `tool` is the one meant for this: hidden from its session pickers, and not
+# a source the plugin follows. `-t` must name a real toolset, and `bot_room` holds no tool (0.22.5):
+# with one on offer, `clarify`, a model spent the call's only turn on asking and never answered.
+HERMES_FLAGS = ("chat", "-Q", "--oneshot", "--source", HERMES_SOURCE, "--ignore-rules",
+                "--max-turns", "1", "-t", "bot_room")
+HERMES_DELETE_TIMEOUT_S = 60
+HERMES_TITLE_WAIT_S = 3.0
+_HERMES_ID_RE = re.compile(r"^session_id:\s*(\S+)", re.M)
+
+
+def hermes_cli():
+    """`hermes` on PATH, else the installer's `~/.local/bin/hermes`, which a gateway started by a
+    service may not have on PATH. Falls back to the bare name."""
+    found = shutil.which("hermes")
+    if found:
+        return found
+    exe = os.path.expanduser(os.path.join("~", ".local", "bin", "hermes"))
+    return exe if os.path.isfile(exe) else "hermes"
+
+
+def hermes_home(env=None):
+    """The Hermes home in effect: the plugin names its profile's in `HERMES_HOME`."""
+    env = os.environ if env is None else env
+    return env.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+
+
+def _hermes_db(env=None):
+    return os.path.join(hermes_home(env), "state.db")
+
+
+def _hermes_env():
+    """The call's environment. It must not carry `TE_SIDECALL`: a Hermes session runs in the
+    gateway, which does not read this process's environment, so the variable would protect
+    nothing; and when no gateway is running this call STARTS one, which keeps every variable it
+    is given (seen on 0.22.5), so all of the person's later sessions would run with the plugin
+    silently off. `PYTHONPATH` is `context.spawn`'s, for this process only."""
+    env = dict(os.environ)
+    for key in ("TE_SIDECALL", "TE_HERMES_MODE", "PYTHONPATH"):
+        env.pop(key, None)
+    return env
+
+
+def _hermes_ledger():
+    """Side-call sessions not yet settled, under their own lock: a judge and a fold can run at
+    once, and a session must be charged once."""
+    from .paths import state_root
+    from .store import Store
+    return Store(os.path.join(state_root(), "hosts", "hermes"))
+
+
+def _hermes_charge(session_id, wait_s=None):
+    """What a finished side call's session spent, in effective tokens, every usage row of it: the
+    reply's and the title Hermes generates for it, which may be priced on another model. None
+    while the session has not ended or cannot be read: it is then not safe to delete."""
+    import time
+    wait_s = HERMES_TITLE_WAIT_S if wait_s is None else wait_s
+    db, deadline = _hermes_db(), time.time() + wait_s
+    while True:
+        row, usage = trace.hermes_session_row(db, session_id)
+        ended = bool(row and row.get("ended_at"))
+        titled = bool(row and row.get("title")) or any(
+            u.get("task") == "title_generation" for u in usage)
+        if (ended and titled) or time.time() >= deadline:
+            break
+        time.sleep(0.25)
+    if not ended:
+        return None
+    total = 0.0
+    for u in usage:
+        eff, _ = accounting.effective(dict(trace.hermes_row_usage(u),
+                                           model=u.get("model") or "hermes"))
+        total += eff or 0.0
+    return total
+
+
+def _hermes_delete(session_id, cli):
+    """Delete a side call's session, so it is not in the person's history; whether it went."""
+    try:
+        subprocess.run([cli, "sessions", "delete", "--yes", session_id], capture_output=True,
+                       encoding="utf-8", errors="replace", timeout=HERMES_DELETE_TIMEOUT_S,
+                       env=_hermes_env(), stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return trace.hermes_session_row(_hermes_db(), session_id)[0] is None and os.path.exists(
+        _hermes_db())
+
+
+def _hermes_settle(session_id, cli, charged=False, wait_s=None):
+    """Charge a side call's session, then delete it: in that order, since its usage rows go with
+    it. (effective tokens spent now, or 0; whether anything is left to do later)."""
+    spent = 0.0
+    if not charged:
+        spent = _hermes_charge(session_id, wait_s)
+        if spent is None:
+            return 0.0, {"charged": False}
+    return spent, (None if _hermes_delete(session_id, cli) else {"charged": True})
+
+
+def _hermes_defer(session_id, left):
+    import time
+    store = _hermes_ledger()
+    with store.locked("sidecalls"):
+        doc = store.read("sidecalls.json") or {}
+        doc[session_id] = dict(left, at=left.get("at") or time.time())
+        store.write("sidecalls.json", doc)
+
+
+def _hermes_settle_earlier(cli):
+    """Settle the sessions an earlier call left, so what they spent is charged to this one: a
+    call killed at its timeout may still have been running, and a delete may have failed. A
+    session that is gone, or was never readable and is days old, is dropped."""
+    import time
+    store = _hermes_ledger()
+    with store.locked("sidecalls"):
+        doc = store.read("sidecalls.json") or {}
+        if doc:
+            store.write("sidecalls.json", {})
+    spent = 0.0
+    for sid, entry in doc.items():
+        if trace.hermes_session_row(_hermes_db(), sid)[0] is None:
+            continue
+        now, left = _hermes_settle(sid, cli, charged=bool(entry.get("charged")), wait_s=0)
+        spent += now
+        if left and time.time() - float(entry.get("at") or 0) < 7 * 86400:
+            _hermes_defer(sid, dict(left, at=entry.get("at")))
+    return spent
+
+
+def hermes_call(prompt, model="", cli=None, timeout=TIMEOUT_S):
+    """A side call through `hermes chat`, in the gateway that runs the person's sessions.
+
+    The gateway runs the plugin's hooks for this session too, and `TE_SIDECALL` cannot reach it
+    (`_hermes_env`), so the plugin follows only sessions whose row says a person started them, and
+    `--source tool` is not one of those. Nothing here blocks the gateway: this runs in a detached
+    job, and a hook only starts it.
+
+    Its session is deleted once its usage is read, title generation's included. One that cannot
+    be read yet, as after a timeout, is kept and settled by a later call, so nothing it spent is
+    lost and no session is deleted with its usage still in it. A prompt goes by file, since a
+    digest can outgrow a command line, and a file is not re-read by a shell on Windows."""
+    import time
+    cli = cli or hermes_cli()
+    spent = _hermes_settle_earlier(cli)
+    model_args = ["--model", model] if model else []
+    started, out = time.time(), None
+    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+        query = os.path.join(cwd, "query.txt")
+        with open(query, "w", encoding="utf-8") as fh:
+            fh.write(prompt)
+        try:
+            out = subprocess.run([cli, *HERMES_FLAGS, *model_args, "--query-file", query],
+                                 capture_output=True, encoding="utf-8", errors="replace",
+                                 timeout=timeout, env=_hermes_env(), cwd=cwd,
+                                 stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            out = None
+    m = _HERMES_ID_RE.search((out.stderr or "") if out is not None else "")
+    sid = m.group(1) if m else trace.hermes_find_session(_hermes_db(), HERMES_SOURCE, prompt,
+                                                         started - 1)
+    # Hermes prints why it could not start on stdout, with a non-zero exit: that is no reply.
+    text = (out.stdout or "").strip() if out is not None and out.returncode == 0 else ""
+    if not text:
+        _no_reply("hermes", out if out is not None else subprocess.CompletedProcess(
+            [], "timeout", "", "no reply within the time limit"))
+    if sid:
+        now, left = _hermes_settle(sid, cli)
+        spent += now
+        if left:
+            _hermes_defer(sid, left)
+    return text, spent if spent else None
+
+
 # Everything the Copilot CLI offers (1.0.83 names), so the completion is offered nothing; a name
 # the installed CLI does not know is ignored.
 COPILOT_TOOLS = ("bash", "read_bash", "write_bash", "stop_bash", "list_bash", "view", "grep",
@@ -394,6 +573,9 @@ def runner_for(host_name, config):
                                                   extensions=extensions)
     if host_name == "opencode":
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
+    if host_name == "hermes":
+        cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
+        return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
     if host_name == "codex":
         return lambda prompt, _m="agent": codex_call(prompt, model=model)
     if host_name == "copilot":

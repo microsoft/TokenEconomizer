@@ -389,6 +389,53 @@ class OpenCode(Host):
         return trace.opencode_session_usage(transcript_path)
 
 
+class Hermes(Host):
+    """Hermes Agent (NousResearch/hermes-agent), through the plugin in `plugin/hermes/`.
+
+    Hermes has no hook protocol of this shape -- its plugins are Python functions in the gateway
+    process that runs every session -- so the plugin speaks THIS one on Hermes's behalf, as the
+    opencode plugin does. What it sends:
+
+      * `prompt_id`, Hermes's own `turn_id`;
+      * `cwd`, the directory the session's row records, never the gateway's;
+      * `transcript_path`, the session's rows as JSON (`trace/hermes.py`);
+      * `tool_response = {content, status, error}`: the tool's result string as Hermes holds it,
+        which is read here for the tool's exit code;
+      * the session's origin in `TE_HERMES_MODE`: `oneshot` (`hermes -z`, `chat --oneshot`) or `cli`.
+    """
+    name = "hermes"
+    prompt_context = True              # the plugin returns it from `pre_llm_call`
+    # A hook has no verified way to reach the person's view, so the model passes the notice on.
+    relays_notices = True
+    # Hermes's docs (0.22.5): Ctrl+C on an empty prompt interrupts the agent, twice exits.
+    interrupt = "Press Ctrl+C to interrupt it."
+    end_run = "Press Ctrl+C to end the run."
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_HERMES_MODE", "")).strip() == "oneshot"
+
+    def tool_call(self, p):
+        name, args = trace.hermes_tool(str(p.get("tool_name") or ""), p.get("tool_input"))
+        resp = p.get("tool_response")
+        resp = resp if isinstance(resp, dict) else {"content": resp}
+        text, code, _ = trace.hermes_result(resp.get("content"))
+        return name, args, response_text(text), code
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "hermes_trace.jsonl")
+        n = trace.hermes_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.hermes_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.hermes_session_usage(transcript_path)
+
+
 def copilot_home(env=None):
     env = os.environ if env is None else env
     return env.get("COPILOT_HOME") or os.path.join(os.path.expanduser("~"), ".copilot")
@@ -480,8 +527,8 @@ def _ancestor_args(limit=4):
     return out
 
 
-HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi}
+HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "hermes": Hermes,
+         "opencode": OpenCode, "pi": Pi}
 
 
 def default_host(env=None, recent=None):
