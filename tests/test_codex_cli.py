@@ -82,6 +82,7 @@ class _Model(BaseHTTPRequestHandler):
     """The Responses API, as far as Codex reads it for a turn with no tool call: every request
     is answered with one assistant message."""
     requests = []
+    bodies = []
 
     def log_message(self, *args):
         pass
@@ -93,7 +94,7 @@ class _Model(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.bodies.append(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
         self.requests.append(("POST", self.path))
         rid = f"resp_{len(self.requests)}"
 
@@ -115,7 +116,7 @@ class _Model(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def model():
-    _Model.requests = []
+    _Model.requests, _Model.bodies = [], []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Model)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}/v1"
@@ -123,17 +124,24 @@ def model():
     server.server_close()
 
 
-def test_a_codex_session_runs_the_hooks_and_is_learned_from(tmp_path, model):
-    env = _env(tmp_path)
-    _, source = _install(env)
+def _use_model(env, model):
+    """Point Codex at the stand-in model."""
     config = os.path.join(env["CODEX_HOME"], "config.toml")
-    with open(config, encoding="utf-8") as fh:
-        tables = fh.read()
+    tables = ""
+    if os.path.exists(config):
+        with open(config, encoding="utf-8") as fh:
+            tables = fh.read()
     with open(config, "w", encoding="utf-8") as fh:     # top-level keys go before any table
         fh.write('model = "te-test-model"\nmodel_provider = "te_test"\n\n'
                  f'[model_providers.te_test]\nname = "te-test"\nbase_url = "{model}"\n'
                  'wire_api = "responses"\nsupports_websockets = false\n'
                  "request_max_retries = 0\nstream_max_retries = 0\n\n" + tables)
+
+
+def test_a_codex_session_runs_the_hooks_and_is_learned_from(tmp_path, model):
+    env = _env(tmp_path)
+    _, source = _install(env)
+    _use_model(env, model)
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "a.txt").write_text("x\n")
@@ -170,3 +178,33 @@ def test_a_codex_session_runs_the_hooks_and_is_learned_from(tmp_path, model):
     fold_log = os.path.join(store, "fold.log")
     assert sid in folded, (open(fold_log, encoding="utf-8").read()[-2000:]
                            if os.path.exists(fold_log) else "no fold.log")
+
+
+def _strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from _strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _strings(v)
+
+
+@pytest.mark.real_sidecalls
+def test_a_side_call_hands_codex_its_prompt_as_written(tmp_path, model, monkeypatch):
+    """On Windows `codex` is npm's `codex.cmd`, and through cmd.exe a newline would end the
+    prompt, `%PATH%` expand and an open quote let `&` start a command. The side call starts what
+    the shim runs, so the prompt reaches the model as written."""
+    from tokeneconomizer.plugin import sidecall
+    env = _env(tmp_path)
+    os.makedirs(env["CODEX_HOME"], exist_ok=True)
+    _use_model(env, model)
+    for k in ("CODEX_HOME", "TOKENECONOMIZER_HOME"):
+        monkeypatch.setenv(k, env[k])
+    print(f"codex: started as {sidecall.program('codex')}")
+    prompt = 'Say "hi & echo te-was-here\nthen 100% of %PATH%.'
+    text, _ = sidecall.codex_call(prompt)
+    sent = [s for b in _Model.bodies for s in _strings(json.loads(b))]
+    assert any(prompt in s for s in sent), (text, [s for s in sent if "hi" in s][:5])
+    assert text == "hi"

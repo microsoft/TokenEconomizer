@@ -124,6 +124,59 @@ def claude_cli():
     return exe if os.path.isfile(exe) else "claude"
 
 
+# How npm's `.cmd` shim for a CLI ends: its target and `%*`. A script runs through the program
+# its shebang names -- `"%_prog%" "%dp0%\node_modules\...\cli.js" %*`, `_prog` being the
+# `node.exe` beside the shim or else `node` -- and an executable directly,
+# `"%dp0%\node_modules\...\cli.exe" %*`; pnpm and npm 6 spell the folder `%~dp0`.
+_SHIM_TARGET_RE = re.compile(r'"%~?dp0%?\\([^"]+)"\s*%\*')
+_SHIM_PROG_RE = re.compile(r'SET "_prog=([^"%]+)"')
+
+
+def _shim_argv(path):
+    """What the npm shim at `path` runs, as an argv ([program, script] or [executable]), or None
+    when it is not one that can be read so."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    targets = _SHIM_TARGET_RE.findall(text)
+    if not targets:
+        return None
+    base = os.path.dirname(path)
+    target = os.path.normpath(os.path.join(base, targets[-1].replace("\\", os.sep)))
+    if not os.path.isfile(target):
+        return None
+    if target.lower().endswith(".exe"):
+        return [target]
+    m = _SHIM_PROG_RE.search(text)
+    name = m.group(1) if m else "node"
+    beside = os.path.join(base, name + ".exe")
+    prog = beside if os.path.isfile(beside) else shutil.which(name)
+    return [prog, target] if prog else None
+
+
+def program(cli):
+    """The argv that starts the agent CLI `cli` (a name or a path), with no shell in between.
+
+    On Windows an npm-installed CLI is a `.cmd` shim, which `subprocess` does not find by its
+    bare name (it reads no PATHEXT) and, started by its path, runs through cmd.exe -- which
+    parses every argument again: a newline ends the command, `%VAR%` expands, and a quote left
+    open lets `&` start another command. A side call's prompt is session content, so the shim is
+    read for what it runs, and that is started directly. A batch file that cannot be read so is
+    not run (FileNotFoundError, as for a CLI that is not installed)."""
+    if os.name != "nt":
+        return [cli]
+    found = shutil.which(cli)
+    if not found or os.path.splitext(found)[1].lower() not in (".cmd", ".bat"):
+        return [found or cli]
+    argv = _shim_argv(found)
+    if argv is None:
+        raise FileNotFoundError(f"{found}: a batch file that is not an npm shim, whose "
+                                f"arguments cmd.exe would parse again")
+    return argv
+
+
 _HELP = {}
 
 
@@ -183,8 +236,8 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
 
 
 def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
-    cmd = [cli, "exec", "--json", "--disable", "hooks", "--ephemeral", "-s", "read-only",
-           "--skip-git-repo-check"]
+    cmd = [*program(cli), "exec", "--json", "--disable", "hooks", "--ephemeral", "-s",
+           "read-only", "--skip-git-repo-check"]
     if model:
         cmd += ["-m", model]
     cmd.append(prompt)
@@ -237,9 +290,10 @@ def pi_extension_args(extensions):
 def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     model_args = ["--model", model] if model else []
     ext_args = pi_extension_args(extensions)
+    exe = program(cli)
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         for extra in (["--no-mcp"], []):
-            cmd = [cli, *PI_FLAGS, *extra, *ext_args, *model_args, "--", prompt]
+            cmd = [*exe, *PI_FLAGS, *extra, *ext_args, *model_args, "--", prompt]
             out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
                                  timeout=timeout, env=_env(), cwd=cwd,
                                  stdin=subprocess.DEVNULL)
@@ -275,7 +329,7 @@ def opencode_flags(cli="opencode"):
     session would run this plugin's hooks)."""
     if cli not in _OC_FLAGS:
         try:
-            help_text = subprocess.run([cli, "run", "--help"], capture_output=True,
+            help_text = subprocess.run([*program(cli), "run", "--help"], capture_output=True,
                                        encoding="utf-8", errors="replace", timeout=30,
                                        stdin=subprocess.DEVNULL).stdout
         except (OSError, subprocess.SubprocessError):
@@ -291,16 +345,17 @@ def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
     in their history."""
     model_args = ["--model", model] if model else []
     env = dict(_env(), OPENCODE_CONFIG_CONTENT=OPENCODE_CONFIG)
+    exe = program(cli)
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
-        out = subprocess.run([cli, "run", *opencode_flags(cli), "--format", "json", *model_args,
-                              prompt],
+        out = subprocess.run([*exe, "run", *opencode_flags(cli), "--format", "json",
+                              *model_args, prompt],
                              capture_output=True, encoding="utf-8", errors="replace",
                              timeout=timeout, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
         text, usage, sid = trace.opencode_run_reply(out.stdout)
         if sid:
             try:
-                subprocess.run([cli, "session", "delete", sid], capture_output=True, timeout=30,
-                               env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+                subprocess.run([*exe, "session", "delete", sid], capture_output=True,
+                               timeout=30, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
             except (OSError, subprocess.SubprocessError):
                 pass
     if not text:
@@ -320,7 +375,7 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     judge/proposer but its cost remains unpriced in TokenEconomizer's ledger.
     """
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
-        cmd = [cli, "--print", "--output-format", "json", "--mode", "ask", "--trust"]
+        cmd = [*program(cli), "--print", "--output-format", "json", "--mode", "ask", "--trust"]
         if model:
             cmd += ["--model", model]
         cmd.append(prompt)
@@ -371,8 +426,8 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
     from .. import trace
     from . import hosts
     model = copilot_model(model)
-    cmd = [cli, "-p", prompt, "--output-format", "json", "--no-color", "--no-auto-update",
-           "--no-custom-instructions", "--disable-builtin-mcps"]
+    cmd = [*program(cli), "-p", prompt, "--output-format", "json", "--no-color",
+           "--no-auto-update", "--no-custom-instructions", "--disable-builtin-mcps"]
     # The person's own MCP servers too: a completion needs none of them to connect.
     for server in sorted(trace.copilot_mcp_servers() - {"github-mcp-server"}):
         cmd += ["--disable-mcp-server", server]
