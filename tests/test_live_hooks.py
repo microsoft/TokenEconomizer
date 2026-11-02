@@ -23,6 +23,8 @@ from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
 
+from fixtures import opencode_session_export
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -1185,6 +1187,28 @@ def test_copilot_apply_and_restore_touch_only_the_plugins_own_servers(repo, tmp_
     denylist.apply(repo, ["github-mcp-server"], st, host="copilot")      # created: kept out of git
     assert "/.github/copilot/settings.local.json" in open(
         os.path.join(repo, ".git", "info", "exclude")).read().split()
+
+
+# ---- opencode ----------------------------------------------------------------------------
+def test_an_opencode_session_whose_copy_is_empty_is_folded_from_opencodes_export(
+        env, repo, tmp_path, monkeypatch):
+    """#118: on opencode 2.2.5 the plugin's copy of every session came out empty, so nothing was
+    learned. The fold reads opencode's own export instead (`opencode session export`)."""
+    import subprocess
+    copy = tmp_path / "ses_f.json"
+    copy.write_text(json.dumps({"info": {"id": "ses_f"}, "messages": []}))
+    asked = []
+
+    def fake_run(cmd, **kw):
+        asked.append(cmd[1:])
+        return subprocess.CompletedProcess(cmd, 0, stdout=opencode_session_export(), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_session(env, repo, "ses_f", str(copy), host="opencode")
+    assert asked == [["session", "export", "ses_f"]]
+    (rec,) = [r for r in store_for(env, repo, "opencode").read_lines("ledger.jsonl")
+              if r.get("kind") == "session"]
+    assert rec["prompts"] == 1 and "error" not in rec and rec["effective_tokens"]
 
 
 # ---- Codex capability untooling ----------------------------------------------------------

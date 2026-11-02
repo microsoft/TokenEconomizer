@@ -365,7 +365,7 @@ def fold_session(ctx, session_id, transcript_path=None):
         if session_id in folded:
             return None
         sess = ctx.store.read(sess_name) or {}
-        transcript = transcript_path or sess.get("transcript")
+        transcript = ctx.host.complete(transcript_path or sess.get("transcript"), session_id)
         record = {"kind": "session", "session_id": session_id, "host": ctx.host.name,
                   "repo": ctx.repo.label, "folded_at": time.time(),
                   "started": sess.get("started"), "ended": sess.get("ended"),

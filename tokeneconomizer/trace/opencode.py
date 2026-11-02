@@ -14,9 +14,50 @@ branch.
 
 Usage, per opencode's own type: `input` excludes the cache fields and `output` excludes
 `reasoning`, so output tokens are the two together.
+
+opencode 2.x exports with `opencode session export <session>`, and its messages are flat (2.2.5):
+`{id, type: "user", text}` for a prompt, `{id, type: "assistant", model: {id}, content, cost,
+tokens}` for an answer, whose `content` holds `text` parts and `{type: "tool", id, name, state:
+{status, input, content}}` calls. They are read as the `{info, parts}` above (`_nested`).
 """
 import json
 import os
+
+
+def _content_text(content):
+    if isinstance(content, list):
+        return "\n".join(c.get("text") or "" for c in content if isinstance(c, dict))
+    return str(content or "")
+
+
+def _nested(msg):
+    """A flat 2.x message as `{info, parts}`; any other message as it is."""
+    kind = msg.get("type")
+    if "info" in msg or kind not in ("user", "assistant"):
+        return msg
+    info = {"id": msg.get("id"), "role": kind}
+    if kind == "user":
+        return {"info": info, "parts": [{"type": "text", "text": str(msg.get("text") or "")}]}
+    model = msg.get("model") if isinstance(msg.get("model"), dict) else {}
+    info.update(modelID=model.get("id"), cost=msg.get("cost"), tokens=msg.get("tokens"))
+    parts = []
+    for c in msg.get("content") or []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("type") == "text":
+            parts.append({"type": "text", "text": str(c.get("text") or "")})
+        elif c.get("type") == "tool":
+            st = c.get("state") if isinstance(c.get("state"), dict) else {}
+            state = {"status": st.get("status"), "input": st.get("input") or {}}
+            if st.get("status") == "error":
+                err = st.get("error")
+                state["error"] = (str(err.get("message") or "") if isinstance(err, dict)
+                                  else str(err or "")) or _content_text(st.get("content"))
+            else:
+                state["output"] = _content_text(st.get("content"))
+            parts.append({"type": "tool", "callID": c.get("id"), "tool": c.get("name"),
+                          "state": state})
+    return {"info": info, "parts": parts}
 
 
 def _load(path):
@@ -27,11 +68,12 @@ def _load(path):
     except (OSError, ValueError):
         return {}, []
     if isinstance(data, list):
-        return {}, [m for m in data if isinstance(m, dict)]
+        return {}, [_nested(m) for m in data if isinstance(m, dict)]
     if isinstance(data, dict):
         msgs = data.get("messages")
         return (data.get("info") if isinstance(data.get("info"), dict) else {},
-                [m for m in msgs if isinstance(m, dict)] if isinstance(msgs, list) else [])
+                [_nested(m) for m in msgs if isinstance(m, dict)] if isinstance(msgs, list)
+                else [])
     return {}, []
 
 
