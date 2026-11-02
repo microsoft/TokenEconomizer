@@ -725,6 +725,10 @@ def test_hermes_saying_it_could_not_start_is_no_reply(home, side, monkeypatch):
     assert sidecall.hermes_call("q", cli="hermes")[0] == ""
 
 
+def test_a_notice_names_the_command_a_side_call_runs():
+    assert sidecall.call_name("hermes") == "hermes chat"
+
+
 def test_the_host_runs_its_side_calls_through_hermes(monkeypatch):
     cfg = type("C", (), {"paid_model": "m", "hermes_cli": "~/bin/hermes"})()
     seen = {}

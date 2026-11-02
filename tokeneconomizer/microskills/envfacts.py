@@ -36,6 +36,7 @@ import os
 import re
 from collections import Counter
 
+from ..names import repo_filename
 from .lifecycle import Lifecycle
 from .observe import (DEFAULT_VOCAB, NETWORK_ERRORS, form_failed, form_worked, is_bare,
                       label_rule, observe_task)
@@ -525,7 +526,7 @@ class EnvFactsDistiller:
     def _path(root, repo):
         d = os.path.join(root, STATE_SUBDIR)
         os.makedirs(d, exist_ok=True)
-        return os.path.join(d, repo.replace("/", "__") + ".json")
+        return os.path.join(d, repo_filename(repo) + ".json")
 
     def save(self, root):
         with open(self._path(root, self.repo), "w", encoding="utf-8") as fh:

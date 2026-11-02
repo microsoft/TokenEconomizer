@@ -64,12 +64,12 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode** and **Hermes Agent**. Each italic letter above is a setting, shown with its
-default ([Settings](#settings)), and each mechanism can be turned on or off. The plugin announces
-each action in one line, and if any part of it fails, your session carries on as if it were not
-installed. Its model calls (the fact proposer, and the judge with the redirect it writes) run
-through your own agent, on the same plan or login, and their cost is included in its reports.
-What it learns stays on your machine, in `~/.tokeneconomizer`.
+with experimental support for **opencode**, **Cursor Agent** and **Hermes Agent**. Each italic
+letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
+off. The plugin announces each action in one line, and if any part of it fails, your session
+carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
+redirect it writes) run through your own agent, on the same plan or login, and their cost is
+included in its reports. What it learns stays on your machine, in `~/.tokeneconomizer`.
 
 ## Results
 
@@ -161,6 +161,20 @@ pi install git:github.com/microsoft/TokenEconomizer
 
 Start `pi` and run `/te status`.
 
+**Cursor Agent** (experimental)
+
+```sh
+python scripts/build_plugin.py --out ~/.cursor/plugins/local/
+```
+
+Reload Cursor, confirm `tokeneconomizer` appears in Customize, then send a prompt in a repository.
+Check its state from a terminal with `~/.tokeneconomizer/bin/te --host cursor status`. Cursor's
+published hooks provide session, prompt, tool-result and completion events. Its transcript format
+and per-session token usage are not a supported public interface, so the adapter records needed
+hook events locally and reports session cost as unavailable. Cursor support is macOS and Linux
+only: on Windows, Cursor runs hook commands through PowerShell, and this plugin's launcher is a
+POSIX shell script.
+
 **opencode** (experimental)
 
 ```sh
@@ -211,6 +225,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
+| Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 
@@ -223,6 +238,8 @@ have not been tested yet.
   full path; `git pull` in the clone updates it.
 - **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
   2.x terminal UI.
+- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
+  from a live Agent session has not yet been verified.
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
   model and one free real model, on the classic CLI and one-shot runs only. Learning without model
   calls (`microskills=envfacts`) is verified there; `microskills=on` and a redirect reaching a real
@@ -241,6 +258,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Codex | `$tokeneconomizer:<command>` |
 | Pi | `/te <command>` |
 | opencode | from a terminal: `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
@@ -317,6 +335,7 @@ what it can leave out differs:
 | Codex | capability packages | `.codex/config.toml` |
 | Copilot CLI | whole MCP servers | `.github/copilot/settings.local.json` |
 | Pi | nothing (Pi loads only four tools) | — |
+| Cursor Agent | nothing yet | — |
 | opencode | nothing yet | — |
 | Hermes Agent | nothing yet | — |
 

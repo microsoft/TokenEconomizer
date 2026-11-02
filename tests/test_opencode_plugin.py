@@ -160,10 +160,11 @@ def chat():
     server.server_close()
 
 
-def _service_run(tmp_path, chat, name, hide=True):
+def _service_run(tmp_path, chat, name, hide=True, after=None):
     """One prompt through opencode's own background service, with the plugin installed in its
     config directory (beside a copy of its launchers) and the stand-in model; the probe's
-    records of the Pythons the service's hooks started."""
+    records of the Pythons the service's hooks started. `after(env, work)` runs once the turn
+    is over, while the service still runs."""
     home, work = tmp_path / f"home-{name}", tmp_path / f"work-svc-{name}"
     work.mkdir()
     subprocess.run(["git", "init", "-q", str(work)], check=True)
@@ -209,6 +210,8 @@ def _service_run(tmp_path, chat, name, hide=True):
         except subprocess.TimeoutExpired:
             pass
         time.sleep(3)                                   # the turn's last hook
+        if after:
+            after(env, work)
     finally:
         oc("service", "stop")
     recs = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()] \
@@ -233,3 +236,29 @@ def test_hooks_from_opencodes_background_service_open_no_console_window(tmp_path
     assert not [r for r in recs if r["visible"]], recs
     control = _service_run(tmp_path, chat, "control", hide=False)
     assert all(r["visible"] for r in control if r["hook"]), control
+
+
+def test_a_session_through_the_service_is_folded_with_its_prompt(tmp_path, chat):
+    """#118: on 2.2.5 the plugin's copy of every session came out empty, so nothing was learned.
+    One prompt through the real service, then `te fold`: the session is learned from with its
+    prompt -- from the plugin's copy, or else from opencode's own export."""
+    te, seen = tmp_path / "te-svc-fold", {}
+
+    def fold(env, work):
+        sids = [p.stem for p in te.glob("repos/*/opencode/sessions/*.json")]
+        seen["copies"] = {p.name: p.stat().st_size for p in te.glob("opencode-sessions/*.json")}
+        seen["fold"] = subprocess.run(
+            [sys.executable, os.path.join(REPO, "plugin", "scripts", "te_bootstrap.py"), "cli",
+             "--host", "opencode", "--cwd", str(work), "fold", "--verbose",
+             *[a for sid in sids for a in ("--session", sid)]],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            cwd=str(tmp_path), timeout=180)        # not the project: the fold finds its way there
+
+    _service_run(tmp_path, chat, "fold", after=fold)
+    out = seen["fold"]
+    print(f"service-fold: the plugin's copies {seen['copies']}")
+    rows = [json.loads(ln) for p in te.glob("repos/*/opencode/ledger.jsonl")
+            for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    folded = [r for r in rows if r.get("kind") == "session"]
+    assert folded and all(r.get("prompts") == 1 for r in folded), (
+        seen["copies"], out.stdout[-1500:], out.stderr[-1500:])

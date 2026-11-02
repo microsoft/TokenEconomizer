@@ -24,6 +24,7 @@ from .codex import (codex_capability_trace, codex_exec_calls, codex_prompt_count
 from .copilot import (copilot_event_calls, copilot_mcp_servers, copilot_prompt_count,
                       copilot_session_meta, copilot_session_usage, copilot_turns,
                       mcp_server_of)
+from .cursor import cursor_events_to_claude, cursor_prompt_count
 from .hermes import (hermes_find_session, hermes_prompt_count, hermes_result, hermes_row_usage,
                      hermes_session_info, hermes_session_row, hermes_session_to_claude,
                      hermes_session_usage, hermes_tool)
@@ -43,6 +44,7 @@ __all__ = [
     "codex_session_meta", "codex_session_usage", "rollout_item_to_exec",
     "copilot_event_calls", "copilot_mcp_servers", "copilot_prompt_count", "copilot_session_meta",
     "copilot_session_usage", "copilot_turns", "mcp_server_of",
+    "cursor_events_to_claude", "cursor_prompt_count",
     "hermes_find_session", "hermes_prompt_count", "hermes_result", "hermes_row_usage",
     "hermes_session_info", "hermes_session_row", "hermes_session_to_claude",
     "hermes_session_usage", "hermes_tool",

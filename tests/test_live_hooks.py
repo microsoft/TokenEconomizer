@@ -23,6 +23,8 @@ from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
 
+from fixtures import opencode_session_export
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -1187,6 +1189,29 @@ def test_copilot_apply_and_restore_touch_only_the_plugins_own_servers(repo, tmp_
         os.path.join(repo, ".git", "info", "exclude")).read().split()
 
 
+# ---- opencode ----------------------------------------------------------------------------
+def test_an_opencode_session_whose_copy_is_empty_is_folded_from_opencodes_export(
+        env, repo, tmp_path, monkeypatch):
+    """#118: on opencode 2.2.5 the plugin's copy of every session came out empty, so nothing was
+    learned. The fold reads opencode's own export instead (`opencode session export`)."""
+    import subprocess
+    copy = tmp_path / "ses_f.json"
+    copy.write_text(json.dumps({"info": {"id": "ses_f"}, "messages": []}))
+    asked = []
+
+    def fake_run(cmd, **kw):
+        asked.append((cmd[1:], kw["cwd"]))
+        return subprocess.CompletedProcess(cmd, 0, stdout=opencode_session_export(), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_session(env, repo, "ses_f", str(copy), host="opencode")
+    # opencode finds a session within the project it is run in: where the session ran
+    assert asked == [(["session", "export", "ses_f"], repo)]
+    (rec,) = [r for r in store_for(env, repo, "opencode").read_lines("ledger.jsonl")
+              if r.get("kind") == "session"]
+    assert rec["prompts"] == 1 and "error" not in rec and rec["effective_tokens"]
+
+
 # ---- Codex capability untooling ----------------------------------------------------------
 def codex_rollout(path, repo, i, exec_inputs=(), prompts=1):
     """A Codex rollout of `prompts` turns: in the first, one shell command and, per
@@ -1496,3 +1521,15 @@ def test_an_answer_to_a_failed_call_names_the_failure_event(env, repo):
             answered.append((p["hook_event_name"], o["hookSpecificOutput"]["hookEventName"]))
     assert answered and all(sent == named for sent, named in answered)
     assert any(sent == "PostToolUseFailure" for sent, _ in answered)
+
+
+def test_measure_reports_a_failed_probe_in_one_line(env, repo, monkeypatch, capsys):
+    from tokeneconomizer.plugin import cli
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+    def fail(tools, **kw):
+        raise RuntimeError("`claude -p` exited 1: boom")
+    monkeypatch.setattr(toolcheck, "measure", fail)
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "measure", "Workflow"]) == 1
+    assert capsys.readouterr().out.strip() == "not measured: `claude -p` exited 1: boom"

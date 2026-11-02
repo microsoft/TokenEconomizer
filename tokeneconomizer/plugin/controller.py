@@ -142,9 +142,9 @@ class LiveController:
                 and seen.get("sidecall_paused") != pause["at"]):
             byok = (" (with your own model key, Copilot does not pass it to the plugin's hooks)"
                     if self.host.name == "copilot" else "")
-            side = "hermes chat" if self.host.name == "hermes" else f"{self.host.name} -p"
             outputs.append(self.host.notice(
-                f"TokenEconomizer: the plugin's own model calls go through `{side}`, "
+                f"TokenEconomizer: the plugin's own model calls go through "
+                f"`{sidecall.call_name(self.host.name)}`, "
                 f"which answered that it is not signed in{byok}, so they are paused; facts that "
                 f"need no model call are still learned, and the loop guard redirects only at its "
                 f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "
@@ -271,7 +271,7 @@ class LiveController:
         if self.cfg.loopguard == "off" or self.p.get("stop_hook_active"):
             return {}
         s = self._session()
-        summary = self._close_turn(s, stopped_normally=True)
+        summary = self._close_turn(s, stopped_normally=self.host.stopped_normally(self.p))
         if summary:
             self._log("turn", **summary)
         self._save(s)

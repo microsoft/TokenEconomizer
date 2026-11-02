@@ -1,10 +1,9 @@
 # The plugin: design and verified agent behaviour
 
-How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI and Pi
-sessions (experimentally opencode and Hermes Agent), through the hooks (on Pi, the extension
-events) each agent exposes: what it does at
-each hook, what differs from the experiments and why, the agent behaviour each choice rests on,
-where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
+How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
+opencode, Cursor and Hermes Agent sessions, through the hooks (on Pi, the extension events) each agent
+exposes: what it does at each hook, what differs from the experiments and why, the agent
+behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
 [`plugin/README.md`](../plugin/README.md).
 
@@ -635,6 +634,13 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   already found its cause and was working around it; since 2026-10-25 the judge decides every
   redirect but the backstop's, which still counts.
 * **Pi** — tool pruning is not planned there, since Pi declares only four tools by default.
+* **Cursor Agent (experimental)** — hook event mapping follows Cursor's published hook schemas.
+  Cursor 3.24.9 loaded the local plugin, but hook delivery from a live Agent session has not been
+  verified. Cursor's transcript format is undocumented, and its hook payloads do not expose
+  session token usage. The adapter records prompt and tool events for learning and loop detection;
+  session and side-call costs are reported as unavailable. Tool pruning is not implemented for
+  Cursor. macOS and Linux only: Windows Cursor runs hooks through PowerShell, and the launcher
+  is a POSIX shell script.
 * **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
   runs, verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.

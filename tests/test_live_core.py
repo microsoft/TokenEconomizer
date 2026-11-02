@@ -16,6 +16,8 @@ from tokeneconomizer.plugin import config as live_config
 from tokeneconomizer.plugin import hosts, paths
 from tokeneconomizer.plugin.store import Store
 
+from fixtures import opencode_session_export
+
 
 # ---- repository identity ---------------------------------------------------------------
 def _git_repo(root, remote=None):
@@ -513,6 +515,70 @@ def test_opencode_usage_counts_reasoning_as_output(tmp_path):
     assert u["cost_usd_vendor"] == 0.006
 
 
+def test_a_flat_opencode_2_export_reads_as_the_nested_one(tmp_path):
+    src = tmp_path / "s.json"
+    src.write_text(opencode_session_export())
+    out = str(tmp_path / "t.jsonl")
+    assert trace.opencode_session_to_claude(str(src), out) == 2
+    assert trace.opencode_prompt_count(str(src)) == 1
+    text = open(out).read()
+    assert "Run the tests" in text and "python -m pytest -q" in text and "1 passed" in text
+    assert "command not found" in text and '"is_error": true' in text
+    assert '"cwd"' not in text                          # this export names no directory
+    data = json.loads(src.read_text())
+    data["info"]["directory"] = "/w/repo"
+    src.write_text(json.dumps(data))
+    trace.opencode_session_to_claude(str(src), out)
+    assert '"cwd": "/w/repo"' in open(out).read()
+    u = trace.opencode_session_usage(str(src))
+    assert (u["input_tokens"], u["output_tokens"], u["cache_read_input_tokens"]) == (18348, 70, 896)
+    assert u["model"] == "gpt-5.6-sol" and u["cost_usd_vendor"] == 0.0056
+
+
+def test_the_opencode_host_fetches_opencodes_export_when_its_copy_is_empty(tmp_path, monkeypatch):
+    """#118: on 2.2.5 the plugin's copy came out empty. The fold asks `opencode session export`,
+    again while opencode does not have the session yet, and keeps a copy that holds a prompt."""
+    h = hosts.HOSTS["opencode"]()
+    h.EXPORT_WAIT_S = 0
+    copy = tmp_path / "ses_f.json"
+    copy.write_text(json.dumps({"info": {"id": "ses_f"}, "messages": []}))
+    answers = [json.dumps({"info": {"id": "ses_f"}, "messages": []}), opencode_session_export()]
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd[1:])
+        assert kw["env"]["TE_SIDECALL"] == "1" and kw["cwd"] == str(tmp_path)
+        if cmd[1:3] == ["session", "export"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=answers.pop(0), stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="unknown command")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy)
+    assert calls == [["session", "export", "ses_f"]] * 2
+    assert trace.opencode_prompt_count(str(copy)) == 1
+    calls.clear()
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy) and not calls  # a prompt
+    assert h.complete("", "ses_x; rm -rf ~") == "" and not calls        # not a session id
+
+
+def test_the_opencode_host_keeps_its_copy_when_opencode_has_nothing(tmp_path, monkeypatch):
+    h = hosts.HOSTS["opencode"]()
+    h.EXPORT_WAIT_S = 0
+    copy = tmp_path / "ses_f.json"
+    empty = json.dumps({"info": {"id": "ses_f"}, "messages": []})
+    copy.write_text(empty)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=empty, stderr=""))
+    assert h.complete(str(copy), "ses_f") == str(copy) and copy.read_text() == empty
+    assert not list(tmp_path.glob("*.tmp"))
+
+    def missing(cmd, **kw):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(subprocess, "run", missing)                    # no opencode on PATH
+    assert h.complete(str(copy), "ses_f") == str(copy)
+
+
 def test_the_opencode_host_reads_what_the_plugin_sends():
     h = hosts.HOSTS["opencode"]()
     name, args, text, code = h.tool_call({"tool_name": "bash", "tool_input": {"command": "go test"},
@@ -920,6 +986,97 @@ def test_claude_cli_falls_back_to_the_native_install_when_not_on_path(monkeypatc
     assert sidecall.claude_cli() == "/opt/bin/claude"
 
 
+# npm's `.cmd` shims on Windows, as its cmd-shim writes them: a script run through node, and an
+# executable run directly; npm 6 (and pnpm) spell the folder `%~dp0`.
+_SHIM_HEAD = ('@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n'
+              'SETLOCAL\r\nCALL :find_dp0\r\n')
+NPM_SCRIPT_SHIM = (_SHIM_HEAD + '\r\nIF EXIST "%dp0%\\node.exe" (\r\n'
+                   '  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n'
+                   '  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\n'
+                   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  '
+                   '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
+NPM_EXE_SHIM = _SHIM_HEAD + '"%dp0%\\node_modules\\@opencode\\cli\\bin\\opencode.exe"   %*\r\n'
+NPM6_SHIM = ('@IF EXIST "%~dp0\\node.exe" (\r\n'
+             '  "%~dp0\\node.exe"  "%~dp0\\..\\lib\\pi\\cli.js" %*\r\n) ELSE (\r\n'
+             '  @SETLOCAL\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n'
+             '  node  "%~dp0\\..\\lib\\pi\\cli.js" %*\r\n)\r\n')
+
+
+def _shim(folder, text, *files):
+    """`folder/cli.cmd` holding `text`, with `files` (relative to `folder`) beside it."""
+    for rel in files:
+        path = folder / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / "cli.cmd", "w", newline="") as fh:
+        fh.write(text)
+    return str(folder / "cli.cmd")
+
+
+def test_an_npm_shim_is_read_for_what_it_runs(tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall.shutil, "which",
+                        lambda name: "/usr/bin/node" if name == "node" else None)
+    script = os.path.join("node_modules", "@openai", "codex", "bin", "codex.js")
+    a = _shim(tmp_path / "a", NPM_SCRIPT_SHIM, script, "node.exe")
+    assert sidecall._shim_argv(a) == [str(tmp_path / "a" / "node.exe"),
+                                      str(tmp_path / "a" / script)]
+    b = _shim(tmp_path / "b", NPM_SCRIPT_SHIM, script)            # no node.exe beside it
+    assert sidecall._shim_argv(b) == ["/usr/bin/node", str(tmp_path / "b" / script)]
+    exe = os.path.join("node_modules", "@opencode", "cli", "bin", "opencode.exe")
+    c = _shim(tmp_path / "c", NPM_EXE_SHIM, exe)
+    assert sidecall._shim_argv(c) == [str(tmp_path / "c" / exe)]
+    d = _shim(tmp_path / "d" / "bin", NPM6_SHIM, os.path.join("..", "lib", "pi", "cli.js"))
+    assert sidecall._shim_argv(d) == ["/usr/bin/node",
+                                      str(tmp_path / "d" / "lib" / "pi" / "cli.js")]
+    # its target gone, or a batch file of some other shape: nothing it would run is known
+    assert sidecall._shim_argv(_shim(tmp_path / "e", NPM_SCRIPT_SHIM)) is None
+    assert sidecall._shim_argv(_shim(tmp_path / "f", "@echo off\r\ncodex-real.exe %*\r\n")) is None
+
+
+def test_a_cli_on_windows_is_started_without_cmd_exe(tmp_path, monkeypatch):
+    """A side call's prompt is session content: through cmd.exe a newline would end it, `%VAR%`
+    expand and `"...&` start another command. A batch file that is not an npm shim is not run."""
+    from tokeneconomizer.plugin import sidecall
+    script = os.path.join("node_modules", "@openai", "codex", "bin", "codex.js")
+    shim = _shim(tmp_path / "npm", NPM_SCRIPT_SHIM, script, "node.exe")
+    other = _shim(tmp_path / "other", "@echo off\r\ntool.exe %*\r\n")
+    found = {"codex": shim, "tool": other, "pi": str(tmp_path / "pi.exe")}
+    monkeypatch.setattr(sidecall.shutil, "which", found.get)
+    monkeypatch.setattr(sidecall.os, "name", "nt")
+    assert sidecall.program("codex") == [str(tmp_path / "npm" / "node.exe"),
+                                         str(tmp_path / "npm" / script)]
+    assert sidecall.program("pi") == [str(tmp_path / "pi.exe")]
+    assert sidecall.program("opencode") == ["opencode"]       # not installed: that error, as before
+    with pytest.raises(FileNotFoundError):
+        sidecall.program("tool")
+
+
+@pytest.mark.real_sidecalls
+def test_every_side_call_starts_its_cli_through_program(tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
+    monkeypatch.setattr(sidecall, "program", lambda cli: ["/n/node", f"/n/{cli}.js"])
+    monkeypatch.setattr(sidecall, "_OC_FLAGS", {})
+    monkeypatch.setattr(sidecall, "_no_reply", lambda *a: None)
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    prompt = 'Say "hi & exit\n100% of %PATH%'
+    for call, cli in ((sidecall.codex_call, "codex"), (sidecall.copilot_call, "copilot"),
+                      (sidecall.opencode_call, "opencode"), (sidecall.pi_call, "pi"),
+                      (sidecall.cursor_call, "cursor-agent")):
+        seen.clear()
+        call(prompt)
+        assert seen and all(c[:2] == ["/n/node", f"/n/{cli}.js"] for c in seen), seen
+        assert any(prompt in c for c in seen)
+
+
 # `pi --print --mode json` on Pi 1.2.0 through OpenRouter, trimmed: the header, the system and
 # user messages, the reply (a thinking block, then the text), and the run's end.
 PI_JSON_RUN = [
@@ -1119,10 +1276,45 @@ def test_a_runner_named_by_path_counts_as_a_verification(cmd):
     assert g.verifications == 1 and not g.resolved_proxy()
 
 
+@pytest.mark.parametrize("cmd", ["uv run pytest -q", "uv run --frozen python -m pytest x.py",
+                                 "poetry run pytest", "pipenv run pytest", "npx jest src",
+                                 "npx -y vitest run", "pnpm exec jest", "bundle exec rspec",
+                                 "xvfb-run -a pytest", "cd web && npx jest"])
+def test_a_runner_started_by_a_launcher_counts_as_a_verification(cmd):
+    """`uv run`, `npx`, `bundle exec` are passed over like `timeout 60`: the run is the runner's,
+    so its status is the tests' own."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd,status", [("uv run ruff check", None),
+                                        ("npx prettier --check .", None),
+                                        ("pnpm exec jest --help", None),
+                                        ("yarn test", "own"), ("npm test", "own")])
+def test_a_launcher_leaves_what_it_runs_to_decide(cmd, status):
+    """A launcher alone is no test run, and `yarn test`, which names the test script, still is."""
+    assert turn.status_of_tests(cmd) == status
+
+
 @pytest.mark.parametrize("cmd", ["cat /w/pytest.ini", "cat pytest.ini", "ls /w/tests",
                                  "vim tests/runtests.py.bak"])
 def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
     assert not guard.VERIFY_RE.search(cmd)
+
+
+@pytest.mark.parametrize("cmd", ["grep -rn pytest src | head",
+                                 "python -m pytest x.py --collect-only -q | rg test_",
+                                 "bin/test --help | head", 'git commit -m "fix pytest"',
+                                 'echo "run pytest next"'])
+def test_a_non_test_command_mentioning_a_runner_is_not_a_verification(cmd):
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
+    g.fold("Bash", {"command": cmd}, "ok", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
 
 
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
@@ -1141,7 +1333,8 @@ def test_a_test_run_whose_status_was_replaced_is_judged_by_its_output():
     g.fold("bash", {"command": "/bin/bash -lc 'cd /w && timeout 60 go test ./... 2>&1 | tail -3'"},
            "--- FAIL: TestAdd (0.00s)\nFAIL\tacme/x\t0.01s", 0)
     assert g.whole.error_outputs == 1 and not g.resolved_proxy()
-    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true"):
+    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true",
+                "python tests/runtests.py app 2>&1 | tail -5"):
         g = guard.TurnGuard(turn_key="t")
         g.fold("bash", {"command": cmd}, "FAILED (failures=1)\nexit=1", 0)
         assert g.whole.error_outputs == 1 and not g.resolved_proxy()
@@ -1239,3 +1432,46 @@ def test_codex_exec_and_copilot_p_are_told_from_their_terminal_uis(tmp_path, mon
     assert cp.headless({})
     assert cp.stop_hint(True) == "Press Ctrl+C to end the run."
     assert cp.stop_hint(False) == "Press Esc twice to interrupt it."
+
+@pytest.mark.real_sidecalls
+def test_sidecalls_ignore_cleanup_errors(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    created = []
+    real_tempdir = sidecall.tempfile.TemporaryDirectory
+
+    def fake_tempdir(*args, **kw):
+        td = real_tempdir(*args, **kw)
+        created.append(td)
+        return td
+
+    monkeypatch.setattr(sidecall.tempfile, "TemporaryDirectory", fake_tempdir)
+    monkeypatch.setattr(sidecall, "_HELP", {})
+
+    def fake_run(cmd, **kw):
+        if cmd[1:] == ["--help"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="  -p", stderr="")
+        if cmd[0] == "codex":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "item.completed", "item": {"type": "agent_message", "text": "OK"}}), stderr="")
+        if cmd[0] == "copilot":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "assistant.message", "data": {"content": "OK"}}), stderr="")
+        if cmd[0] == "opencode":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "text", "part": {"text": "OK"}}), stderr="")
+        if cmd[0] == "cursor-agent":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "OK"}), stderr="")
+        if cmd[0] == "pi":
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "OK"}]}}), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+            "result": "OK", "usage": {"input_tokens": 10, "output_tokens": 1},
+            "modelUsage": {"claude-haiku-4-5": {}}}), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+
+    for caller in (sidecall.claude_call, sidecall.codex_call, sidecall.copilot_call,
+                   sidecall.opencode_call, sidecall.cursor_call, sidecall.pi_call):
+        created.clear()
+        caller("prompt")
+        assert created and all(getattr(td, "_ignore_cleanup_errors", False) for td in created), caller

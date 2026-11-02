@@ -7,7 +7,7 @@ tool call; JSON on stdout with `hookSpecificOutput.additionalContext`, `systemMe
 an adapter rather than a branch in a mechanism:
 
   * Turn identity. Claude Code stamps every event of a prompt-turn with `prompt_id`; Codex
-    stamps `turn_id`.
+    stamps `turn_id`; Cursor gives one `generation_id` per prompt.
   * Stopping. The plugin never stops a turn: the guard's last rung, on every agent and in every
     mode, is a notice telling the person how to (`stop_hint`). Claude Code's `{"continue":
     false}` from PostToolUse would halt its loop (verified on 2.1.286), but Codex's replaces the
@@ -92,6 +92,8 @@ def merge_outputs(*outputs):
                 out[k] = out[k] + "\n" + v
             elif k == "additionalContext" and out.get(k):
                 out[k] = out[k] + "\n\n" + v
+            elif k == "additional_context" and out.get(k):
+                out[k] = out[k] + "\n\n" + v
             elif k == PROGRESS:
                 out[k] = list(out.get(k) or []) + list(v)
             elif k == "hookSpecificOutput" and out.get(k):
@@ -144,6 +146,9 @@ class Host:
     def stop_hint(self, headless):
         return self.end_run if headless else self.interrupt
 
+    def stopped_normally(self, p):
+        return True
+
     # Whether the loop guard's still-stuck notice must also go through the model, because the
     # agent does not put hook messages where the person looks.
     relays_notices = False
@@ -186,6 +191,12 @@ class Host:
 
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
+
+    def complete(self, transcript_path, session_id, cwd=None):
+        """The log to fold the finished session from: `transcript_path`, unless this host can
+        fetch a whole one where the copy it was sent holds nothing (`cwd`: where the session
+        ran)."""
+        return transcript_path
 
     def tool_usage(self, trace_path):
         return trace.tool_usage(trace_path)
@@ -360,8 +371,9 @@ class OpenCode(Host):
 
       * `prompt_id`, which it numbers itself, for the turn identity opencode does not stamp;
       * `transcript_path`, the session's export as JSON, written at the end of every turn (from
-        `opencode export` on 1.x; recorded by the plugin from its events on 2.x, which has no
-        export), since opencode's own database is not a format to read;
+        `opencode export` on 1.x; recorded by the plugin from its events on 2.x), since
+        opencode's own database is not a format to read. Where that copy holds no prompt, the
+        fold asks opencode for its export instead (`complete`);
       * `tool_response = {content, isError, exit_code}`, with `exit_code` from the bash tool's
         `metadata.exit` when it reports one;
       * opencode's mode in `TE_OPENCODE_MODE`: `run` (headless, `opencode run`) or `tui`.
@@ -387,6 +399,213 @@ class OpenCode(Host):
 
     def session_usage(self, transcript_path):
         return trace.opencode_session_usage(transcript_path)
+
+    # opencode has the session a second or so after it ends (2.2.5), so it is asked again.
+    EXPORT_TRIES = 3
+    EXPORT_WAIT_S = 2.0
+
+    def complete(self, transcript_path, session_id, cwd=None):
+        """The plugin's copy of the session, or, where it holds no prompt, opencode's own export
+        written in its place. On 2.2.5 the copy the 2.x plugin records from events came out
+        empty (#118); the fold runs after the session, when `opencode session export` (`opencode
+        export` on 1.x) has all of it. opencode finds a session within the project it is run
+        in, so the export runs where the session did (`cwd`). The copy stays as it was if
+        opencode has nothing."""
+        import subprocess
+        from .paths import state_root
+        from .sidecall import program
+        if (trace.opencode_prompt_count(transcript_path or "")
+                or not re.fullmatch(r"[\w-]+", session_id or "")):
+            return transcript_path
+        path = transcript_path or os.path.join(state_root(), "opencode-sessions",
+                                               f"{session_id}.json")
+        env = dict(os.environ, TE_SIDECALL="1")
+        cwd = cwd if cwd and os.path.isdir(cwd) else None
+        tmp = f"{path}.{os.getpid()}.tmp"
+        for attempt in range(self.EXPORT_TRIES):
+            if attempt:
+                time.sleep(self.EXPORT_WAIT_S)
+            for args in (["session", "export"], ["export"]):
+                try:
+                    out = subprocess.run([*program("opencode"), *args, session_id],
+                                         capture_output=True, encoding="utf-8", errors="replace",
+                                         timeout=60, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.SubprocessError):
+                    return transcript_path
+                if out.returncode == 0 and (out.stdout or "").lstrip().startswith("{"):
+                    break
+            else:
+                continue
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(out.stdout)
+                if trace.opencode_prompt_count(tmp):
+                    os.replace(tmp, path)
+                    return path
+            except OSError:
+                return transcript_path
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return transcript_path
+
+
+class Cursor(Host):
+    """Cursor Agent hooks, translated to the shared live-controller contract.
+
+    Cursor's JSONL transcript records prompts and tool requests, but not tool results or token
+    usage. The adapter therefore keeps only the hook events TokenEconomizer needs in its private
+    state directory and reconstructs a Claude-shaped trace from those events. Session economics
+    remain unpriced until Cursor exposes per-session usage in a supported interface.
+    """
+    name = "cursor"
+    prompt_context = False
+    relays_notices = True
+    interrupt = "Press Esc to stop the Cursor agent."
+    end_run = "Press Ctrl+C to end the Cursor Agent CLI run."
+
+    _EVENTS = {
+        "sessionStart": "SessionStart",
+        "beforeSubmitPrompt": "UserPromptSubmit",
+        "postToolUse": "PostToolUse",
+        "postToolUseFailure": "PostToolUseFailure",
+        "stop": "Stop",
+        "sessionEnd": "SessionEnd",
+    }
+
+    def session_id(self, p):
+        return str(p.get("session_id") or p.get("conversation_id") or "")
+
+    def cwd(self, p, env):
+        roots = p.get("workspace_roots")
+        root = roots[0] if isinstance(roots, list) and roots else ""
+        return p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or root or os.getcwd()
+
+    def turn_key(self, p):
+        return str(p.get("generation_id") or p.get("prompt_id") or "")
+
+    def context(self, event, text):
+        return {"additional_context": text}
+
+    def notice(self, text):
+        return {"additional_context": self.relay(text)}
+
+    def transcript(self, p):
+        if p.get("transcript_path"):
+            return p["transcript_path"]
+        sid = self.session_id(p)
+        if not sid:
+            return ""
+        from .paths import state_root
+        safe_id = os.path.basename(sid)
+        return os.path.join(state_root(), "cursor-sessions", safe_id + ".jsonl")
+
+    def prepare(self, payload, env):
+        p = dict(payload or {})
+        p["session_id"] = p.get("conversation_id") or p.get("session_id") or ""
+        p["cwd"] = (p.get("cwd") or env.get("CURSOR_PROJECT_DIR") or
+                    ((p.get("workspace_roots") or [""])[0]) or os.getcwd())
+        p["hook_event_name"] = self._EVENTS.get(p.get("hook_event_name"), "")
+        if p.get("session_id"):
+            from .paths import state_root
+            p["transcript_path"] = os.path.join(
+                state_root(env), "cursor-sessions", os.path.basename(p["session_id"]) + ".jsonl")
+        if p["hook_event_name"] == "SessionStart":
+            p["source"] = "startup"
+        if p["hook_event_name"] == "UserPromptSubmit":
+            p["prompt_id"] = p.get("generation_id") or ""
+        if p["hook_event_name"] in ("PostToolUse", "PostToolUseFailure"):
+            p["tool_use_id"] = p.get("tool_use_id") or p.get("generation_id") or ""
+            if p["hook_event_name"] == "PostToolUse":
+                raw = p.get("tool_output")
+                try:
+                    output = json.loads(raw) if isinstance(raw, str) else raw
+                except ValueError:
+                    output = raw
+                if isinstance(output, dict):
+                    p["tool_response"] = {
+                        "content": "\n".join(str(output[k]) for k in ("stdout", "stderr", "output")
+                                             if output.get(k) is not None),
+                        "exit_code": _exit_code(output),
+                        "isError": bool(output.get("isError") or output.get("is_error")),
+                    }
+                else:
+                    p["tool_response"] = {"content": str(output or "")}
+            else:
+                p["error"] = p.get("error_message") or p.get("error") or "tool failed"
+                if p.get("failure_type") == "permission_denied":
+                    p["error"] = "Permission denied: " + str(p["error"])
+        return p
+
+    def record_event(self, payload):
+        event = payload.get("hook_event_name")
+        if event not in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
+            return
+        path = self.transcript(payload)
+        if not path:
+            return
+        # The adapter reads these fields only. Cursor also sends user_email and the raw
+        # tool_output; neither is stored. Tool text is capped where the guard folds it.
+        row = {}
+        for key in ("hook_event_name", "prompt", "cwd", "tool_use_id", "generation_id",
+                    "tool_name", "tool_input", "error"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                row[key] = value
+        # A file write's input holds the whole file, which no mechanism reads.
+        if isinstance(row.get("tool_input"), dict):
+            row["tool_input"] = {k: v[:RESULT_CAP] if isinstance(v, str) else v
+                                 for k, v in row["tool_input"].items()}
+        if isinstance(row.get("error"), str):
+            row["error"] = row["error"][:RESULT_CAP]
+        response = payload.get("tool_response")
+        if isinstance(response, dict):
+            response = dict(response)
+            content = response.get("content")
+            if isinstance(content, str):
+                response["content"] = content[:RESULT_CAP]
+            row["tool_response"] = response
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "cursor_trace.jsonl")
+        n = trace.cursor_events_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.cursor_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return {}
+
+    def settle(self, transcript_path):
+        # The fold has already read this private spool. It is not the agent's transcript.
+        if not transcript_path:
+            return
+        if os.path.basename(os.path.dirname(os.path.realpath(transcript_path))) != "cursor-sessions":
+            return
+        try:
+            os.remove(transcript_path)
+        except OSError:
+            pass
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        if name.lower() == "shell":
+            return "Bash", args, text, code
+        return name, args, text, code
+
+    def stopped_normally(self, p):
+        return (p or {}).get("status") == "completed"
 
 
 class Hermes(Host):
@@ -527,8 +746,8 @@ def _ancestor_args(limit=4):
     return out
 
 
-HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "hermes": Hermes,
-         "opencode": OpenCode, "pi": Pi}
+HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
+         "pi": Pi, "cursor": Cursor, "hermes": Hermes}
 
 
 def default_host(env=None, recent=None):
@@ -543,6 +762,8 @@ def default_host(env=None, recent=None):
         return "claude"
     if env.get("COPILOT_CLI") == "1":
         return "copilot"
+    if env.get("CURSOR_AGENT") or env.get("CURSOR_PROJECT_DIR"):
+        return "cursor"
     return recent if recent in HOSTS else "claude"
 
 

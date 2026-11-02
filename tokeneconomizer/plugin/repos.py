@@ -31,6 +31,7 @@ import shutil
 import time
 import traceback
 
+from ..names import repo_filename
 from . import hosts as hosts_mod
 from .paths import (BY_PATH, BY_REMOTE, RepoId, _slug, digest, home_dir, is_git_entry,
                     normalize_remote, origin_url, repo_identity, state_root)
@@ -260,7 +261,7 @@ def _rename_label(mech_dir, label):
     """Mechanism state is filed by repository name; file what moved under the destination's."""
     if not label:
         return
-    want = label.replace("/", "__")
+    want = repo_filename(label)
     for sub in ("envfacts_state", "manual_state"):
         d = os.path.join(mech_dir, sub)
         try:

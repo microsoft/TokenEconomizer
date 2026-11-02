@@ -116,8 +116,8 @@ def _session_env(state, trap):
 
 
 def run_session(repo, env, plugin, model, cli="copilot", timeout=600):
-    cmd = [cli, "-p", PROMPT, "--plugin-dir", plugin, "--allow-all-tools", "--no-auto-update",
-           "--output-format", "json"]
+    cmd = [*sidecall.program(cli), "-p", PROMPT, "--plugin-dir", plugin, "--allow-all-tools",
+           "--no-auto-update", "--output-format", "json"]
     if model:
         cmd += ["--model", model]
     out = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, encoding="utf-8",

@@ -488,7 +488,7 @@ def _label_failed(labels, out):
     cannot import is the label's own (`tests` for `tests.app`) -- a missing `pytest` is not."""
     if _LABEL_ERR_RE.search(out or ""):
         return True
-    heads = {re.split(r"[./:]", lab, 1)[0] for lab in labels}
+    heads = {re.split(r"[./:]", lab, maxsplit=1)[0] for lab in labels}
     return any(m.group(1).split(".")[0] in heads for m in _NO_MODULE_RE.finditer(out or ""))
 
 

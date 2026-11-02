@@ -1,12 +1,13 @@
 # TokenEconomizer plugin
 
-How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi and
-(experimental) opencode and Hermes Agent. What the plugin does and why is in the [main README](../README.md); its
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
+(experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [opencode](#opencode) · [Hermes Agent](#hermes-agent)
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [opencode](#opencode) ·
+  [Hermes Agent](#hermes-agent)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -299,6 +300,35 @@ is a wrapper the calls should not run, set `pi_cli` to the real one.
 
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed
 from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokeneconomizer`.
+
+## Cursor
+
+**1. Install.** From the TokenEconomizer checkout, build a local Cursor plugin:
+
+```sh
+python scripts/build_plugin.py --out ~/.cursor/plugins/local/
+```
+
+Reload Cursor. In **Customize**, confirm `tokeneconomizer` is installed, then open a repository and
+send a prompt.
+
+**2. Check it.** From a terminal in that repository:
+
+```sh
+~/.tokeneconomizer/bin/te --host cursor status
+```
+
+Cursor's command hooks provide the session, prompt, successful and failed tool, and completion
+events used by the adapter. The transcript format is private and its hooks do not report per-session
+token usage. TokenEconomizer records only the relevant hook events under its private state folder,
+uses them to learn repository facts and watch for loops, and reports Cursor session cost as
+unavailable. The loop guard's model calls use `cursor-agent` in read-only Ask mode; their token
+usage is also unavailable in the current CLI output. Cursor support is macOS and Linux only.
+On Windows, Cursor runs these hook commands through PowerShell, which cannot run the POSIX
+`te-hook` launcher.
+
+Tool pruning follows the global setting and is not applied to Cursor. Cursor commands run from a terminal:
+`~/.tokeneconomizer/bin/te --host cursor <command>`.
 
 ## opencode
 
@@ -630,6 +660,7 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 
 | Key | Default | Values |
 |---|---|---|
+| `enabled` | `true` | `false`: the whole plugin is off; its hooks return at once and record nothing |
 | `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
@@ -643,6 +674,14 @@ thresholds; `TE_DISABLE=1` turns the whole plugin off. Otherwise the repository'
 settings win over the global ones, and those over the defaults; `unset` goes back one level. A
 change applies from the agent's next hook call: the guard at the next tool call, facts and the
 deny list at the next session start. A new fact-size cap shows once the next session has ended.
+
+**Only in some repositories.** Turn the plugin off everywhere, then back on in each repository
+you choose; in a repository left off, the plugin records nothing:
+
+```text
+~/.tokeneconomizer/bin/te config set enabled=false --global
+~/.tokeneconomizer/bin/te config set enabled=true          # in each chosen repository
+```
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges`, `spiral.<name>` and
