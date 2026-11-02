@@ -1,6 +1,7 @@
 """`te` -- inspect and steer what TokenEconomizer does in your sessions.
 
     te status                         what it has learned for this repository, and what it did
+    te status --explain               explain the current settings and saved learning state
     te microskills                    the facts it injects, and the ones still forming
     te toolprune show                 the proposed deny list, and the evidence behind it
     te toolprune apply [ITEM ...]     write the proposal (or the named items) to the repository's
@@ -105,6 +106,94 @@ def _session_note(ctx, env=None):
 
 
 # ---- status / microskills ------------------------------------------------------------------
+def _status_explanations(ctx, inj, unt, tracker, applied):
+    """Describe the latest saved state, never infer why a past turn did not intervene.
+
+    This deliberately reuses the CLI snapshots, not mechanism internals or fresh model calls.
+    The detailed commands already show individual facts and tool evidence.
+    """
+    cfg = ctx.config
+    if not cfg.enabled:
+        return {"plugin": "plugin is disabled; hooks record nothing"}
+    notes = {}
+    if cfg.shadow:
+        notes["plugin"] = "shadow mode: new decisions are recorded, not applied"
+    host = ctx.host.name
+    facts_detail = "see microskills with the same --host/--cwd"
+    tools_detail = "see toolprune with the same --host/--cwd"
+    paused = sidecall.paused(host, ctx.root)
+
+    if cfg.microskills == "off":
+        notes["microskills"] = "off; cached facts are not injected"
+    elif inj.get("rendered"):
+        notes["microskills"] = ("cached facts present; injection suppressed in shadow mode"
+                                if cfg.shadow else "cached facts are available for session start")
+        if "distiller" in cfg.microskills and paused:
+            notes["microskills"] += "; model proposer paused"
+    elif "distiller" in cfg.microskills and paused:
+        notes["microskills"] = f"model proposer paused after a sign-in failure; {facts_detail}"
+    elif not inj:
+        notes["microskills"] = "no learning snapshot recorded for this agent/repository yet"
+    else:
+        facts = inj.get("facts")
+        if not isinstance(facts, dict):
+            why = "no fact details recorded in the last learning snapshot"
+        else:
+            # Metadata is not a fact, and an unfamiliar state is not evidence of zero facts.
+            rows = [v for k, v in facts.items()
+                    if k not in ("_profile", "_vocab", "_task", "_extractors")]
+            states = ("CANDIDATE", "ACTIVE", "RETIRED")
+            if any(not isinstance(v, dict) or v.get("state") not in states for v in rows):
+                why = "fact lifecycle details unavailable in the last learning snapshot"
+            elif rows:
+                counts = [sum(v["state"] == state for v in rows) for state in states]
+                why = (f"{counts[0]} candidate, {counts[1]} active, "
+                       f"{counts[2]} retired; no facts rendered")
+            else:
+                why = "no facts tracked in the last learning snapshot"
+        notes["microskills"] = f"{why}; {facts_detail}"
+
+    if not denylist.supports(host):
+        notes["toolprune"] = f"tool pruning is not available on {host}"
+    elif cfg.toolprune == "off":
+        notes["toolprune"] = "off; previously applied rules are not restored automatically"
+    else:
+        proposal = _proposal(ctx, unt)
+        held = unt.get("auto_pending")
+        pending = held.get("items") if isinstance(held, dict) else None
+        pending = pending if isinstance(pending, list) else []
+        if proposal:
+            if cfg.shadow:
+                why = "proposal recorded in shadow mode"
+            elif cfg.toolprune == "propose":
+                why = "proposal awaiting approval"
+            elif unt.get("auto_apply_refused"):
+                why = "automatic apply was refused"
+            elif any(t in proposal for t in pending):
+                why = "proposal held for the idle wait"
+            else:
+                why = "unapplied proposal recorded"
+        elif applied:
+            why = "deny rules recorded as applied for this checkout"
+        elif not unt:
+            why = "no tool-usage snapshot recorded for this agent/repository yet"
+        else:
+            # A zero proposal can mean used/protected/kept items, not just too little evidence.
+            why = "no eligible proposal recorded"
+        notes["toolprune"] = f"{why}; {tools_detail}"
+
+    if cfg.loopguard == "off":
+        notes["loopguard"] = "off"
+    elif tracker.envelope is None:
+        notes["loopguard"] = (f"learning baseline: {len(tracker.resolved_turns)}/"
+                              f"{tracker.min_samples} ended-green turns")
+    elif paused:
+        notes["loopguard"] = "judge calls paused after a sign-in failure; backstop remains active"
+    else:
+        notes["loopguard"] = "baseline ready; per-turn reasons cannot be inferred from these totals"
+    return notes
+
+
 def cmd_status(args):
     ctx = _ctx(args)
     cfg = ctx.config
@@ -131,6 +220,9 @@ def cmd_status(args):
         "loopguard": {"mode": cfg.loopguard, "envelope": env_tracker.envelope,
                       "ended_green_turns": len(env_tracker.resolved_turns)},
         "ledger": ledger})
+    if getattr(args, "explain", False):
+        out["explanations"] = _status_explanations(ctx, inj, unt, env_tracker,
+                                                 out["toolprune"]["applied"])
     if args.json:
         print(json.dumps(out, indent=2, default=str))
         return 0
@@ -171,6 +263,8 @@ def cmd_status(args):
     print(f"  loopguard    envelope {env_s} ({sp['ended_green_turns']} ended-green turns); "
           f"{ledger['nudges']} redirect(s), {ledger['aborts']} still-stuck notice(s) over "
           f"{ledger['turns']} turns")
+    for name, why in out.get("explanations", {}).items():
+        print(f"  explain      {name}: {why}")
     return 0
 
 
@@ -724,6 +818,8 @@ def build_parser():
 
     p = add("status")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--explain", action="store_true",
+                   help="briefly explain current settings and saved state (no model calls)")
     p.set_defaults(fn=cmd_status)
     add("microskills", "facts").set_defaults(fn=cmd_microskills)
     p = add("toolprune", "untool")
