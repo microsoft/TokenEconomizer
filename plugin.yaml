@@ -1,0 +1,10 @@
+name: tokeneconomizer
+version: 0.1.0
+description: Experience-driven token cost controls for Hermes Agent sessions.
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - pre_api_request
+  - post_api_request
+  - on_session_end

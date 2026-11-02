@@ -64,7 +64,8 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode** and **Cursor Agent**. Each italic letter above is a
+with experimental support for **Hermes Agent**, **opencode** and **Cursor Agent**. Hermes uses its
+native Python plugin API; live-session behaviour is not yet verified. Each italic letter above is a
 setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -161,6 +162,16 @@ pi install git:github.com/microsoft/TokenEconomizer
 
 Start `pi` and run `/te status`.
 
+**Hermes Agent** (experimental)
+
+```sh
+hermes plugins install microsoft/TokenEconomizer --enable
+```
+
+Start a new Hermes session, then check that `tokeneconomizer` is enabled with
+`hermes plugins list`. In a repository, check its state from a terminal with
+`~/.tokeneconomizer/bin/te --host hermes status`.
+
 **Cursor Agent** (experimental)
 
 ```sh
@@ -211,10 +222,11 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
+| Hermes Agent (experimental) | Native plugin API; installed and doctor-validated | live-session behaviour not yet verified |
 | Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 
-The commands above were tested on the oldest and newest version in each range; newer versions
+The listed version ranges were tested on their oldest and newest versions; newer versions
 have not been tested yet.
 
 - **Codex before 0.141.0** does not run plugin hooks at all.

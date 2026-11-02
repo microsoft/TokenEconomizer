@@ -1,12 +1,12 @@
 # TokenEconomizer plugin
 
-How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), and opencode (experimental). What the plugin does and why is in the [main README](../README.md); its
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Hermes
+Agent (experimental), Cursor (experimental), and opencode (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor)
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Hermes Agent](#hermes-agent) · [Cursor](#cursor)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -299,6 +299,27 @@ is a wrapper the calls should not run, set `pi_cli` to the real one.
 
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed
 from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokeneconomizer`.
+
+## Hermes Agent (experimental)
+
+Install from the native Hermes plugin registry, start a new session, then confirm the plugin is
+enabled:
+
+```bash
+hermes plugins install microsoft/TokenEconomizer --enable
+hermes plugins list
+```
+
+From a repository terminal, check status with:
+
+```bash
+~/.tokeneconomizer/bin/te --host hermes status
+```
+
+The adapter uses Hermes' native Python lifecycle hooks. Session traces and token usage accumulate
+across turns; user-authored prompt text is not stored. The adapter passed `hermes plugins doctor`
+and focused tests, but live-session behavior is not yet verified. See [design and verified
+behaviour](../docs/PLUGIN.md#3-verified-agent-behaviour).
 
 ## Cursor
 

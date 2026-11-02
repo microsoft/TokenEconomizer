@@ -20,7 +20,16 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 | `Stop` | Closes the turn; a turn that *ended green* feeds the per-repository envelope | loopguard |
 | `SessionEnd` | Hands the session to a detached `te fold` and returns at once | microskills, toolprune, ledger |
 
-`te fold` runs the **same classes the experiments ran** over the finished session's log:
+**Hermes Agent (experimental)** adds a native Python plugin adapter. Hermes calls `pre_llm_call`
+for model requests, so the adapter uses `turn_id` to emit one prompt event per user turn and keeps
+one transcript for the whole session. It records tool calls/results and normalized token usage,
+not the user's prompt text. The adapter passed Hermes' plugin doctor and focused unit tests; a live
+Hermes session has not yet been verified.
+
+**`SessionStart`** and **`UserPromptSubmit`** map to Hermes prompt hooks; **`PostToolUse`** and
+**`PostToolUseFailure`** map to `post_tool_call`; **`Stop`** and **`SessionEnd`** map to
+`on_session_end`. A loop-guard context returned by a tool hook is attached to the next model call.
+
 `PrefixStage` (with micro-skills on, the free envfacts layer under the proposer) and
 `ToolingStage` (evidence pruning). The loop guard (`loopguard.TurnGuard`) is the benchmark
 harness's `NudgeGuard` control flow — `SpiralState.update`, `assess_abort`, `is_stuck`,

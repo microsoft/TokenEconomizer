@@ -146,7 +146,7 @@ class Host:
     def stop_hint(self, headless):
         return self.end_run if headless else self.interrupt
 
-    def stopped_normally(self, p):
+    def stopped_normally(self, p) -> bool:
         return True
 
     # Whether the loop guard's still-stuck notice must also go through the model, because the
@@ -165,7 +165,7 @@ class Host:
                 f"message to the user, and again in your final reply:\n\n{text}\n\nIt is for "
                 "the user to act on; it does not change your task.")
 
-    def headless(self, env, transcript=None):
+    def headless(self, env, transcript=None) -> bool:
         return False
 
     def tool_call(self, p):
@@ -185,7 +185,7 @@ class Host:
     def session_usage(self, transcript_path):
         raise NotImplementedError
 
-    def prompt_count(self, transcript_path):
+    def prompt_count(self, transcript_path) -> int | None:
         """How many prompts the finished session ran; None where the log does not say."""
         return None
 
@@ -640,8 +640,42 @@ def _ancestor_args(limit=4):
     return out
 
 
+class Hermes(Host):
+    """Hermes Agent's native Python plugin hooks and their normalized session trace."""
+    name = "hermes"
+    prompt_context = True
+    keeps_start_context = False
+    relays_notices = True
+    interrupt = "Interrupt the Hermes run from its session controls."
+    end_run = "Stop the Hermes run from its session controls."
+
+    def cwd(self, p, env):
+        return p.get("cwd") or env.get("TE_HERMES_CWD") or os.getcwd()
+
+    def context(self, event, text):
+        return {"context": text}
+
+    def tool_call(self, p):
+        name = str(p.get("tool_name") or "")
+        args = p.get("args") if isinstance(p.get("args"), dict) else {}
+        resp = p.get("result", "")
+        return name, args, response_text(resp), _exit_code(resp)
+
+    def session_usage(self, transcript_path):
+        return trace.claude_session_usage(transcript_path, include_subagents=False)
+
+    def prompt_count(self, transcript_path):
+        return trace.claude_prompt_count(transcript_path)
+
+    def stopped_normally(self, p):
+        return bool((p or {}).get("completed"))
+
+    def headless(self, env, transcript=None):
+        return str((env or {}).get("TE_HERMES_HEADLESS", "")).lower() in ("1", "true", "yes")
+
+
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor}
+         "pi": Pi, "cursor": Cursor, "hermes": Hermes}
 
 
 def default_host(env=None, recent=None):
