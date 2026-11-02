@@ -16,6 +16,8 @@ from tokeneconomizer.plugin import config as live_config
 from tokeneconomizer.plugin import hosts, paths
 from tokeneconomizer.plugin.store import Store
 
+from fixtures import opencode_session_export
+
 
 # ---- repository identity ---------------------------------------------------------------
 def _git_repo(root, remote=None):
@@ -511,6 +513,70 @@ def test_opencode_usage_counts_reasoning_as_output(tmp_path):
     assert (u["cache_read_input_tokens"], u["cache_creation_input_tokens"]) == (3000, 300)
     assert u["requests"] == 3 and u["model"] == "gpt-5.6-sol"
     assert u["cost_usd_vendor"] == 0.006
+
+
+def test_a_flat_opencode_2_export_reads_as_the_nested_one(tmp_path):
+    src = tmp_path / "s.json"
+    src.write_text(opencode_session_export())
+    out = str(tmp_path / "t.jsonl")
+    assert trace.opencode_session_to_claude(str(src), out) == 2
+    assert trace.opencode_prompt_count(str(src)) == 1
+    text = open(out).read()
+    assert "Run the tests" in text and "python -m pytest -q" in text and "1 passed" in text
+    assert "command not found" in text and '"is_error": true' in text
+    assert '"cwd"' not in text                          # this export names no directory
+    data = json.loads(src.read_text())
+    data["info"]["directory"] = "/w/repo"
+    src.write_text(json.dumps(data))
+    trace.opencode_session_to_claude(str(src), out)
+    assert '"cwd": "/w/repo"' in open(out).read()
+    u = trace.opencode_session_usage(str(src))
+    assert (u["input_tokens"], u["output_tokens"], u["cache_read_input_tokens"]) == (18348, 70, 896)
+    assert u["model"] == "gpt-5.6-sol" and u["cost_usd_vendor"] == 0.0056
+
+
+def test_the_opencode_host_fetches_opencodes_export_when_its_copy_is_empty(tmp_path, monkeypatch):
+    """#118: on 2.2.5 the plugin's copy came out empty. The fold asks `opencode session export`,
+    again while opencode does not have the session yet, and keeps a copy that holds a prompt."""
+    h = hosts.HOSTS["opencode"]()
+    h.EXPORT_WAIT_S = 0
+    copy = tmp_path / "ses_f.json"
+    copy.write_text(json.dumps({"info": {"id": "ses_f"}, "messages": []}))
+    answers = [json.dumps({"info": {"id": "ses_f"}, "messages": []}), opencode_session_export()]
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd[1:])
+        assert kw["env"]["TE_SIDECALL"] == "1" and kw["cwd"] == str(tmp_path)
+        if cmd[1:3] == ["session", "export"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=answers.pop(0), stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="unknown command")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy)
+    assert calls == [["session", "export", "ses_f"]] * 2
+    assert trace.opencode_prompt_count(str(copy)) == 1
+    calls.clear()
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy) and not calls  # a prompt
+    assert h.complete("", "ses_x; rm -rf ~") == "" and not calls        # not a session id
+
+
+def test_the_opencode_host_keeps_its_copy_when_opencode_has_nothing(tmp_path, monkeypatch):
+    h = hosts.HOSTS["opencode"]()
+    h.EXPORT_WAIT_S = 0
+    copy = tmp_path / "ses_f.json"
+    empty = json.dumps({"info": {"id": "ses_f"}, "messages": []})
+    copy.write_text(empty)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=empty, stderr=""))
+    assert h.complete(str(copy), "ses_f") == str(copy) and copy.read_text() == empty
+    assert not list(tmp_path.glob("*.tmp"))
+
+    def missing(cmd, **kw):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(subprocess, "run", missing)                    # no opencode on PATH
+    assert h.complete(str(copy), "ses_f") == str(copy)
 
 
 def test_the_opencode_host_reads_what_the_plugin_sends():

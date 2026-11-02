@@ -32,7 +32,7 @@
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -309,7 +309,8 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
  * opencode 2.x (`Plugin.define({ id, setup })`, `@opencode/plugin`); `setup` below, on the same
  * default export as v1's `server`, so one file serves both. v2 has no `opencode export`, so this
  * entry records the session itself from its events -- prompts, tool calls and results, each
- * step's tokens and cost -- and writes the same JSON shape `trace/opencode.py` reads.
+ * step's tokens and cost -- and writes the same JSON shape `trace/opencode.py` reads. Where that
+ * copy holds no prompt, the fold reads 2.x's `opencode session export` instead.
  */
 const textOf = (content: any): string =>
   typeof content === "string"
@@ -342,6 +343,11 @@ const setupV2 = async (ctx: any) => {
 
   const writeExport = (sessionID: string): string => {
     const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
+    // A copy of this plugin that saw none of the session's messages has nothing to add, and must
+    // not replace what another copy wrote: on 2.2.5 every session's file came out empty (#118).
+    // An empty one is still written where there is none, so the session is folded once quiet,
+    // and the fold then reads opencode's own export.
+    if (!records.get(sessionID)?.length && existsSync(file)) return file;
     try {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
       writeFileSync(

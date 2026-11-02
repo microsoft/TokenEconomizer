@@ -192,6 +192,12 @@ class Host:
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
 
+    def complete(self, transcript_path, session_id, cwd=None):
+        """The log to fold the finished session from: `transcript_path`, unless this host can
+        fetch a whole one where the copy it was sent holds nothing (`cwd`: where the session
+        ran)."""
+        return transcript_path
+
     def tool_usage(self, trace_path):
         return trace.tool_usage(trace_path)
 
@@ -365,8 +371,9 @@ class OpenCode(Host):
 
       * `prompt_id`, which it numbers itself, for the turn identity opencode does not stamp;
       * `transcript_path`, the session's export as JSON, written at the end of every turn (from
-        `opencode export` on 1.x; recorded by the plugin from its events on 2.x, which has no
-        export), since opencode's own database is not a format to read;
+        `opencode export` on 1.x; recorded by the plugin from its events on 2.x), since
+        opencode's own database is not a format to read. Where that copy holds no prompt, the
+        fold asks opencode for its export instead (`complete`);
       * `tool_response = {content, isError, exit_code}`, with `exit_code` from the bash tool's
         `metadata.exit` when it reports one;
       * opencode's mode in `TE_OPENCODE_MODE`: `run` (headless, `opencode run`) or `tui`.
@@ -392,6 +399,58 @@ class OpenCode(Host):
 
     def session_usage(self, transcript_path):
         return trace.opencode_session_usage(transcript_path)
+
+    # opencode has the session a second or so after it ends (2.2.5), so it is asked again.
+    EXPORT_TRIES = 3
+    EXPORT_WAIT_S = 2.0
+
+    def complete(self, transcript_path, session_id, cwd=None):
+        """The plugin's copy of the session, or, where it holds no prompt, opencode's own export
+        written in its place. On 2.2.5 the copy the 2.x plugin records from events came out
+        empty (#118); the fold runs after the session, when `opencode session export` (`opencode
+        export` on 1.x) has all of it. opencode finds a session within the project it is run
+        in, so the export runs where the session did (`cwd`). The copy stays as it was if
+        opencode has nothing."""
+        import subprocess
+        from .paths import state_root
+        from .sidecall import program
+        if (trace.opencode_prompt_count(transcript_path or "")
+                or not re.fullmatch(r"[\w-]+", session_id or "")):
+            return transcript_path
+        path = transcript_path or os.path.join(state_root(), "opencode-sessions",
+                                               f"{session_id}.json")
+        env = dict(os.environ, TE_SIDECALL="1")
+        cwd = cwd if cwd and os.path.isdir(cwd) else None
+        tmp = f"{path}.{os.getpid()}.tmp"
+        for attempt in range(self.EXPORT_TRIES):
+            if attempt:
+                time.sleep(self.EXPORT_WAIT_S)
+            for args in (["session", "export"], ["export"]):
+                try:
+                    out = subprocess.run([*program("opencode"), *args, session_id],
+                                         capture_output=True, encoding="utf-8", errors="replace",
+                                         timeout=60, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.SubprocessError):
+                    return transcript_path
+                if out.returncode == 0 and (out.stdout or "").lstrip().startswith("{"):
+                    break
+            else:
+                continue
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(out.stdout)
+                if trace.opencode_prompt_count(tmp):
+                    os.replace(tmp, path)
+                    return path
+            except OSError:
+                return transcript_path
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return transcript_path
 
 
 class Cursor(Host):
