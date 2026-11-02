@@ -394,7 +394,9 @@ def _git_tracked(repo_root, rel):
         return False
 
 
-def codex_config_error(repo_root, cli="codex", timeout=30):
+def codex_config_error(repo_root, cli=None, timeout=30):
+    from .sidecall import codex_cli
+    cli = codex_cli(cli)
     """Codex's own complaint about the configuration it would load here, or None.
 
     `codex features list` loads the whole layered configuration and calls no model, so a file

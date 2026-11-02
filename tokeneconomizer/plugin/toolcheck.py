@@ -20,12 +20,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import adapter as live_adapter
 from .denylist import CODEX_TOGGLES, write_json as _write_json
-from .sidecall import claude_cli, claude_flags
+from .sidecall import claude_cli, claude_flags, codex_cli, copilot_cli
 
 
-def verify_copilot(repo_root, servers, cli="copilot"):
+def verify_copilot(repo_root, servers, cli=None):
     """{server: tools still in the request} for a session started in `repo_root`, by the local
     capture (no model call); None if no request could be captured."""
+    cli = copilot_cli(cli)
     body = copilot_capture(cwd=repo_root, cli=cli)
     if not body:
         return None
@@ -33,7 +34,8 @@ def verify_copilot(repo_root, servers, cli="copilot"):
     return {s: sum(1 for n in names if n and n.startswith(s + "-")) for s in servers}
 
 
-def verify_codex(repo_root, capabilities, cli="codex", timeout=30):
+def verify_codex(repo_root, capabilities, cli=None, timeout=30):
+    cli = codex_cli(cli)
     """What `codex features list`, run in the repository, says about the applied toggles:
     {feature: enabled} for the features those capabilities switch off, or None when the CLI
     is unavailable. Free: it reads configuration and calls no model."""
@@ -182,7 +184,8 @@ def _request_tools(body):
             for t in (body or {}).get("tools") or []]
 
 
-def _copilot_version(cli="copilot"):
+def _copilot_version(cli=None):
+    cli = copilot_cli(cli)
     try:
         out = subprocess.run([cli, "--version"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=30)
@@ -199,7 +202,7 @@ def refresh_catalog(state_root, cli=None, host="claude"):
         if not tools:
             raise RuntimeError("could not capture the tool list of a `copilot -p` request")
         path = live_adapter.catalog_path(state_root, "copilot")
-        _write_json(path, {"tools": sorted(tools), "copilot_version": _copilot_version(),
+        _write_json(path, {"tools": sorted(tools), "copilot_version": _copilot_version(cli=cli),
                            "probed_at": time.time()})
         return path, sorted(tools)
     if host != "claude":
@@ -228,7 +231,8 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
             data.get("total_cost_usd"))
 
 
-def _codex_prompt_chars(overrides, cli="codex", timeout=60):
+def _codex_prompt_chars(overrides, cli=None, timeout=60):
+    cli = codex_cli(cli)
     cmd = [cli, "debug", "prompt-input"]
     for table, key, value in overrides:
         cmd += ["-c", f"{table}.{key}={value}" if table else f"{key}={value}"]
@@ -246,9 +250,10 @@ def measure(tools, cli=None, host="claude"):
     if not tools:
         return None
     if host == "codex":
+        cli = codex_cli(cli)
         toggles = [t for c in tools for t in CODEX_TOGGLES.get(c, ())]
-        full = _codex_prompt_chars([], cli=cli or "codex")
-        lean = _codex_prompt_chars(toggles, cli=cli or "codex")
+        full = _codex_prompt_chars([], cli=cli)
+        lean = _codex_prompt_chars(toggles, cli=cli)
         if full is None or lean is None:
             raise RuntimeError("`codex debug prompt-input` failed")
         return {"capabilities": list(tools), "prompt_input_chars_full": full,

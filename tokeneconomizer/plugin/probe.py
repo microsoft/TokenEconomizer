@@ -115,7 +115,9 @@ def _session_env(state, trap):
     return env
 
 
-def run_session(repo, env, plugin, model, cli="copilot", timeout=600):
+def run_session(repo, env, plugin, model, cli=None, timeout=600):
+    from .sidecall import copilot_cli
+    cli = copilot_cli(cli)
     cmd = [cli, "-p", PROMPT, "--plugin-dir", plugin, "--allow-all-tools", "--no-auto-update",
            "--output-format", "json"]
     if model:

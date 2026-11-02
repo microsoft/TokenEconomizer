@@ -111,17 +111,58 @@ def resume(host, root=None):
         return False
 
 
-def claude_cli():
+def claude_cli(cli=None):
     """The Claude Code executable to start: `claude` on PATH (with PATHEXT on Windows, so a
     `claude.cmd` shim too), else the native installer's `~/.local/bin/claude` -- which is often
     not on PATH, a shell reaching it through an alias or a profile function that a subprocess
     does not see. Falls back to the bare name, so the error stays the CLI-not-found one."""
+    if cli:
+        return shutil.which(cli) or cli
     found = shutil.which("claude")
     if found:
         return found
     exe = os.path.expanduser(os.path.join("~", ".local", "bin",
                                           "claude.exe" if os.name == "nt" else "claude"))
     return exe if os.path.isfile(exe) else "claude"
+
+
+def codex_cli(cli=None):
+    """The Codex executable to start: `codex` on PATH (with PATHEXT on Windows, so a `codex.cmd`
+    shim too), else the bare name."""
+    return (shutil.which(cli) if cli else None) or shutil.which("codex") or (cli or "codex")
+
+
+def copilot_cli(cli=None):
+    """The Copilot executable to start: `copilot` on PATH (with PATHEXT on Windows, so a `copilot.cmd`
+    shim too), else the bare name."""
+    return (shutil.which(cli) if cli else None) or shutil.which("copilot") or (cli or "copilot")
+
+
+def opencode_cli(cli=None):
+    """The OpenCode executable to start: `opencode` on PATH (with PATHEXT on Windows, so an
+    `opencode.cmd` shim too), else the bare name."""
+    return (shutil.which(cli) if cli else None) or shutil.which("opencode") or (cli or "opencode")
+
+
+def pi_cli(cli=None):
+    """The Pi executable to start: `pi` on PATH (with PATHEXT on Windows, so a `pi.cmd` shim too),
+    else the bare name."""
+    return (shutil.which(cli) if cli else None) or shutil.which("pi") or (cli or "pi")
+
+
+def cli_for(host_name, cli=None):
+    """The executable to start for a given host ('claude', 'codex', 'copilot', 'opencode', 'pi')."""
+    if host_name == "claude":
+        return claude_cli(cli)
+    if host_name == "codex":
+        return codex_cli(cli)
+    if host_name == "copilot":
+        return copilot_cli(cli)
+    if host_name == "opencode":
+        return opencode_cli(cli)
+    if host_name == "pi":
+        return pi_cli(cli)
+    return (shutil.which(cli) if cli else None) or (cli or host_name)
 
 
 _HELP = {}
@@ -182,7 +223,8 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     return data.get("result") or "", eff
 
 
-def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
+def codex_call(prompt, model="", cli=None, timeout=TIMEOUT_S):
+    cli = codex_cli(cli)
     cmd = [cli, "exec", "--json", "--disable", "hooks", "--ephemeral", "-s", "read-only",
            "--skip-git-repo-check"]
     if model:
@@ -234,7 +276,8 @@ def pi_extension_args(extensions):
         p if p.startswith("builtin:") else os.path.abspath(os.path.expanduser(p)))]
 
 
-def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
+def pi_call(prompt, model="", cli=None, timeout=TIMEOUT_S, extensions=()):
+    cli = pi_cli(cli)
     model_args = ["--model", model] if model else []
     ext_args = pi_extension_args(extensions)
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
@@ -268,11 +311,12 @@ OPENCODE_CONFIG = json.dumps({"permission": {"bash": "deny", "edit": "deny", "we
 _OC_FLAGS = {}
 
 
-def opencode_flags(cli="opencode"):
+def opencode_flags(cli=None):
     """The flags a side call adds, by what this opencode's `run --help` lists: `--pure` (1.x: no
     external plugins) and `--standalone` (2.x: a private server of its own, since plugins there
     run in a shared background service that does not inherit `TE_SIDECALL`, and the nested
     session would run this plugin's hooks)."""
+    cli = opencode_cli(cli)
     if cli not in _OC_FLAGS:
         try:
             help_text = subprocess.run([cli, "run", "--help"], capture_output=True,
@@ -284,11 +328,12 @@ def opencode_flags(cli="opencode"):
     return list(_OC_FLAGS[cli])
 
 
-def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
+def opencode_call(prompt, model="", cli=None, timeout=TIMEOUT_S):
     """A side call through `opencode run`: no external plugins where the CLI can say so, every
     tool that changes anything denied, in a throwaway directory, on the person's own default
     model unless `model` names one. The session it creates is deleted afterwards, so it is not
     in their history."""
+    cli = opencode_cli(cli)
     model_args = ["--model", model] if model else []
     env = dict(_env(), OPENCODE_CONFIG_CONTENT=OPENCODE_CONFIG)
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
@@ -344,9 +389,10 @@ def copilot_model(paid_model="", env=None):
     return ""
 
 
-def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
+def copilot_call(prompt, model="", cli=None, timeout=TIMEOUT_S):
     from .. import trace
     from . import hosts
+    cli = copilot_cli(cli)
     model = copilot_model(model)
     cmd = [cli, "-p", prompt, "--output-format", "json", "--no-color", "--no-auto-update",
            "--no-custom-instructions", "--disable-builtin-mcps"]
@@ -388,7 +434,7 @@ def runner_for(host_name, config):
     when micro-skills is on, the loop guard's judge when the guard is."""
     model = config.paid_model
     if host_name == "pi":
-        cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"
+        cli = pi_cli(os.path.expanduser(config.pi_cli) if config.pi_cli else None)
         extensions = list(config.pi_extensions)
         return lambda prompt, _m="agent": pi_call(prompt, model=model, cli=cli,
                                                   extensions=extensions)
