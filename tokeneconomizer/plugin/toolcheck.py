@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import adapter as live_adapter
 from .denylist import CODEX_TOGGLES, write_json as _write_json
-from .sidecall import claude_cli, claude_flags
+from .sidecall import claude_cli, claude_flags, program
 
 
 def verify_copilot(repo_root, servers, cli="copilot"):
@@ -42,7 +42,7 @@ def verify_codex(repo_root, capabilities, cli="codex", timeout=30):
     if not feats or not shutil.which(cli):
         return None
     try:
-        out = subprocess.run([cli, "features", "list"], capture_output=True,
+        out = subprocess.run([*program(cli), "features", "list"], capture_output=True,
                              encoding="utf-8", errors="replace", cwd=repo_root, timeout=timeout,
                              env=dict(os.environ, TE_SIDECALL="1"))
     except (OSError, subprocess.SubprocessError):
@@ -163,7 +163,7 @@ def copilot_capture(extra_args=(), cwd=None, cli="copilot", timeout=90):
         tmp = tempfile.mkdtemp(prefix="te-probe-")
         cwd = tmp
     try:
-        subprocess.run([cli, "-p", "Reply with OK", "--no-auto-update", "--no-color"]
+        subprocess.run([*program(cli), "-p", "Reply with OK", "--no-auto-update", "--no-color"]
                        + list(extra_args), cwd=cwd, env=env, capture_output=True,
                        encoding="utf-8", errors="replace", timeout=timeout,
                        stdin=subprocess.DEVNULL)
@@ -184,7 +184,7 @@ def _request_tools(body):
 
 def _copilot_version(cli="copilot"):
     try:
-        out = subprocess.run([cli, "--version"], capture_output=True,
+        out = subprocess.run([*program(cli), "--version"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=30)
         return (out.stdout or "").strip().splitlines()[0]
     except (OSError, subprocess.SubprocessError, IndexError):
@@ -239,7 +239,7 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
 
 
 def _codex_prompt_chars(overrides, cli="codex", timeout=60):
-    cmd = [cli, "debug", "prompt-input"]
+    cmd = [*program(cli), "debug", "prompt-input"]
     for table, key, value in overrides:
         cmd += ["-c", f"{table}.{key}={value}" if table else f"{key}={value}"]
     with tempfile.TemporaryDirectory(prefix="te-measure-", ignore_cleanup_errors=True) as cwd:

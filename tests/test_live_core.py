@@ -920,6 +920,97 @@ def test_claude_cli_falls_back_to_the_native_install_when_not_on_path(monkeypatc
     assert sidecall.claude_cli() == "/opt/bin/claude"
 
 
+# npm's `.cmd` shims on Windows, as its cmd-shim writes them: a script run through node, and an
+# executable run directly; npm 6 (and pnpm) spell the folder `%~dp0`.
+_SHIM_HEAD = ('@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n'
+              'SETLOCAL\r\nCALL :find_dp0\r\n')
+NPM_SCRIPT_SHIM = (_SHIM_HEAD + '\r\nIF EXIST "%dp0%\\node.exe" (\r\n'
+                   '  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n'
+                   '  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\n'
+                   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  '
+                   '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
+NPM_EXE_SHIM = _SHIM_HEAD + '"%dp0%\\node_modules\\@opencode\\cli\\bin\\opencode.exe"   %*\r\n'
+NPM6_SHIM = ('@IF EXIST "%~dp0\\node.exe" (\r\n'
+             '  "%~dp0\\node.exe"  "%~dp0\\..\\lib\\pi\\cli.js" %*\r\n) ELSE (\r\n'
+             '  @SETLOCAL\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n'
+             '  node  "%~dp0\\..\\lib\\pi\\cli.js" %*\r\n)\r\n')
+
+
+def _shim(folder, text, *files):
+    """`folder/cli.cmd` holding `text`, with `files` (relative to `folder`) beside it."""
+    for rel in files:
+        path = folder / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / "cli.cmd", "w", newline="") as fh:
+        fh.write(text)
+    return str(folder / "cli.cmd")
+
+
+def test_an_npm_shim_is_read_for_what_it_runs(tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall.shutil, "which",
+                        lambda name: "/usr/bin/node" if name == "node" else None)
+    script = os.path.join("node_modules", "@openai", "codex", "bin", "codex.js")
+    a = _shim(tmp_path / "a", NPM_SCRIPT_SHIM, script, "node.exe")
+    assert sidecall._shim_argv(a) == [str(tmp_path / "a" / "node.exe"),
+                                      str(tmp_path / "a" / script)]
+    b = _shim(tmp_path / "b", NPM_SCRIPT_SHIM, script)            # no node.exe beside it
+    assert sidecall._shim_argv(b) == ["/usr/bin/node", str(tmp_path / "b" / script)]
+    exe = os.path.join("node_modules", "@opencode", "cli", "bin", "opencode.exe")
+    c = _shim(tmp_path / "c", NPM_EXE_SHIM, exe)
+    assert sidecall._shim_argv(c) == [str(tmp_path / "c" / exe)]
+    d = _shim(tmp_path / "d" / "bin", NPM6_SHIM, os.path.join("..", "lib", "pi", "cli.js"))
+    assert sidecall._shim_argv(d) == ["/usr/bin/node",
+                                      str(tmp_path / "d" / "lib" / "pi" / "cli.js")]
+    # its target gone, or a batch file of some other shape: nothing it would run is known
+    assert sidecall._shim_argv(_shim(tmp_path / "e", NPM_SCRIPT_SHIM)) is None
+    assert sidecall._shim_argv(_shim(tmp_path / "f", "@echo off\r\ncodex-real.exe %*\r\n")) is None
+
+
+def test_a_cli_on_windows_is_started_without_cmd_exe(tmp_path, monkeypatch):
+    """A side call's prompt is session content: through cmd.exe a newline would end it, `%VAR%`
+    expand and `"...&` start another command. A batch file that is not an npm shim is not run."""
+    from tokeneconomizer.plugin import sidecall
+    script = os.path.join("node_modules", "@openai", "codex", "bin", "codex.js")
+    shim = _shim(tmp_path / "npm", NPM_SCRIPT_SHIM, script, "node.exe")
+    other = _shim(tmp_path / "other", "@echo off\r\ntool.exe %*\r\n")
+    found = {"codex": shim, "tool": other, "pi": str(tmp_path / "pi.exe")}
+    monkeypatch.setattr(sidecall.shutil, "which", found.get)
+    monkeypatch.setattr(sidecall.os, "name", "nt")
+    assert sidecall.program("codex") == [str(tmp_path / "npm" / "node.exe"),
+                                         str(tmp_path / "npm" / script)]
+    assert sidecall.program("pi") == [str(tmp_path / "pi.exe")]
+    assert sidecall.program("opencode") == ["opencode"]       # not installed: that error, as before
+    with pytest.raises(FileNotFoundError):
+        sidecall.program("tool")
+
+
+@pytest.mark.real_sidecalls
+def test_every_side_call_starts_its_cli_through_program(tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
+    monkeypatch.setattr(sidecall, "program", lambda cli: ["/n/node", f"/n/{cli}.js"])
+    monkeypatch.setattr(sidecall, "_OC_FLAGS", {})
+    monkeypatch.setattr(sidecall, "_no_reply", lambda *a: None)
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    prompt = 'Say "hi & exit\n100% of %PATH%'
+    for call, cli in ((sidecall.codex_call, "codex"), (sidecall.copilot_call, "copilot"),
+                      (sidecall.opencode_call, "opencode"), (sidecall.pi_call, "pi"),
+                      (sidecall.cursor_call, "cursor-agent")):
+        seen.clear()
+        call(prompt)
+        assert seen and all(c[:2] == ["/n/node", f"/n/{cli}.js"] for c in seen), seen
+        assert any(prompt in c for c in seen)
+
+
 # `pi --print --mode json` on Pi 1.2.0 through OpenRouter, trimmed: the header, the system and
 # user messages, the reply (a thinking block, then the text), and the run's end.
 PI_JSON_RUN = [
