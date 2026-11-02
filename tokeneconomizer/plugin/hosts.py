@@ -192,9 +192,10 @@ class Host:
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
 
-    def complete(self, transcript_path, session_id):
+    def complete(self, transcript_path, session_id, cwd=None):
         """The log to fold the finished session from: `transcript_path`, unless this host can
-        fetch a whole one where the copy it was sent holds nothing."""
+        fetch a whole one where the copy it was sent holds nothing (`cwd`: where the session
+        ran)."""
         return transcript_path
 
     def tool_usage(self, trace_path):
@@ -403,11 +404,13 @@ class OpenCode(Host):
     EXPORT_TRIES = 3
     EXPORT_WAIT_S = 2.0
 
-    def complete(self, transcript_path, session_id):
+    def complete(self, transcript_path, session_id, cwd=None):
         """The plugin's copy of the session, or, where it holds no prompt, opencode's own export
         written in its place. On 2.2.5 the copy the 2.x plugin records from events came out
         empty (#118); the fold runs after the session, when `opencode session export` (`opencode
-        export` on 1.x) has all of it. The copy stays as it was if opencode has nothing."""
+        export` on 1.x) has all of it. opencode finds a session within the project it is run
+        in, so the export runs where the session did (`cwd`). The copy stays as it was if
+        opencode has nothing."""
         import subprocess
         from .paths import state_root
         from .sidecall import program
@@ -417,6 +420,7 @@ class OpenCode(Host):
         path = transcript_path or os.path.join(state_root(), "opencode-sessions",
                                                f"{session_id}.json")
         env = dict(os.environ, TE_SIDECALL="1")
+        cwd = cwd if cwd and os.path.isdir(cwd) else None
         tmp = f"{path}.{os.getpid()}.tmp"
         for attempt in range(self.EXPORT_TRIES):
             if attempt:
@@ -425,7 +429,7 @@ class OpenCode(Host):
                 try:
                     out = subprocess.run([*program("opencode"), *args, session_id],
                                          capture_output=True, encoding="utf-8", errors="replace",
-                                         timeout=60, env=env, stdin=subprocess.DEVNULL)
+                                         timeout=60, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
                 except (OSError, subprocess.SubprocessError):
                     return transcript_path
                 if out.returncode == 0 and (out.stdout or "").lstrip().startswith("{"):

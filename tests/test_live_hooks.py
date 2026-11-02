@@ -1200,12 +1200,13 @@ def test_an_opencode_session_whose_copy_is_empty_is_folded_from_opencodes_export
     asked = []
 
     def fake_run(cmd, **kw):
-        asked.append(cmd[1:])
+        asked.append((cmd[1:], kw["cwd"]))
         return subprocess.CompletedProcess(cmd, 0, stdout=opencode_session_export(), stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     run_session(env, repo, "ses_f", str(copy), host="opencode")
-    assert asked == [["session", "export", "ses_f"]]
+    # opencode finds a session within the project it is run in: where the session ran
+    assert asked == [(["session", "export", "ses_f"], repo)]
     (rec,) = [r for r in store_for(env, repo, "opencode").read_lines("ledger.jsonl")
               if r.get("kind") == "session"]
     assert rec["prompts"] == 1 and "error" not in rec and rec["effective_tokens"]

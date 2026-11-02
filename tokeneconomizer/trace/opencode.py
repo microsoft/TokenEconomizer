@@ -30,8 +30,9 @@ def _content_text(content):
     return str(content or "")
 
 
-def _nested(msg):
-    """A flat 2.x message as `{info, parts}`; any other message as it is."""
+def _nested(msg, cwd=None):
+    """A flat 2.x message as `{info, parts}`, its answers placed in `cwd` (the session's
+    `directory`, where the export names it); any other message as it is."""
     kind = msg.get("type")
     if "info" in msg or kind not in ("user", "assistant"):
         return msg
@@ -40,6 +41,8 @@ def _nested(msg):
         return {"info": info, "parts": [{"type": "text", "text": str(msg.get("text") or "")}]}
     model = msg.get("model") if isinstance(msg.get("model"), dict) else {}
     info.update(modelID=model.get("id"), cost=msg.get("cost"), tokens=msg.get("tokens"))
+    if isinstance(cwd, str) and cwd:
+        info["path"] = {"cwd": cwd}
     parts = []
     for c in msg.get("content") or []:
         if not isinstance(c, dict):
@@ -70,10 +73,10 @@ def _load(path):
     if isinstance(data, list):
         return {}, [_nested(m) for m in data if isinstance(m, dict)]
     if isinstance(data, dict):
+        info = data.get("info") if isinstance(data.get("info"), dict) else {}
         msgs = data.get("messages")
-        return (data.get("info") if isinstance(data.get("info"), dict) else {},
-                [_nested(m) for m in msgs if isinstance(m, dict)] if isinstance(msgs, list)
-                else [])
+        return (info, [_nested(m, info.get("directory")) for m in msgs if isinstance(m, dict)]
+                if isinstance(msgs, list) else [])
     return {}, []
 
 

@@ -524,6 +524,12 @@ def test_a_flat_opencode_2_export_reads_as_the_nested_one(tmp_path):
     text = open(out).read()
     assert "Run the tests" in text and "python -m pytest -q" in text and "1 passed" in text
     assert "command not found" in text and '"is_error": true' in text
+    assert '"cwd"' not in text                          # this export names no directory
+    data = json.loads(src.read_text())
+    data["info"]["directory"] = "/w/repo"
+    src.write_text(json.dumps(data))
+    trace.opencode_session_to_claude(str(src), out)
+    assert '"cwd": "/w/repo"' in open(out).read()
     u = trace.opencode_session_usage(str(src))
     assert (u["input_tokens"], u["output_tokens"], u["cache_read_input_tokens"]) == (18348, 70, 896)
     assert u["model"] == "gpt-5.6-sol" and u["cost_usd_vendor"] == 0.0056
@@ -541,17 +547,17 @@ def test_the_opencode_host_fetches_opencodes_export_when_its_copy_is_empty(tmp_p
 
     def fake_run(cmd, **kw):
         calls.append(cmd[1:])
-        assert kw["env"]["TE_SIDECALL"] == "1"
+        assert kw["env"]["TE_SIDECALL"] == "1" and kw["cwd"] == str(tmp_path)
         if cmd[1:3] == ["session", "export"]:
             return subprocess.CompletedProcess(cmd, 0, stdout=answers.pop(0), stderr="")
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="unknown command")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert h.complete(str(copy), "ses_f") == str(copy)
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy)
     assert calls == [["session", "export", "ses_f"]] * 2
     assert trace.opencode_prompt_count(str(copy)) == 1
     calls.clear()
-    assert h.complete(str(copy), "ses_f") == str(copy) and not calls     # it holds a prompt now
+    assert h.complete(str(copy), "ses_f", str(tmp_path)) == str(copy) and not calls  # a prompt
     assert h.complete("", "ses_x; rm -rf ~") == "" and not calls        # not a session id
 
 

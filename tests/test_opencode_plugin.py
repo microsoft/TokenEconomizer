@@ -252,7 +252,7 @@ def test_a_session_through_the_service_is_folded_with_its_prompt(tmp_path, chat)
              "--host", "opencode", "--cwd", str(work), "fold", "--verbose",
              *[a for sid in sids for a in ("--session", sid)]],
             capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
-            timeout=180)
+            cwd=str(tmp_path), timeout=180)        # not the project: the fold finds its way there
 
     _service_run(tmp_path, chat, "fold", after=fold)
     out = seen["fold"]
