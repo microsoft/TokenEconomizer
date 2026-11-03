@@ -556,11 +556,6 @@ was not.)
 * **Tool pruning** is not offered. Config is per profile, project plugins are not loaded, and a
   portable Agent Plugin carries no hooks. `llm_request` middleware did remove a tool from the wire
   (20 to 19), and `sessions.tool_names` records each session's list, so it is a possible route.
-* A gateway depends on its machine. On a host with strict overcommit (`vm.overcommit_memory=2`) at
-  98% of its commit limit, a gateway's event loop waited in `threading.Thread.start` for a thread
-  that never began, Hermes's watchdog ended it (exit 75), and a hook's Python died with `MemoryError`.
-  A second gateway, with this plugin not installed, ended the same way within seconds. No plugin
-  code was on any stack, and the same turns passed when allocations were getting through.
 
 ## 4. State and privacy
 
