@@ -49,7 +49,16 @@ person can tune by hand:
   * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;
-  * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run.
+  * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
+  * history_import              -- on Claude Code, fold a repository's sessions from before the
+                                   plugin (Claude Code's own logs) once, at its first session
+                                   start, when nothing is folded there yet. Off by default:
+                                   the plugin learns only from sessions it sees end, and
+                                   `te history import` reads them by hand;
+  * history_max_sessions, history_days -- the newest sessions that import takes, and how far
+                                   back it reads;
+  * history_dirs                -- further Claude Code `projects` folders to read, beside
+                                   `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`).
 
 The names before the mechanisms were renamed are read too, so an existing config file keeps
 working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
@@ -168,6 +177,10 @@ class LiveConfig:
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
+    history_import: bool = False
+    history_max_sessions: int = 200
+    history_days: int = 365
+    history_dirs: list = field(default_factory=list)
     shadow: bool = False
     vocabulary: str = "auto"
     warnings: list = field(default_factory=list)
@@ -282,7 +295,9 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
         "TE_PI_EXTENSIONS": "pi_extensions", "TE_PI_CLI": "pi_cli",
-        "TE_HERMES_CLI": "hermes_cli"}
+        "TE_HERMES_CLI": "hermes_cli",
+        "TE_HISTORY_IMPORT": "history_import", "TE_HISTORY_MAX_SESSIONS": "history_max_sessions",
+        "TE_HISTORY_DAYS": "history_days", "TE_HISTORY_DIRS": "history_dirs"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 

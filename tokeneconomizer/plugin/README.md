@@ -13,6 +13,7 @@ What happens at each hook, and how each agent was verified to behave, is in
 | `controller.py` | what happens at each hook |
 | `hosts.py` | per-agent hook payloads and outputs (Claude Code, Codex, Copilot CLI, Pi, opencode, Cursor, Hermes Agent) |
 | `fold.py` | a finished session through `PrefixStage` and `ToolingStage` |
+| `history.py` | `te history import`: a repository's Claude Code sessions from before the plugin, folded once, oldest first, to learn from |
 | `denylist.py` | writing the deny list into each agent's settings (by itself under `auto`, on `toolprune apply` under `propose`), and taking it back |
 | `toolcheck.py` | asking the agent CLIs what a session loads, and what a deny list removed |
 | `config.py` | settings, their sources, and the earlier names they are still read under |
