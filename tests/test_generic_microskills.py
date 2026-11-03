@@ -46,6 +46,38 @@ def test_a_build_tool_repair_becomes_a_fact(tmp_path):
     assert "`tsc …` fails here with command not found; `npx tsc …` works." in text
 
 
+def test_an_absent_linter_becomes_a_fact_and_a_working_form_does_not(tmp_path):
+    """`ruff` missing with no working form: an absent_tool fact. `tsc` missing with `npx tsc`
+    working is still a FormRepair, and `make build` never repairs `ruff`."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found"),
+            ("Bash", {"command": "make build"}, "built")]), iid=f"a{i}")
+    f = d.facts["absent_tool:ruff"]
+    assert f.family == "absent_tool" and f.state == "ACTIVE"
+    assert "`ruff …` fails here with command not found" in d.render()
+    assert not [x for x in d.facts if x.startswith("form_repair") and "ruff" in x]
+
+
+def test_an_absent_tool_retires_when_it_runs(tmp_path):
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found")]),
+            iid=f"a{i}")
+    assert d.facts["absent_tool:ruff"].state == "ACTIVE"
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "ruff check ."}, "All checks passed!")]), iid="a9")
+    assert d.facts["absent_tool:ruff"].state == "RETIRED"
+
+
 def test_every_edited_file_counts_in_the_generic_reading(tmp_path):
     p = _session(tmp_path, 0, [
         ("Edit", {"file_path": "/r/src/main.go", "old_string": "a", "new_string": "b"}, "ok"),

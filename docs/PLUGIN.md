@@ -589,8 +589,6 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
     the detailed transcript (Ctrl+O) always has it.
   * A turn that ran no recognised verification counts as ended green, so a failed turn without
     one can enter the envelope and loosen the guard for every later turn.
-  * The free fact layer has no family for "this tool is absent here, with no working
-    alternative" (a missing `ruff`, `mypy` or `pre-commit`, say).
   * Test runs launched from a script are not recognised as verification.
   * `refresh-catalog` is manual, once per machine and agent; until it runs, evidence pruning
     sees only the tools sessions used (plus, on Claude Code, the deferred ones). Running it at

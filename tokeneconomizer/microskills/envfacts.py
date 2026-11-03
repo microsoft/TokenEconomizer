@@ -26,6 +26,9 @@ The families:
   EnvValue     code fails asking for an environment variable by name, and a later run that sets
                it succeeds. Fact: "Code that imports the project needs `V` set here: `V=x`
                works." Retires when that value fails the same way.
+  AbsentTool   a bare tool fails with command not found and has no working form here. Fact:
+               "`T ...` fails here with command not found: `T` is not installed in this
+               environment." Retires when `T` runs or a working form of it is found.
 
 Each fact goes through the shared `lifecycle`. No LLM is involved: `opt_tokens` is 0. The block
 is capped at MAX_FACTS and MAX_TOKENS, and a lint refuses any fact that reads as completion or
@@ -112,6 +115,10 @@ class EnvFact:
             bad = [v for v in sorted(p.get("bad") or {}) if v != good][:1]
             return (f"Code that imports the project needs `{p['var']}` set here: "
                     f"`{p['var']}={good}` works" + (f", `{bad[0]}` does not." if bad else "."))
+        if self.family == "absent_tool":
+            t = p["tool"]
+            return (f"`{t} …` fails here with command not found: `{t}` is not installed in this "
+                    f"environment.")
         if self.family == "empty_probe":
             return ("This checkout has no git remote and no branches, tags or unreachable "
                     "objects beyond HEAD; its history ends at the checked-out commit.")
@@ -175,11 +182,25 @@ def typed_ok(o):
     return form_worked(o) and not o.env
 
 
+_RUN_WORDS = frozenset({"run", "npx", "uv", "poetry", "pipenv", "conda", "-m"})
+
+
 def _repairs(form, a_form, intent):
     """Can `form` stand in for the failing `a_form`? Another form -- and, outside test runs
     and builds, not a bare one: only a fuller spelling repairs a bare interpreter or package
-    tool."""
-    return form != a_form and (intent in ("run_tests", "run_build") or not is_bare(form))
+    tool. A build or check is repaired only by the same tool spelled another way: `make build`
+    does not repair a missing `ruff`."""
+    if form == a_form:
+        return False
+    if intent == "run_build":
+        return bool((set(form.split()) & set(a_form.split())) - _RUN_WORDS)
+    return intent == "run_tests" or not is_bare(form)
+
+
+def _tool_of(form):
+    """The executable a form runs, by its last word: `ruff`, `npx ruff`, `uv run ruff`,
+    `.venv/bin/ruff` all name `ruff`."""
+    return form.split()[-1].rsplit("/", 1)[-1] if form and form.split() else ""
 
 
 def _moves_shell(form):
@@ -276,8 +297,8 @@ class EnvFactsDistiller:
     def _select(self):
         cands = [f for f in self.facts.values()
                  if f.injectable() and f.claim() and lint_ok(f.claim())]
-        prio = {"form_repair": 0, "arg_repair": 1, "env_value": 2, "empty_probe": 3,
-                "boundary": 4}
+        prio = {"form_repair": 0, "arg_repair": 1, "env_value": 2, "absent_tool": 3,
+                "empty_probe": 4, "boundary": 5}
         cands.sort(key=lambda f: (prio.get(f.family, 9),
                                   0 if f.params.get("intent") == "run_interpreter" else 1,
                                   -f.firing_rate()))
@@ -375,12 +396,14 @@ class EnvFactsDistiller:
             a_failed = any(o.form == a_form and form_failed(o) for o in seq)
             b_forms = set(f.params["b_counts"])
             b_ran = any(o.form in b_forms and form_worked(o) for o in seq) or \
-                any(form_worked(o) and not is_bare(o.form) for o in seq)
-            # Contradiction: the bare form ran the TEST RUNNER without an environment error.
-            # A bare interpreter one-liner succeeding is not evidence (pure-Python packages
-            # import from the working tree under any interpreter).
+                any(form_worked(o) and not is_bare(o.form) and _repairs(o.form, a_form, intent)
+                    for o in seq)
+            # Contradiction: the bare form ran the TEST RUNNER or build tool without an
+            # environment error. A bare interpreter one-liner succeeding is not evidence
+            # (pure-Python packages import from the working tree under any interpreter).
             a_runner_ok = any(o.form == a_form and form_worked(o)
-                              for o in by_intent.get("run_tests", []))
+                              for o in by_intent.get(
+                                  "run_build" if intent == "run_build" else "run_tests", []))
             fired = a_failed or (f.id in injected and b_ran and not a_failed)
             if a_failed or (b_ran and not a_runner_ok):
                 verdict = "confirm"
@@ -390,6 +413,37 @@ class EnvFactsDistiller:
                 verdict = None
             fold(f, self.now, verdict, fired, exercised, files)
             verdicts[f.id] = (verdict, fired, exercised)
+
+        # ---- AbsentTool: a bare tool that is not installed and has no working form here ----
+        if self.vocab.generic:
+            repaired = {f.params["a"] for f in self.facts.values()
+                        if f.family == "form_repair" and f.working_form() is not None}
+            missing = {}
+            for o in obs:
+                if (o.intent in ("run_build", "run_tests", "package_tool")
+                        and o.outcome == "command_missing" and is_bare(o.form)
+                        and " " not in o.form and o.form not in repaired):
+                    missing.setdefault(o.form, o.intent)
+            worked = {_tool_of(o.form) for o in obs if form_worked(o)}
+            for tool, intent in missing.items():
+                if tool in worked:
+                    continue
+                fid = f"absent_tool:{tool}"
+                if fid not in self.facts:
+                    self.facts[fid] = EnvFact(fid, "absent_tool", high=True,
+                                              params={"tool": tool, "intent": intent})
+            for f in [x for x in self.facts.values() if x.family == "absent_tool"]:
+                tool = f.params["tool"]
+                seen = [o for o in obs if _tool_of(o.form) == tool]
+                contradicted = tool in repaired or any(form_worked(o) for o in seen)
+                missing_now = any(o.outcome == "command_missing" and o.form == tool
+                                  and is_bare(o.form) for o in seen)
+                prevented = f.id in injected and not contradicted and bool(obs or files)
+                fired = missing_now or prevented
+                exercised = fired or contradicted
+                verdict = "contradict" if contradicted else ("confirm" if fired else None)
+                fold(f, self.now, verdict, fired, exercised, files)
+                verdicts[f.id] = (verdict, fired, exercised)
 
         # ---- ArgRepair: labels the runner loads only in another shape ----
         runs = [o for o in by_intent.get("run_tests", []) if o.labels]

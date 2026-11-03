@@ -85,7 +85,8 @@ GENERIC = Vocabulary(
                           "gradlew", "dotnet", "mix", "swift", "rake"}),
     build_heads=frozenset({"make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier",
                            "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
-                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite"}),
+                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite",
+                           "pre-commit", "shellcheck"}),
     generic=True,
 )
 # `<tool> build`, `npm run lint`, ...: what a generic reading counts as building or checking.
