@@ -64,8 +64,8 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode** and **Cursor Agent**. Each italic letter above is a
-setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
+with experimental support for **opencode**, **Cursor Agent** and **Hermes Agent**. Each italic
+letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
 redirect it writes) run through your own agent, on the same plan or login, and their cost is
@@ -187,6 +187,19 @@ Start `opencode` and send a prompt, then check in the repository with
 `~/.tokeneconomizer/bin/te --host opencode status`. opencode has no plugin commands, so the
 plugin's commands run from a terminal.
 
+**Hermes Agent** (experimental; micro-skills and the loop guard, on the classic CLI and one-shot
+runs)
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+ln -s "$PWD/TokenEconomizer/plugin/hermes" ~/.hermes/plugins/tokeneconomizer
+hermes plugins enable tokeneconomizer
+hermes gateway restart
+```
+
+Link it rather than running `hermes plugins install`, which leaves the launchers behind when given
+this directory and refuses the whole repository at its security scan. Send a prompt, then check in the repository with `~/.tokeneconomizer/bin/te --host hermes status`.
+
 If the install worked, the status command prints a short status block. `refresh-catalog`
 records every tool a session loads (without a model call), so that tool pruning can consider all
 of them. Keep the marketplace path absolute, as above: the Copilot CLI reads a relative path such
@@ -197,6 +210,7 @@ To update:
 | Agent | Update |
 |---|---|
 | Claude Code, Copilot CLI, opencode | `git pull` in the clone |
+| Hermes Agent | `git pull` in the clone, then `hermes gateway restart` |
 | Codex | `git pull` in the clone, then the `codex plugin add` line again |
 | Pi | `pi update --extensions` |
 
@@ -213,6 +227,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
+| Hermes Agent (experimental) | 0.22.5 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
@@ -225,6 +240,12 @@ have not been tested yet.
   2.x terminal UI.
 - **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
   from a live Agent session has not yet been verified.
+- **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
+  model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
+  redirect reaching a real model are verified there; the still-stuck notice reaching a person is
+  not. Its other surfaces (the Ink TUI, the Desktop app, messaging platforms, cron) and
+  subagents are ignored, and tool pruning is not available. See
+  [its limits](plugin/README.md#hermes-agent).
 
 ### Everyday commands
 
@@ -238,13 +259,14 @@ commands. They have the same names on every agent; only the way you type them di
 | Pi | `/te <command>` |
 | opencode | from a terminal: `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
+| Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
 | Command | What it does |
 |---|---|
 | `status` | what it learned and did here, and what your sessions cost |
 | `microskills` | the facts it injects, and those still forming |
-| `toolprune` | the tools it left out, and the evidence (not on Pi or opencode) |
+| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode or Hermes Agent) |
 | `toolprune restore` | give them back; they will not be removed again |
 | `config` | every setting in effect |
 | `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
@@ -315,6 +337,7 @@ what it can leave out differs:
 | Pi | nothing (Pi loads only four tools) | — |
 | Cursor Agent | nothing yet | — |
 | opencode | nothing yet | — |
+| Hermes Agent | nothing yet | — |
 
 Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it
 creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that says
@@ -340,7 +363,7 @@ redirects, you see one line that ends with how to stop it:
 > calls). Press Esc to interrupt it.
 
 Where that line appears, and how to stop the turn, in the terminal UI and in a headless run
-(`claude -p`, `codex exec`, `copilot -p`, `pi -p`, `opencode run`):
+(`claude -p`, `codex exec`, `copilot -p`, `pi -p`, `opencode run`, `hermes -z`):
 
 | Agent | Interactive: where it shows | How to stop | Headless: where it shows | How to stop |
 |---|---|---|---|---|
@@ -349,6 +372,7 @@ Where that line appears, and how to stop the turn, in the terminal UI and in a h
 | Copilot CLI | in the conversation | Esc twice | on stdout | Ctrl+C |
 | Pi | as a notification | Esc | on stderr | Ctrl+C |
 | opencode | as a notification | Esc | on stderr | Ctrl+C |
+| Hermes Agent | in the model's reply | Ctrl+C | in the final reply | Ctrl+C |
 
 - **Claude Code** shows a plugin's own lines only in its detailed transcript (Ctrl+O), so the
   plugin asks Claude to repeat this one in its reply; the model may word it differently or leave
@@ -357,6 +381,8 @@ Where that line appears, and how to stop the turn, in the terminal UI and in a h
   `codex exec` prints no hook messages.
 - **Pi**: Ctrl+C ends a headless run, but a command it started runs on until it finishes.
 - **opencode** 2.x prints the line to the opencode server's error output, not in its terminal UI.
+- **Hermes Agent**: the plugin asks the model to repeat the line, since no hook was found to reach
+  the person's view; a model may word it differently or leave it out.
 
 In a headless run nobody may be watching, so a flagged turn runs until it ends or reaches the
 agent's own limits; afterwards, `te status` counts the redirects and "still stuck" notices.
@@ -370,7 +396,7 @@ agent's own limits; afterwards, `te status` counts the redirects and "still stuc
 | [`tokeneconomizer/loopguard`](tokeneconomizer/loopguard/) | Failure-loop intervention: the per-call guard and its per-repository envelope |
 | [`tokeneconomizer/trace`](tokeneconomizer/trace/) | Each agent's session log, read into one shape |
 | [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
-| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode plugin |
+| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode and Hermes plugins |
 | [`experiments`](experiments/) | The harness, launchers and task sets behind the paper's results |
 | [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior) and `ARCHITECTURE.md` (how the package fits together) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |

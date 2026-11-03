@@ -725,10 +725,11 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("claude", "codex", "copilot", "opencode", "pi")
-              if _sh.which(sidecall.claude_cli() if h == "claude" else h)]
+    agents = [h for h in ("claude", "codex", "copilot", "hermes", "opencode", "pi")
+              if _sh.which(sidecall.claude_cli() if h == "claude" else
+                           sidecall.hermes_cli() if h == "hermes" else h)]
     print(f"agents      "
-          f"{', '.join(agents) or 'none of claude, codex, copilot, opencode, pi on PATH'}")
+          f"{', '.join(agents) or 'none of claude, codex, copilot, hermes, opencode, pi on PATH'}")
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:
@@ -762,6 +763,10 @@ def cmd_doctor(args):
         if ctrust is not None:
             print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "
                   f"untrusted folder's .github/copilot settings are ignored)")
+    if "hermes" in agents:
+        link = os.path.join(sidecall.hermes_home(), "plugins", "tokeneconomizer")
+        print(f"hermes      plugin {'linked at ' + link if os.path.exists(link) else 'not in ' + link}"
+              f" (it also needs `hermes plugins enable tokeneconomizer`)")
     if "pi" in agents:
         settings = os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or os.path.join(
             os.path.expanduser("~"), ".pi", "agent"), "settings.json")

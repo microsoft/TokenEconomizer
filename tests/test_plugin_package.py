@@ -180,6 +180,7 @@ def test_the_bundle_runs_without_a_checkout(tmp_path):
     assert not (bundle / "lib" / "te_live").exists()
     assert (bundle / ".github" / "plugin" / "plugin.json").exists()
     assert (bundle / "hooks" / "copilot-hooks.json").exists()
+    assert (bundle / "hermes" / "plugin.yaml").exists()
     assert (bundle / "lib" / "tokeneconomizer" / "__init__.py").exists()
     assert not (bundle / "lib" / "te_harness").exists()
     assert not (bundle / "lib" / "te_bench").exists()

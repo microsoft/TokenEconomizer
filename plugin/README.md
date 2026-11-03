@@ -1,12 +1,13 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), and opencode (experimental). What the plugin does and why is in the [main README](../README.md); its
+(experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor)
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [opencode](#opencode) ·
+  [Hermes Agent](#hermes-agent)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -375,6 +376,123 @@ still-stuck notice was printed (`opencode run`) and the first notice shown as a 
 toast. A `read`, `task` or `*` permission denial stalls opencode 1.19.5 at start-up, which is why
 the side call denies only `bash`, `edit`, `webfetch` and `websearch`.
 
+## Hermes Agent
+
+Experimental, and narrower than the other agents: **micro-skills and the loop guard**, on Hermes's
+**classic CLI** (`hermes`, `hermes chat`) and **one-shot runs** (`hermes -z`, `hermes chat --oneshot`),
+with `terminal.backend: local`. Tested on 0.22.5 only.
+
+**1. Install.** Link the plugin directory, keeping it next to `scripts/` and `lib/`, enable it, and
+restart the gateway, which is what runs your sessions:
+
+```bash
+ln -s /path/to/TokenEconomizer/plugin/hermes ~/.hermes/plugins/tokeneconomizer
+hermes plugins enable tokeneconomizer
+hermes gateway restart
+```
+
+Do not use `hermes plugins install`: installing a subdirectory fetches only that folder, and its
+security scan refuses the whole repository (`experiments/` holds shell lines it rates critical,
+which `--force` does not override). A named
+profile has its own `plugins/` directory (`~/.hermes/profiles/<name>/plugins/`), which has not been
+tested. The plugin runs under the Python that runs Hermes; `TE_PYTHON` names another.
+
+**2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host hermes status` in the
+repository (`doctor` says whether the link is in place). Commands run from a terminal. Micro-skills
+is off by default: `te --host hermes config set microskills=on` (or `envfacts`, without model calls).
+
+**Environment variables.** Hooks run in the gateway, not in the terminal you start `hermes` from,
+so a `TE_` variable you set there (`TE_DISABLE=1`, `TE_PYTHON`, ...) reaches the plugin only once
+the gateway restarts from a shell where it is set. Settings made with `te config` need no restart.
+
+**How it hands a session over.** When a session is folded, the plugin copies its rows from
+Hermes's `state.db`, read-only, to `~/.tokeneconomizer/hermes-sessions/<id>.json`, which is private
+to you and holds the tool calls and their results; a prompt is kept as a placeholder, and what the
+model replied is not kept. A one-shot run is folded when its turn ends. A session in the classic CLI
+is folded when Hermes finalizes it. One that never reaches an end (a killed terminal, a gateway that
+died in a turn) is folded by the next session's start in that repository, once its hooks have been
+quiet for 10 minutes. A session whose rows cannot be read then stays unfolded and is tried again at
+each later start in that repository, for a week after its last hook; after that it is recorded as
+unreadable.
+
+**Which repository.** Each session's own row names its directory, so sessions in different
+repositories can run at once in the one gateway. A session with no directory on this machine is
+not followed.
+
+**Model calls.** The proposer and the loop guard's judge run through `hermes chat --oneshot --source
+tool` on your default Hermes model (`paid_model` names another; `hermes_cli` or `TE_HERMES_CLI`
+names the `hermes` to run). The call offers the model no tool (`-t bot_room`, an empty toolset)
+and loads no rules or memory. It runs in your gateway, from a background job, and the plugin skips `tool` sessions, so
+sessions you run yourself with `--source tool` are not followed either. Hermes also generates a
+title for each call: what the call and its title spent is charged to the ledger, and then the
+session is deleted. One that cannot be read yet, after a timeout, is kept and settled by a later
+call, and one that still has no end 10 minutes after the timeout is charged for what it spent so
+far, so either can sit in `hermes sessions list --source tool` until the next call.
+
+**A redirect** arrives as a first key, `tokeneconomizer_redirect`, in the tool's JSON result, which
+stays valid JSON with every other byte as it was. Hermes marks `web_*`, `browser_*` and `mcp_*`
+results as untrusted data the model must not obey, so a redirect waits for the next other tool
+result in the turn, and is dropped if there is none.
+
+**Verified,** on 0.22.5 (Python 3.14) with an isolated `HERMES_HOME` and a scripted local model
+(`tests/test_hermes_plugin.py`; run it with `TE_HERMES_E2E=1 TE_HERMES_BIN=<hermes>`):
+`hermes plugins validate` passes, and a linked plugin enables and loads; facts reach the system
+prompt; two repositories' sessions ran at once and were folded and priced apart; in a failing
+one-shot turn the judge ran through a side call into the same gateway, the redirect arrived in a
+tool result, and the side call's sessions were charged and gone; a compression in a turn stayed
+one session.
+
+**Verified with a real model** (`upstage/solar-mini4:free`, a person's own Hermes): a classic CLI
+session that left with `/exit` and a run of `hermes -z` were folded and priced, the fold's token
+counts matching Hermes's; in five one-shot sessions `envfacts` learned that bare `pytest` fails in
+a repository where `python -m pytest` works, and the next session's first test command took the
+working form; a side call answered, its reply and title were charged, and its session was deleted;
+the judge ran on a real turn and spared it.
+
+Later, in forced failure loops with a seeded envelope and lowered thresholds: the judge called turns
+stuck at 0.80 and 0.90 and spared one at 0.62, a redirect it wrote and two from the backstop reached
+the agent in tool results, and the still-stuck notice fired twice. With `microskills=on`, the
+proposer ran after the 2nd and 5th sessions and recorded the working test command. A session cut
+off in mid-turn by a gateway that died, and two timed-out side calls, were recovered as described above.
+
+**Not covered:**
+
+* Whether a redirect changes a real model's course. In the loops above the agent was told to keep
+  repeating, or ran beside another session in one directory.
+* The still-stuck notice reaching a person: in both turns where it fired the model did not repeat it
+  while it worked, and both were cut off before a final reply. Killing `hermes -z` from outside
+  (SIGTERM) left its turn running in the gateway; whether the notice's Ctrl+C stops one is untested.
+* Facts in a real session's system prompt are seen in the plugin's log only: `state.db` held no
+  `system_prompt` for those sessions. A scripted run shows them in the request.
+* `/new`, Ctrl+D and a killed terminal. A compression that changes the session's id is tested
+  offline only; the ones seen kept the id.
+* A session resumed after it was folded: its later turns are neither learned from nor priced, since
+  a session folds once. That rule is shared by every agent. It matters more here, because a one-shot
+  run folds as soon as its turn ends, so `hermes -c` after `hermes -z` always lands on it.
+* The Ink TUI (`--tui`), Desktop, ACP, messaging platforms and cron are ignored, on purpose: nothing
+  has been verified there, and a chat is not repository work. So are subagents, whose tokens are
+  counted with their session and whose tool calls are not.
+* Remote terminal backends, named profiles and `plugins.isolation: host`.
+* Tool pruning. Hermes has no per-repository tool setting. `llm_request` middleware removed a tool
+  from a request in a probe, but keeping a session's list stable across its cache has not been built.
+* Notices. Nothing a hook can call was seen to reach the person (`post_message` returned ok and
+  printed nothing under `hermes -z`). The still-stuck line goes through the model, as on Claude Code;
+  other notices are logged, and returned when Hermes finalizes the session.
+* Edits made inside `execute_code` do not count as edits, and a call made by a subagent does not
+  reach the guard. Hermes has a repeated-failure warning of its own, which runs beside this one.
+
+A turn whose model runs its tests from a script it wrote does not count them as verification (a
+limit on every agent, [`docs/PLUGIN.md`](../docs/PLUGIN.md) §5), so a failed one can end "green". A
+judge call on a real turn cost about 14k effective tokens, far more than a short side call, because
+a turn's digest is what it reads.
+
+Micro-skills' block must fit Hermes's 4,000-character prompt section, which it does at the default
+`microskills_max_tokens`; a much larger one is dropped with a warning in Hermes's log. Hermes may also
+log a warning for the empty section of a session with no facts.
+
+**Uninstall.** `hermes plugins disable tokeneconomizer`, `rm ~/.hermes/plugins/tokeneconomizer`,
+`hermes gateway restart`. Optional: `rm -rf ~/.tokeneconomizer`.
+
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
@@ -456,6 +574,7 @@ How to run them:
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
 
 `doctor` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.

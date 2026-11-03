@@ -6,9 +6,9 @@ here and nowhere else:
   * `calls`    -- `load_trajectory`: any agent's log as ordered `(name, args, result, ok)` calls;
                   `call_cwds`, `tool_usage`, `strip_rtk_prefix`;
   * `catalog`  -- the tool list a session loaded, from whichever source the agent publishes;
-  * `claude`, `codex`, `copilot`, `opencode`, `pi` -- each agent's own session file: usage,
-                  metadata, prompt-turns, and the conversions that let the readers above handle
-                  it.
+  * `claude`, `codex`, `copilot`, `hermes`, `opencode`, `pi` -- each agent's own session file:
+                  usage, metadata, prompt-turns, and the conversions that let the readers above
+                  handle it.
 
 Stdlib only.
 """
@@ -25,6 +25,9 @@ from .copilot import (copilot_event_calls, copilot_mcp_servers, copilot_prompt_c
                       copilot_session_meta, copilot_session_usage, copilot_turns,
                       mcp_server_of)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
+from .hermes import (hermes_export, hermes_find_session, hermes_prompt_count, hermes_result,
+                     hermes_row_usage, hermes_session_info, hermes_session_row,
+                     hermes_session_to_claude, hermes_session_usage, hermes_tool)
 from .opencode import (opencode_prompt_count, opencode_run_reply, opencode_session_info,
                        opencode_session_to_claude, opencode_session_usage)
 from .pi import (pi_active_branch, pi_json_reply, pi_prompt_count, pi_session_header,
@@ -42,6 +45,9 @@ __all__ = [
     "copilot_event_calls", "copilot_mcp_servers", "copilot_prompt_count", "copilot_session_meta",
     "copilot_session_usage", "copilot_turns", "mcp_server_of",
     "cursor_events_to_claude", "cursor_prompt_count",
+    "hermes_export", "hermes_find_session", "hermes_prompt_count", "hermes_result",
+    "hermes_row_usage", "hermes_session_info", "hermes_session_row", "hermes_session_to_claude",
+    "hermes_session_usage", "hermes_tool",
     "opencode_prompt_count", "opencode_run_reply", "opencode_session_info",
     "opencode_session_to_claude", "opencode_session_usage",
     "pi_active_branch", "pi_json_reply", "pi_prompt_count", "pi_session_header",

@@ -1,7 +1,8 @@
 # TokenEconomizer
 
-A plugin for Claude Code, Codex, the Copilot CLI and Pi that reads finished sessions and changes
-what later sessions in the same repository pay for: micro-skills, tool pruning, and a loop guard.
+A plugin for Claude Code, Codex, the Copilot CLI and Pi (experimentally opencode, Cursor and Hermes
+Agent) that reads finished sessions and changes what later sessions in the same repository pay
+for: micro-skills, tool pruning, and a loop guard.
 See `README.md` for the overview and the method, `docs/PLUGIN.md` for the design and the verified
 agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
 
@@ -10,14 +11,15 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   - `microskills/` — learn repository facts from finished sessions; render the injected block
   - `toolprune/` — unused-tool evidence and the deny-list proposal; Codex capability packages
   - `loopguard/` — the per-call failure-loop guard and its per-repository envelope
-  - `trace/` — each agent's session-log format (Claude Code, Codex, Copilot CLI, Pi, opencode)
+  - `trace/` — each agent's session-log format (Claude Code, Codex, Copilot CLI, Pi, opencode,
+    Cursor, Hermes Agent)
   - `plugin/` — the runtime: hook dispatch, per-repository state, settings, the `te` CLI
   - `config.py`, `ledger.py`, `pricing.py`, `domain.py`, `stage.py` — shared by all three
 - `plugin/` — the installable plugin directory: manifests per agent, hook files, launchers
   (`scripts/te`, `scripts/te-hook`), slash commands (`slash-commands/`, named in the Claude Code
   and Copilot manifests, since Codex would turn a `commands/` folder into duplicate skills), Codex
-  skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension; `lib/` links
-  the package
+  skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension, the opencode
+  and Hermes plugins; `lib/` links the package
 - `experiments/` — benchmark-only: `te_bench/` (adapters, arms, facade, benchmark-only
   controllers), `te_harness/` (Docker runners), `scripts/`, `workloads/`, its own `tests/`;
   its `README.md` is the run book
