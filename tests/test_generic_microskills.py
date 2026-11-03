@@ -146,3 +146,31 @@ def test_the_experiments_proposer_prompt_is_the_papers():
     g = dist.PROPOSER_SYSTEM_GENERIC
     assert "repro_written" not in g and "importerror" not in g
     assert g.count(", ".join(dist.GENERIC_PREDICATES)) == 2
+
+
+def test_a_label_rewrite_the_runner_loads_becomes_a_fact_under_generic(tmp_path):
+    d = ef.EnvFactsDistiller("acme/api", vocab=GENERIC)
+    for i in range(6):
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/app/m{i}.rb", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "rspec spec/models/user_spec.rb"},
+             "ERROR: file or directory not found: spec/models/user_spec.rb"),
+            ("Bash", {"command": "rspec models/user_spec.rb"}, "3 examples, 0 failures")]),
+            iid=f"s{i}")
+    facts = [f for f in d.facts.values() if f.family == "arg_repair"]
+    assert facts and facts[0].params["form"] == "rspec"
+    assert facts[0].params["examples"] == {"spec/models/user_spec.rb models/user_spec.rb": 6}
+
+
+def test_the_generic_digest_keeps_line_breaks_of_list_tool_results(tmp_path):
+    blocks = [{"type": "text", "text": "Exit code 1\nerror: missing script: lint"}]
+    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
+        ("Bash", {"command": "npm run lint"}, blocks),
+        ("Bash", {"command": "npm test"}, [
+            {"type": "text", "text": "Tests run: 3"}, {"type": "text", "text": "ok"}])])
+    calls = dist.load_calls(p)
+    assert calls[0][2] == "Exit code 1\nerror: missing script: lint"
+    assert calls[1][2] == "Tests run: 3\nok"
+    dg = dist.build_generic_digest("acme/web", p, "s0")
+    assert dg["failed_commands"] == [
+        {"cmd": "npm run lint", "error": "error: missing script: lint"}]

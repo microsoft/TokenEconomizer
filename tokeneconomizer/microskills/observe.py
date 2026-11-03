@@ -629,9 +629,9 @@ def observe_task(transcript_path, vocab=None):
             if o.intent == "run_tests":
                 o.labels = _test_labels(o)
                 o.label_err = bool(o.labels) and _label_failed(o.labels, out)
-                o.loaded = bool(o.labels) and not o.label_err and bool(_LOADED_RE.search(out))
                 o.tests_ran = bool(_LOADED_RE.search(out) or (
                     vocab.generic and _LOADED_GENERIC_RE.search(out)))
+                o.loaded = bool(o.labels) and not o.label_err and o.tests_ran
         # Pass-through segments (a leading `cd`, a trailing `| head`, an `echo ---`
         # separator) neither add evidence nor pollute the output, so they do not break a
         # call's homogeneity; filters that rewrite content (grep, sed, awk, wc) do.

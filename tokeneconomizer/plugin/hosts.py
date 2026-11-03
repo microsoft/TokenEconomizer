@@ -65,8 +65,8 @@ def response_text(resp, cap=RESULT_CAP):
     if isinstance(resp, str):
         return resp[:cap]
     if isinstance(resp, list):
-        return " ".join(x.get("text", "") if isinstance(x, dict) else str(x)
-                        for x in resp)[:cap]
+        return "\n".join(x.get("text", "") if isinstance(x, dict) else str(x)
+                         for x in resp)[:cap]
     if isinstance(resp, dict):
         parts = []
         for k in _RESPONSE_KEYS:
@@ -74,7 +74,7 @@ def response_text(resp, cap=RESULT_CAP):
             if isinstance(v, str) and v:
                 parts.append(v)
             elif isinstance(v, list):
-                parts.append(" ".join(x.get("text", "") for x in v if isinstance(x, dict)))
+                parts.append("\n".join(x.get("text", "") for x in v if isinstance(x, dict)))
         if parts:
             return "\n".join(parts)[:cap]
         return json.dumps(resp, sort_keys=True)[:cap]
