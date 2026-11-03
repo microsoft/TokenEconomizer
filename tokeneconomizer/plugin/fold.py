@@ -28,8 +28,9 @@ from .. import trace
 from . import accounting, denylist, sidecall
 from . import adapter as live_adapter
 from .adapter import LiveAdapter, load_catalog
+from .hosts import FoldLater
 
-STALE_S = 600           # an unfolded session whose transcript is quiet this long is over
+STALE_S = 600          # an unfolded session whose transcript is quiet this long is over
 # A fold never runs in a hook -- it is a detached process, or `te fold` -- so it can wait for
 # another fold to finish, up to one paid side call, and must never proceed without the lock:
 # two folds of one session would both find it unfolded and count it twice, in every mechanism's
@@ -438,9 +439,14 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
     if session_id in folded:
         return None
     sess = {} if imported else (ctx.store.read(sess_name) or {})
-    transcript = (transcript_path if imported else
-                  ctx.host.complete(transcript_path or sess.get("transcript"), session_id,
-                                    sess.get("cwd") or ctx.repo.root))
+    if imported:
+        transcript = transcript_path
+    else:
+        try:
+            transcript = ctx.host.complete(transcript_path or sess.get("transcript"), session_id,
+                                           sess.get("cwd") or ctx.repo.root, sess)
+        except FoldLater:
+            return None
     started, ended = span or (sess.get("started"), sess.get("ended"))
     record = {"kind": "session", "session_id": session_id, "host": ctx.host.name,
               "repo": ctx.repo.label, "folded_at": time.time(),
@@ -527,7 +533,7 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
         sess = ctx.store.read(os.path.join("sessions", name)) or {}
         tp = sess.get("transcript") or ""
         try:
-            quiet = now - os.path.getmtime(tp) >= stale_s
+            quiet = now - ctx.host.last_active(tp, sess) >= stale_s
         except OSError:
             quiet = False
         if sess.get("ended") or quiet:

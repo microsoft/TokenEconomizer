@@ -54,7 +54,8 @@ class LiveController:
             # to tell which repository the session belongs to, when its log does not say.
             s = {"session_id": self.sid, "host": self.host.name, "started": time.time(),
                  "cwd": self.host.cwd(self.p, self.ctx.env), "turns": [], "nudges": 0,
-                 "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0}
+                 "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0,
+                 **self.host.session_state(self.ctx.env)}
         return s
 
     def _save(self, s):

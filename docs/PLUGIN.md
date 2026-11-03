@@ -1,7 +1,7 @@
 # The plugin: design and verified agent behaviour
 
 How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
-opencode and Cursor sessions, through the hooks (on Pi, the extension events) each agent
+opencode, Cursor and Hermes Agent sessions, through the hooks (on Pi, the extension events) each agent
 exposes: what it does at each hook, what differs from the experiments and why, the agent
 behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
@@ -525,6 +525,61 @@ the judge's gate opens in 18.1%, 15.8% and 5.8% of them.
 The plugin's proposer prompt lists each fact it holds with its claim, so a fact it has is not
 authored again under a new id; the experiments' prompt names the ids alone, as the paper ran it.
 
+**Hermes Agent 0.22.5 -- verified 2026-10-31**, from the installed source and from a copy of it
+run with an isolated `HERMES_HOME` against a scripted OpenAI-compatible endpoint, every request
+recorded. (`plugin/README.md` says what this covers, what was then run on a real model, and what
+was not.)
+
+* Every session runs in one gateway process, `hermes -z` and the classic CLI alike, started on
+  demand: plugins run there, never in the client. Its directory and environment are its own, so a
+  hook reads the session's `cwd` from its row in `state.db`: a user session's is where it started.
+* Hook order differs from the docs: `transform_tool_result` fires BEFORE `post_tool_call`, and it
+  is the one that can answer. The prompt section's callback runs before `on_session_start`. A
+  resumed session fires neither, and its section and earlier context reach the model unchanged.
+  `on_session_end` fires after every turn. `on_session_finalize` fired for `chat --oneshot`
+  (`reason: cli_close`), and, against the docs, not for `hermes -z`.
+* A subagent fires the whole set, on a session of its own (`created_source: subagent`).
+* A user's interactive row reads `source: local`, `created_source: cli`; a side call's reads
+  `tool`, with no `cwd`. The plugin follows `created_source` `cli` and `oneshot` with a `cwd`, and a
+  row it cannot read not at all, so the filter fails closed.
+* **Side calls.** `--source tokeneconomizer` is refused (`invalid_params`), though the docs say any
+  value is stored; `tool` is accepted. `TE_SIDECALL` does not reach the gateway, and worse: with no
+  gateway running a side call starts one, which kept `TE_SIDECALL=1` in its environment, and would
+  have run every later session with the plugin off. So the variable is removed from the call. A side
+  call completed while the turn it judged ran on, and also, as a test of deadlock, while a hook of
+  that turn waited for it. One that had to start the gateway took 33 s. `hermes -z` would auto-approve
+  dangerous commands, so it is not used.
+* **Usage.** `session_model_usage` holds a row per model and task. Six calls of 1,000 prompt tokens,
+  600 cached, are stored as `input_tokens` 2,400 and `cache_read_tokens` 3,600, and `--usage-file`
+  reports 6,000: it is not read. The title row was there when the client exited, and a delete takes
+  the usage rows with it, so a side call is charged first; a delete in flight left no orphan row.
+* **Timeouts.** One overrun of `plugins.hook_callback_timeout` (30 s) silences that callback for 60 s
+  for every session, so a dispatcher call has 20 s and the session lock 5 s. "Still running" is keyed
+  on `tool_call_id`: a stand-in that reused ids across sessions lost hooks; provider ids do not repeat.
+* **Redirects.** Text appended to a result makes it invalid JSON, and Hermes then reads a failed call
+  as `ok`. As a first key the status stays `error`, and a 50,690-character result kept the redirect at
+  its head. Results of `web_*`, `browser_*` and `mcp_*` are wrapped as untrusted after the hook runs.
+* **Sessions with no end.** A gateway that dies in a turn fires no hook, and a client killed from
+  outside (SIGTERM) left its turn running in the gateway for 20 minutes, so neither can be relied on
+  to end a session. The fold therefore reads `state.db` itself, from the Hermes home the session
+  ran under (a session's state keeps it, since `te fold` in a shell may be in another profile), and
+  a session's quiet time is taken from its own hooks. With no row and no copy to read, a fold leaves
+  the session pending for a week rather than marking it folded. A side call killed at its timeout
+  got no `ended_at` a day later.
+* **Compression** ran inside a turn (an auxiliary `compression` usage row) and kept the session's id;
+  the code also has a path that continues in a child, tested offline only.
+* **Install.** `hermes plugins install` scans what it fetched, and a source outside its catalog is
+  refused on a single critical finding, with no override but `plugins.scan_on_install: false`. This
+  repository gets 3 of 241, all in `experiments/`, the same from GitHub as from a local path; a
+  high finding (the `rm -rf ~/.tokeneconomizer` in `plugin/README.md`) is refused too, unless forced.
+  A tree of `tokeneconomizer/`, `plugin/hermes/` and `plugin/scripts/` with a `plugin.yaml` and a
+  loader at its root scanned clean, installed, and ran a session through a real gateway; Hermes lists
+  it once, so the manifest under `plugin/hermes/` is not a second plugin. `hermes plugins doctor`
+  runs no such scan: it passes on the repository.
+* **Tool pruning** is not offered. Config is per profile, project plugins are not loaded, and a
+  portable Agent Plugin carries no hooks. `llm_request` middleware did remove a tool from the wire
+  (20 to 19), and `sessions.tool_names` records each session's list, so it is a possible route.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
@@ -571,12 +626,18 @@ tell which are the repository's, and those in full.
 The state directory, like the agents' own session logs it is derived from, is private to you:
 the plugin creates it `0700` and its files `0600`, and tightens a looser one it finds.
 
+The plugin reads most agents' session logs where they are. Hermes's and opencode's have to be
+exported beside the state: opencode's export is the conversation as it stands; Hermes's holds the
+columns the fold reads, tool calls and results among them, with each prompt a placeholder and the
+model's replies left out, so a prompt's words stay in Hermes's own database. A tool's arguments and
+results are kept, and can repeat what a person wrote.
+
 Nothing leaves the machine but the model calls of the loop guard (its judge and nudge writer, on
 by default with the guard), of micro-skills (its proposer, when it is on), and, only when you run
 it, of `toolprune measure` on Claude Code. Those calls send
 **digests** — command templates, edited file basenames, error lines with paths and numbers
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
-`copilot -p` / `pi -p`), billed where your session is. The proposer keeps the digests of the last eight
+`copilot -p` / `pi -p` / `opencode run` / `hermes chat`), billed where your session is. The proposer keeps the digests of the last eight
 sessions with its state, raw commands and output capped, so that each run sees more than the
 session that just ended.
 
@@ -610,6 +671,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   session and side-call costs are reported as unavailable. Tool pruning is not implemented for
   Cursor. macOS and Linux only: Windows Cursor runs hooks through PowerShell, and the launcher
   is a POSIX shell script.
+* **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
+  runs, verified with a scripted model and one free real model. Its limits are listed in
+  `plugin/README.md`.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s

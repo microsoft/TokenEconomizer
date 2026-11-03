@@ -58,6 +58,10 @@ RESULT_CAP = 20000      # characters of a tool result the guard folds (errors li
 PROGRESS = "_progress"
 
 
+class FoldLater(Exception):
+    """A finished session's log cannot be had now but may be later: it stays unfolded."""
+
+
 def response_text(resp, cap=RESULT_CAP):
     """Best-effort text of a hook's `tool_response`, whatever shape the tool returned."""
     if resp is None:
@@ -192,11 +196,19 @@ class Host:
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
 
-    def complete(self, transcript_path, session_id, cwd=None):
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
         """The log to fold the finished session from: `transcript_path`, unless this host can
         fetch a whole one where the copy it was sent holds nothing (`cwd`: where the session
-        ran)."""
+        ran; `session`: its state). Raises `FoldLater` if a later fold may yet get it."""
         return transcript_path
+
+    def last_active(self, transcript_path, session):
+        """When a session that never said it ended last did anything (`session`: its state)."""
+        return os.path.getmtime(transcript_path)
+
+    def session_state(self, env):
+        """What a session's state keeps from the environment of its first hook."""
+        return {}
 
     def tool_usage(self, trace_path):
         return trace.tool_usage(trace_path)
@@ -440,7 +452,7 @@ class OpenCode(Host):
     EXPORT_TRIES = 3
     EXPORT_WAIT_S = 2.0
 
-    def complete(self, transcript_path, session_id, cwd=None):
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
         """The plugin's copy of the session, or, where it holds no prompt, opencode's own export
         written in its place. On 2.2.5 the copy the 2.x plugin records from events came out
         empty (#118); the fold runs after the session, when `opencode session export` (`opencode
@@ -644,6 +656,83 @@ class Cursor(Host):
         return (p or {}).get("status") == "completed"
 
 
+class Hermes(Host):
+    """Hermes Agent (NousResearch/hermes-agent), through the plugin in `plugin/hermes/`.
+
+    Hermes has no hook protocol of this shape -- its plugins are Python functions in the gateway
+    process that runs every session -- so the plugin speaks THIS one on Hermes's behalf, as the
+    opencode plugin does. What it sends:
+
+      * `prompt_id`, Hermes's own `turn_id`;
+      * `cwd`, the directory the session's row records, never the gateway's;
+      * `transcript_path`, where the fold writes the session's rows as JSON (`trace/hermes.py`);
+      * `tool_response = {content, status, error}`: the tool's result string as Hermes holds it,
+        which is read here for the tool's exit code;
+      * the session's origin in `TE_HERMES_MODE`: `oneshot` (`hermes -z`, `chat --oneshot`) or `cli`.
+    """
+    name = "hermes"
+    prompt_context = True              # the plugin returns it from `pre_llm_call`
+    # A hook has no verified way to reach the person's view, so the model passes the notice on.
+    relays_notices = True
+    # Hermes's docs (0.22.5): Ctrl+C on an empty prompt interrupts the agent, twice exits.
+    interrupt = "Press Ctrl+C to interrupt it."
+    end_run = "Press Ctrl+C to end the run."
+    # A session a fold cannot read is retried at each start in its repository for this long, then
+    # folded as unreadable, so one whose row was deleted is not retried for ever.
+    FOLD_RETRY_S = 7 * 86400
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_HERMES_MODE", "")).strip() == "oneshot"
+
+    def tool_call(self, p):
+        name, args = trace.hermes_tool(str(p.get("tool_name") or ""), p.get("tool_input"))
+        resp = p.get("tool_response")
+        resp = resp if isinstance(resp, dict) else {"content": resp}
+        text, code, _ = trace.hermes_result(resp.get("content"))
+        return name, args, response_text(text), code
+
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
+        """The session as `state.db` holds it now, so one that ended in mid-turn, with no turn's
+        end to copy it at, is folded too. The copy stays as it was if the row cannot be read;
+        with no copy either the fold waits, up to `FOLD_RETRY_S`: the database may be busy, or
+        this process, a `te fold` in a shell, in another Hermes profile than the session's."""
+        from .paths import state_root
+        from .sidecall import hermes_home
+        if not re.fullmatch(r"[\w-]+", session_id or ""):
+            return transcript_path
+        session = session or {}
+        path = transcript_path or os.path.join(state_root(), "hermes-sessions",
+                                               f"{session_id}.json")
+        db = os.path.join(session.get("hermes_home") or hermes_home(), "state.db")
+        if trace.hermes_export(db, session_id, path) or os.path.exists(path):
+            return path
+        if time.time() - self.last_active(path, session) < self.FOLD_RETRY_S:
+            raise FoldLater(session_id)
+        return transcript_path
+
+    def last_active(self, transcript_path, session):
+        """A running session has no log of its own to date, but every hook saves its state."""
+        return float(session.get("updated") or session.get("started") or 0)
+
+    def session_state(self, env):
+        from .sidecall import hermes_home
+        return {"hermes_home": hermes_home(env)}
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "hermes_trace.jsonl")
+        n = trace.hermes_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.hermes_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.hermes_session_usage(transcript_path)
+
+
 def copilot_home(env=None):
     env = os.environ if env is None else env
     return env.get("COPILOT_HOME") or os.path.join(os.path.expanduser("~"), ".copilot")
@@ -736,7 +825,7 @@ def _ancestor_args(limit=4):
 
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor}
+         "pi": Pi, "cursor": Cursor, "hermes": Hermes}
 
 
 def default_host(env=None, recent=None):

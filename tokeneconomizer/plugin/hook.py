@@ -1,6 +1,6 @@
 """The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
 
-    python -m tokeneconomizer.plugin.hook [--host claude|codex|copilot|opencode|pi]
+    python -m tokeneconomizer.plugin.hook [--host claude|codex|copilot|hermes|opencode|pi]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
