@@ -872,6 +872,7 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
                                                                           monkeypatch):
     import subprocess
     from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
     copilot_events(str(tmp_path / "cp" / "session-state" / "side1" / "events.jsonl"), [])
     seen = {}
@@ -1111,6 +1112,7 @@ def test_a_pi_reply_is_read_from_its_json_run():
 def test_a_pi_side_call_is_a_bare_run_on_the_persons_own_pi(monkeypatch):
     import subprocess
     from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
     calls = []
 
     def fake_run(cmd, **kw):
@@ -1143,6 +1145,7 @@ def test_a_pi_side_call_loads_the_provider_extensions_and_the_pi_the_person_name
     still loads an explicit `--extension`, and `--no-tools` keeps the extension's tools out."""
     import subprocess
     from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
     calls = []
 
     def fake_run(cmd, **kw):
