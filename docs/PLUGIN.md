@@ -536,6 +536,13 @@ was not.)
 * **Redirects.** Text appended to a result makes it invalid JSON, and Hermes then reads a failed call
   as `ok`. As a first key the status stays `error`, and a 50,690-character result kept the redirect at
   its head. Results of `web_*`, `browser_*` and `mcp_*` are wrapped as untrusted after the hook runs.
+* **Sessions with no end.** A gateway that dies in a turn fires no hook, and a client killed from
+  outside (SIGTERM) left its turn running in the gateway for 20 minutes, so neither can be relied on
+  to end a session. The fold therefore reads `state.db` itself, from the Hermes home the session
+  ran under (a session's state keeps it, since `te fold` in a shell may be in another profile), and
+  a session's quiet time is taken from its own hooks. With no row and no copy to read, a fold leaves
+  the session pending for a week rather than marking it folded. A side call killed at its timeout
+  got no `ended_at` a day later.
 * **Compression** ran inside a turn (an auxiliary `compression` usage row) and kept the session's id;
   the code also has a path that continues in a child, tested offline only.
 * **Install.** `hermes plugins install` scans what it fetched, and a source outside its catalog is

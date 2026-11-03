@@ -241,9 +241,9 @@ have not been tested yet.
 - **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
   from a live Agent session has not yet been verified.
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
-  model and one free real model, on the classic CLI and one-shot runs only. Learning without model
-  calls (`microskills=envfacts`) is verified there; `microskills=on` and a redirect reaching a real
-  model are not. Its other surfaces (the Ink TUI, the Desktop app, messaging platforms, cron) and
+  model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
+  redirect reaching a real model are verified there; the still-stuck notice reaching a person is
+  not. Its other surfaces (the Ink TUI, the Desktop app, messaging platforms, cron) and
   subagents are ignored, and tool pruning is not available. See
   [its limits](plugin/README.md#hermes-agent).
 

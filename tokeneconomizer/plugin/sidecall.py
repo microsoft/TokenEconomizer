@@ -405,6 +405,9 @@ HERMES_FLAGS = ("chat", "-Q", "--oneshot", "--source", HERMES_SOURCE, "--ignore-
                 "--max-turns", "1", "-t", "bot_room")
 HERMES_DELETE_TIMEOUT_S = 60
 HERMES_TITLE_WAIT_S = 3.0
+# A call killed at its timeout leaves a session with no end, which it will never get. By this long
+# after it, the session's one turn is over, so what it spent can be read.
+HERMES_ABANDON_S = 600
 _HERMES_ID_RE = re.compile(r"^session_id:\s*(\S+)", re.M)
 
 
@@ -448,10 +451,11 @@ def _hermes_ledger():
     return Store(os.path.join(state_root(), "hosts", "hermes"))
 
 
-def _hermes_charge(session_id, wait_s=None):
+def _hermes_charge(session_id, wait_s=None, abandoned=False):
     """What a finished side call's session spent, in effective tokens, every usage row of it: the
     reply's and the title Hermes generates for it, which may be priced on another model. None
-    while the session has not ended or cannot be read: it is then not safe to delete."""
+    while the session has not ended or cannot be read: it is then not safe to delete. An
+    `abandoned` session will not end, and is read as it stands."""
     import time
     wait_s = HERMES_TITLE_WAIT_S if wait_s is None else wait_s
     db, deadline = _hermes_db(), time.time() + wait_s
@@ -463,7 +467,7 @@ def _hermes_charge(session_id, wait_s=None):
         if (ended and titled) or time.time() >= deadline:
             break
         time.sleep(0.25)
-    if not ended:
+    if not ended and not (abandoned and row):
         return None
     total = 0.0
     for u in usage:
@@ -485,12 +489,12 @@ def _hermes_delete(session_id, cli):
         _hermes_db())
 
 
-def _hermes_settle(session_id, cli, charged=False, wait_s=None):
+def _hermes_settle(session_id, cli, charged=False, wait_s=None, abandoned=False):
     """Charge a side call's session, then delete it: in that order, since its usage rows go with
     it. (effective tokens spent now, or 0; whether anything is left to do later)."""
     spent = 0.0
     if not charged:
-        spent = _hermes_charge(session_id, wait_s)
+        spent = _hermes_charge(session_id, wait_s, abandoned)
         if spent is None:
             return 0.0, {"charged": False}
     return spent, (None if _hermes_delete(session_id, cli) else {"charged": True})
@@ -507,8 +511,9 @@ def _hermes_defer(session_id, left):
 
 def _hermes_settle_earlier(cli):
     """Settle the sessions an earlier call left, so what they spent is charged to this one: a
-    call killed at its timeout may still have been running, and a delete may have failed. A
-    session that is gone, or was never readable and is days old, is dropped."""
+    call killed at its timeout may still have been running, and a delete may have failed. One
+    with no end by `HERMES_ABANDON_S` later is charged as it stands. A session that is gone, or
+    was never readable and is days old, is dropped."""
     import time
     store = _hermes_ledger()
     with store.locked("sidecalls"):
@@ -519,7 +524,9 @@ def _hermes_settle_earlier(cli):
     for sid, entry in doc.items():
         if trace.hermes_session_row(_hermes_db(), sid)[0] is None:
             continue
-        now, left = _hermes_settle(sid, cli, charged=bool(entry.get("charged")), wait_s=0)
+        abandoned = time.time() - float(entry.get("at") or 0) >= HERMES_ABANDON_S
+        now, left = _hermes_settle(sid, cli, charged=bool(entry.get("charged")), wait_s=0,
+                                   abandoned=abandoned)
         spent += now
         if left and time.time() - float(entry.get("at") or 0) < 7 * 86400:
             _hermes_defer(sid, dict(left, at=entry.get("at")))

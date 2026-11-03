@@ -14,13 +14,14 @@ levers. All of the mechanism logic lives in the dispatcher; this file only trans
                                                     the above, first a SessionStart
     transform_tool_result     -> PostToolUse        the guard; the only tool hook whose answer the
                                                     model reads. It runs before `post_tool_call`
-    on_session_end            -> Stop               fires after every TURN despite its name; the
-                                                    session is exported, and a turn cut short sends
-                                                    no Stop, so it cannot feed the envelope
+    on_session_end            -> Stop               fires after every TURN despite its name; a
+                                                    turn cut short sends no Stop, so it cannot feed
+                                                    the envelope
     on_session_end (one-shot),
     on_session_finalize       -> SessionEnd         a detached fold. `hermes -z` sends no finalize,
                                                     nor does a killed session: the next session's
-                                                    start folds it once its export has gone quiet
+                                                    start folds it once its hooks have gone quiet.
+                                                    The fold reads the session from `state.db`
 
 One gateway serves every session and every repository, and its own directory and environment
 belong to neither, so everything about a session is read from its row in `state.db`, per session.
@@ -57,15 +58,6 @@ SECTION_ID = "tokeneconomizer.facts"
 # has finished with a session, so these are capped rather than cleared.
 MAX_IGNORED = 4096
 MAX_ENDED = 4096
-
-# The export names what it keeps: a session's row also holds its title, a description of its last
-# activity and its errors, and its messages their reasoning, all in the person's or the model's words,
-# and a later Hermes can add a column.
-INFO_FIELDS = ("id", "source", "created_source", "cwd", "model", "parent_session_id", "started_at",
-               "ended_at", "end_reason")
-MESSAGE_FIELDS = ("role", "content", "tool_call_id", "tool_calls", "tool_name", "timestamp",
-                  "message_uid", "_compressed_summary")
-PROMPT = "[Hermes prompt]"
 
 # A redirect goes first in the tool's JSON: the result stays the object Hermes and the model expect
 # (appended text made Hermes read a failed call as `ok`), and a result too long for the context is
@@ -142,54 +134,6 @@ def lineage(con, session_id):
         parent = _row(con, row["parent_session_id"]) if row.get("parent_session_id") else None
         row = parent if parent and parent.get("end_reason") == "compression" else None
     return rows
-
-
-def _kept(row, fields):
-    return {k: (row[k] if not isinstance(row[k], bytes) else None) for k in fields if k in row}
-
-
-def _private(message):
-    """A message as the export holds it. A person's prompt is counted, never kept, and what the
-    model said is not read at all. A tool's arguments and result stay: they are what is learned."""
-    row = _kept(message, MESSAGE_FIELDS)
-    if row.get("role") == "tool":
-        return row
-    typed = (row.get("role") == "user" and not row.get("_compressed_summary")
-             and str(row.get("content") or "").strip())
-    return dict(row, content=PROMPT if typed else "")
-
-
-def export(home, session_id, path):
-    """Write the session's rows as the JSON `trace/hermes.py` reads; whether it was written."""
-    try:
-        con = _connect(home)
-        try:
-            chain = lineage(con, session_id)
-            if not chain:
-                return False
-            ids = [r["id"] for r in chain]
-            marks = ",".join("?" * len(ids))
-            messages = con.execute(f"SELECT * FROM messages WHERE session_id IN ({marks}) "
-                                   "ORDER BY id", ids).fetchall()
-            # What a subagent spent is the session's; its work is its own session.
-            usage = con.execute(
-                f"SELECT * FROM session_model_usage WHERE session_id IN ({marks}) OR session_id "
-                f"IN (SELECT id FROM sessions WHERE parent_session_id IN ({marks}) "
-                "AND source = 'subagent')", ids + ids).fetchall()
-        finally:
-            con.close()
-        doc = {"info": _kept(chain[-1], INFO_FIELDS),
-               "messages": [_private(dict(m)) for m in messages],
-               "usage": [dict(u) for u in usage]}
-        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w",
-                  encoding="utf-8") as fh:
-            json.dump(doc, fh)
-        os.replace(tmp, path)
-        return True
-    except (OSError, ValueError, TypeError, sqlite3.Error):
-        return False
 
 
 def with_redirect(result, text):
@@ -289,9 +233,6 @@ class Bridge:
         out = self._send(rec, "SessionStart", source=source)
         return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
-    def _export(self, rec):
-        return export(self.home(), rec["id"], self._payload(rec, "")["transcript_path"])
-
     # -- Hermes's hooks ----------------------------------------------------------------------
     def section(self, info):
         rec = self.session((info or {}).get("session_id"))
@@ -349,7 +290,6 @@ class Bridge:
         if rec is None or not rec["lock"].acquire(timeout=LOCK_TIMEOUT_S):
             return
         try:
-            self._export(rec)
             if completed and not interrupted and not failed:
                 self._send(rec, "Stop", prompt_id=str(turn_id), stop_hook_active=False)
             if rec["mode"] == "oneshot":
@@ -368,7 +308,6 @@ class Bridge:
         if rec is None:
             return None
         with rec["lock"]:
-            self._export(rec)
             self._end(rec, str(reason or "finalize"))
             notices, rec["notices"] = rec["notices"], []
         with self.guard:

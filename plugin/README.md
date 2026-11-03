@@ -405,12 +405,15 @@ is off by default: `te --host hermes config set microskills=on` (or `envfacts`, 
 so a `TE_` variable you set there (`TE_DISABLE=1`, `TE_PYTHON`, ...) reaches the plugin only once
 the gateway restarts from a shell where it is set. Settings made with `te config` need no restart.
 
-**How it hands a session over.** After every turn the plugin copies the session's rows from
+**How it hands a session over.** When a session is folded, the plugin copies its rows from
 Hermes's `state.db`, read-only, to `~/.tokeneconomizer/hermes-sessions/<id>.json`, which is private
 to you and holds the tool calls and their results; a prompt is kept as a placeholder, and what the
-model replied is not kept. A one-shot run is folded when its turn
-ends. A session in the classic CLI is folded when Hermes finalizes it, or, if it never does (a
-killed terminal), by the next session's start once its export has been quiet for 10 minutes.
+model replied is not kept. A one-shot run is folded when its turn ends. A session in the classic CLI
+is folded when Hermes finalizes it. One that never reaches an end (a killed terminal, a gateway that
+died in a turn) is folded by the next session's start in that repository, once its hooks have been
+quiet for 10 minutes. A session whose rows cannot be read then stays unfolded and is tried again at
+each later start in that repository, for a week after its last hook; after that it is recorded as
+unreadable.
 
 **Which repository.** Each session's own row names its directory, so sessions in different
 repositories can run at once in the one gateway. A session with no directory on this machine is
@@ -423,7 +426,8 @@ and loads no rules or memory. It runs in your gateway, from a background job, an
 sessions you run yourself with `--source tool` are not followed either. Hermes also generates a
 title for each call: what the call and its title spent is charged to the ledger, and then the
 session is deleted. One that cannot be read yet, after a timeout, is kept and settled by a later
-call, so it can sit in `hermes sessions list --source tool` until then.
+call, and one that still has no end 10 minutes after the timeout is charged for what it spent so
+far, so either can sit in `hermes sessions list --source tool` until the next call.
 
 **A redirect** arrives as a first key, `tokeneconomizer_redirect`, in the tool's JSON result, which
 stays valid JSON with every other byte as it was. Hermes marks `web_*`, `browser_*` and `mcp_*`
@@ -445,12 +449,23 @@ a repository where `python -m pytest` works, and the next session's first test c
 working form; a side call answered, its reply and title were charged, and its session was deleted;
 the judge ran on a real turn and spared it.
 
+Later, in forced failure loops with a seeded envelope and lowered thresholds: the judge called turns
+stuck at 0.80 and 0.90 and spared one at 0.62, a redirect it wrote and two from the backstop reached
+the agent in tool results, and the still-stuck notice fired twice. With `microskills=on`, the
+proposer ran after the 2nd and 5th sessions and recorded the working test command. A session cut
+off in mid-turn by a gateway that died, and two timed-out side calls, were recovered as described above.
+
 **Not covered:**
 
-* With a real model: a redirect reaching the agent, the still-stuck notice, and the `microskills=on`
-  proposer. The real judge has only spared turns so far, and the notice has never fired.
-* `/new`, Ctrl+D and a killed terminal, and with them the fold at a later start. A compression that
-  changes the session's id is tested offline only; the ones seen kept the id.
+* Whether a redirect changes a real model's course. In the loops above the agent was told to keep
+  repeating, or ran beside another session in one directory.
+* The still-stuck notice reaching a person: in both turns where it fired the model did not repeat it
+  while it worked, and both were cut off before a final reply. Killing `hermes -z` from outside
+  (SIGTERM) left its turn running in the gateway; whether the notice's Ctrl+C stops one is untested.
+* Facts in a real session's system prompt are seen in the plugin's log only: `state.db` held no
+  `system_prompt` for those sessions. A scripted run shows them in the request.
+* `/new`, Ctrl+D and a killed terminal. A compression that changes the session's id is tested
+  offline only; the ones seen kept the id.
 * A session resumed after it was folded: its later turns are neither learned from nor priced, since
   a session folds once. That rule is shared by every agent. It matters more here, because a one-shot
   run folds as soon as its turn ends, so `hermes -c` after `hermes -z` always lands on it.

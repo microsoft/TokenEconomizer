@@ -1,14 +1,14 @@
 """Hermes Agent (NousResearch/hermes-agent): a session read from its `state.db`.
 
 Hermes keeps sessions in SQLite, in `<HERMES_HOME>/state.db`; its schema is documented in the
-Hermes developer guide (session storage). At the end of every turn the plugin in `plugin/hermes/`
-copies a session's rows into one JSON file beside the other state, and this module reads that
-file:
+Hermes developer guide (session storage). A fold copies a session's rows into one JSON file beside
+the other state (`hermes_export`), from whatever the session left behind, a session its gateway
+lost in mid-turn included, and this module reads that file:
 
     {"info": {<columns of the sessions row>}, "messages": [<columns of its rows>],
      "usage": [<usage rows>]}
 
-The plugin leaves out the words of the conversation: a prompt is `[Hermes prompt]`, which is enough
+The copy leaves out the words of the conversation: a prompt is `[Hermes prompt]`, which is enough
 to count it, and the rest of a message's `content` is empty unless a tool returned it.
 
 `messages` is the session's whole lineage, oldest first: compression can end a session and go on
@@ -38,6 +38,14 @@ _TOOL_NAMES = {"terminal": "bash", "read_file": "read", "write_file": "write", "
                "search_files": "grep"}
 _PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.M)
 _WRAPPER = "<untrusted_tool_result"
+# The export names what it keeps: a session's row also holds its title, a description of its last
+# activity and its errors, and its messages their reasoning, all in the person's or the model's words,
+# and a later Hermes can add a column.
+INFO_FIELDS = ("id", "source", "created_source", "cwd", "model", "parent_session_id", "started_at",
+               "ended_at", "end_reason")
+MESSAGE_FIELDS = ("role", "content", "tool_call_id", "tool_calls", "tool_name", "timestamp",
+                  "message_uid", "_compressed_summary")
+PROMPT = "[Hermes prompt]"
 
 
 def hermes_tool(name, args):
@@ -210,6 +218,79 @@ def _connect(db_path):
     con = sqlite3.connect(pathlib.Path(db_path).as_uri() + "?mode=ro", uri=True, timeout=5)
     con.row_factory = sqlite3.Row
     return con
+
+
+def _row(con, session_id):
+    row = con.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _lineage(con, session_id):
+    """The session's rows, oldest first, from any id of it. Compression can end a session and go
+    on in a child, with a new id, and the plugin names a session by the first."""
+    tip, seen = _row(con, session_id), set()
+    while tip and tip.get("end_reason") == "compression" and tip["id"] not in seen:
+        seen.add(tip["id"])
+        child = con.execute("SELECT id FROM sessions WHERE parent_session_id = ? AND source IS NOT "
+                            "'subagent' ORDER BY started_at DESC LIMIT 1", (tip["id"],)).fetchone()
+        if not child:
+            break
+        tip = _row(con, child["id"])
+    rows, seen, row = [], set(), tip
+    while row and row["id"] not in seen:
+        seen.add(row["id"])
+        rows.insert(0, row)
+        parent = _row(con, row["parent_session_id"]) if row.get("parent_session_id") else None
+        row = parent if parent and parent.get("end_reason") == "compression" else None
+    return rows
+
+
+def _kept(row, fields):
+    return {k: (row[k] if not isinstance(row[k], bytes) else None) for k in fields if k in row}
+
+
+def _private(message):
+    """A message as the export holds it. A person's prompt is counted, never kept, and what the
+    model said is not read at all. A tool's arguments and result stay: they are what is learned."""
+    row = _kept(message, MESSAGE_FIELDS)
+    if row.get("role") == "tool":
+        return row
+    typed = (row.get("role") == "user" and not row.get("_compressed_summary")
+             and str(row.get("content") or "").strip())
+    return dict(row, content=PROMPT if typed else "")
+
+
+def hermes_export(db_path, session_id, path):
+    """Write a session's rows as the JSON this module reads; whether it was written."""
+    try:
+        con = _connect(db_path)
+        try:
+            chain = _lineage(con, session_id)
+            if not chain:
+                return False
+            ids = [r["id"] for r in chain]
+            marks = ",".join("?" * len(ids))
+            messages = con.execute(f"SELECT * FROM messages WHERE session_id IN ({marks}) "
+                                   "ORDER BY id", ids).fetchall()
+            # What a subagent spent is the session's; its work is its own session.
+            usage = con.execute(
+                f"SELECT * FROM session_model_usage WHERE session_id IN ({marks}) OR session_id "
+                f"IN (SELECT id FROM sessions WHERE parent_session_id IN ({marks}) "
+                "AND source = 'subagent')", ids + ids).fetchall()
+        finally:
+            con.close()
+        doc = {"info": _kept(chain[-1], INFO_FIELDS),
+               "messages": [_private(dict(m)) for m in messages],
+               "usage": [dict(u) for u in usage]}
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w",
+                  encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.replace(tmp, path)
+        return True
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        return False
 
 
 def hermes_session_row(db_path, session_id):

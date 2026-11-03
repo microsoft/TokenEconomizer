@@ -191,7 +191,7 @@ def _conversation(home, sid="s1", cwd="/w/repo"):
 def test_an_export_reads_through_the_trace_seam(home, tmp_path):
     _conversation(home)
     path = str(tmp_path / "x" / "s1.json")
-    assert plugin.export(home.path, "s1", path)
+    assert trace.hermes_export(home.db, "s1", path)
     assert trace.hermes_session_info(path)["cwd"] == "/w/repo"
     assert "system_prompt" not in trace.hermes_session_info(path)
     out = str(tmp_path / "t.jsonl")
@@ -215,7 +215,7 @@ def test_an_export_holds_no_words_of_the_conversation_and_reads_the_same(home, t
                  tool_call_id="c-terminal", tool_name="terminal")
     home.message("s", "user", "SECRET second", message_uid="u2")
     path = str(tmp_path / "s.json")
-    assert plugin.export(home.path, "s", path)
+    assert trace.hermes_export(home.db, "s", path)
     assert "SECRET" not in open(path, encoding="utf-8").read()
     assert trace.hermes_prompt_count(path) == 2
     out = str(tmp_path / "t.jsonl")
@@ -232,7 +232,7 @@ def test_a_session_is_priced_with_its_title_and_its_subagents(home, tmp_path):
     home.session("other", parent="s1", reason=None)     # a branch of it is another session
     home.usage("other", fresh=9999, cached=0, out=9999)
     path = str(tmp_path / "s1.json")
-    plugin.export(home.path, "s1", path)
+    trace.hermes_export(home.db, "s1", path)
     u = trace.hermes_session_usage(path)
     # input excludes the cache, as Hermes stores it; the title call is the session's spending
     assert (u["input_tokens"], u["cache_read_input_tokens"], u["output_tokens"]) == (2900, 4200, 75)
@@ -253,11 +253,25 @@ def test_a_rotated_session_is_read_as_one_with_each_call_once(home, tmp_path):
     home.message("tip", "user", "and again", message_uid="u2")
     home.usage("tip")
     path = str(tmp_path / "root.json")
-    assert plugin.export(home.path, "tip", path)
+    assert trace.hermes_export(home.db, "tip", path)
     assert trace.hermes_session_info(path)["id"] == "tip"
     assert trace.hermes_prompt_count(path) == 2
     assert trace.hermes_session_to_claude(path, str(tmp_path / "t.jsonl")) == 1
     assert trace.hermes_session_usage(path)["requests"] == 2
+
+
+def test_a_rotated_session_is_read_whole_from_the_id_the_plugin_names_it_by(home, tmp_path):
+    home.session("root", cwd="/w/repo", reason="compression", ended=1.0)
+    home.message("root", "user", "fix it", message_uid="u1")
+    home.session("kid", source="subagent", created="subagent", parent="root")
+    home.session("tip", cwd="/w/repo", parent="root")
+    home.message("tip", "user", "and again", message_uid="u2")
+    home.message("tip", "assistant", tool_calls=_call("terminal", {"command": "ls"}))
+    path = str(tmp_path / "root.json")
+    assert trace.hermes_export(home.db, "root", path)
+    assert trace.hermes_session_info(path)["id"] == "tip"
+    assert trace.hermes_prompt_count(path) == 2
+    assert trace.hermes_session_to_claude(path, str(tmp_path / "t.jsonl")) == 1
 
 
 def test_an_unreadable_export_is_no_session(tmp_path):
@@ -352,7 +366,7 @@ def test_a_session_runs_every_event_from_its_recorded_directory(bridge, home, tm
     tool = bridge.fake.calls[2]
     assert (tool["prompt_id"], tool["tool_name"], tool["tool_use_id"]) == ("t1", "terminal", "c1")
     assert tool["tool_input"] == {"command": "ls"}
-    assert os.path.exists(tool["transcript_path"])        # the export the fold will read
+    assert tool["transcript_path"].endswith(os.path.join("hermes-sessions", "s.json"))
 
 
 def test_a_resumed_session_starts_at_its_prompt_and_gets_no_facts_twice(bridge, home, tmp_path):
@@ -705,6 +719,26 @@ def test_a_timed_out_side_call_keeps_its_session_until_a_later_call_settles_it(h
 
 
 @pytest.mark.real_sidecalls
+def test_a_timed_out_side_call_that_never_ends_is_charged_and_deleted_once_abandoned(
+        home, side, monkeypatch):
+    late = FakeCli(home, sid="late", timeout=True)
+    monkeypatch.setattr(sidecall.subprocess, "run", late)
+    sidecall.hermes_call("first", cli="hermes", timeout=1)
+    soon = FakeCli(home, sid="soon")
+    monkeypatch.setattr(sidecall.subprocess, "run", soon)
+    sidecall.hermes_call("second", cli="hermes")
+    assert not [e for e in soon.log if e[1] == "late"]           # it may still be running
+    monkeypatch.setattr(sidecall, "HERMES_ABANDON_S", 0)
+    after = FakeCli(home, sid="after")
+    monkeypatch.setattr(sidecall.subprocess, "run", after)
+    _, eff = sidecall.hermes_call("third", cli="hermes")
+    assert ("delete", "late", 2) in after.log
+    assert sidecall.trace.hermes_session_row(home.db, "late")[0] is None
+    assert eff == pytest.approx(2 * _eff((400, 600, 10), (100, 0, 5)))
+    assert (sidecall._hermes_ledger().read("sidecalls.json") or {}) == {}
+
+
+@pytest.mark.real_sidecalls
 def test_a_failed_delete_is_retried_and_charged_once(home, side, monkeypatch):
     stuck = FakeCli(home, sid="stuck", delete_ok=False)
     monkeypatch.setattr(sidecall.subprocess, "run", stuck)
@@ -778,12 +812,108 @@ def test_the_plugin_finds_its_launcher_through_a_link(tmp_path):
     assert out.stdout.strip() == "True", out.stderr
 
 
+def test_the_fold_reads_the_session_from_its_row_and_keeps_a_copy_it_cannot_replace(
+        home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", home.path)
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    host = hosts.detect({}, hint="hermes")
+    _conversation(home, "s")
+    path = str(tmp_path / "te" / "hermes-sessions" / "s.json")
+    assert host.complete(None, "s") == path and trace.hermes_prompt_count(path) == 1
+    home.message("s", "user", "a second prompt", message_uid="u2")
+    assert host.complete(path, "s") == path and trace.hermes_prompt_count(path) == 2
+    assert host.complete(path, "no-such-session") == path
+    assert trace.hermes_prompt_count(path) == 2
+    assert host.complete("/x/y.json", "../s") == "/x/y.json"
+
+
+def test_a_session_lost_in_mid_turn_is_folded_by_a_later_start(home, tmp_path, monkeypatch):
+    """A gateway that dies in a turn fires no end hook, so the session has no export at all."""
+    from tokeneconomizer.plugin import fold
+    from tokeneconomizer.plugin.context import LiveContext
+    monkeypatch.setenv("HERMES_HOME", home.path)
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    env = dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "te"))
+    repo = _repo(tmp_path / "repo")
+    _conversation(home, "lost", cwd=repo)
+    ctx = LiveContext.build(hosts.detect({}, hint="hermes"), repo, env)
+    now = time.time()
+    tp = str(tmp_path / "te" / "hermes-sessions" / "lost.json")
+    state = {"session_id": "lost", "started": now - 100, "updated": now, "transcript": tp}
+    ctx.store.write(os.path.join("sessions", "lost.json"), state)
+    assert not os.path.exists(tp)
+    assert fold.pending_sessions(ctx, now=now) == []               # it may still be running
+    assert fold.pending_sessions(ctx, now=now + fold.STALE_S) == ["lost"]
+    record = fold.fold_session(ctx, "lost")
+    assert record["prompts"] == 1 and record["requests"] == 7 and not record.get("error")
+    assert "fix it" not in open(tp, encoding="utf-8").read()
+
+
+def _unexported(home, tmp_path, monkeypatch, **state):
+    """A context whose session `lost` has rows in `home` and no export, from a process whose
+    `HERMES_HOME` is another profile's."""
+    from tokeneconomizer.plugin.context import LiveContext
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "another-profile"))
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    repo = _repo(tmp_path / "repo")
+    _conversation(home, "lost", cwd=repo)
+    ctx = LiveContext.build(hosts.detect({}, hint="hermes"), repo,
+                            dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "te")))
+    tp = str(tmp_path / "te" / "hermes-sessions" / "lost.json")
+    ctx.store.write(os.path.join("sessions", "lost.json"), dict(
+        {"session_id": "lost", "started": time.time(), "updated": time.time(), "transcript": tp},
+        **state))
+    return ctx
+
+
+def test_a_session_a_fold_cannot_read_stays_pending_until_one_can(home, tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import fold
+    ctx = _unexported(home, tmp_path, monkeypatch)
+    assert fold.fold_session(ctx, "lost") is None
+    assert "lost" not in (ctx.store.read("folded.json") or {})
+    assert not os.path.exists(ctx.store.path("ledger.jsonl"))
+    assert fold.pending_sessions(ctx, now=time.time() + fold.STALE_S) == ["lost"]
+    monkeypatch.setenv("HERMES_HOME", home.path)
+    record = fold.fold_session(ctx, "lost")
+    assert record["prompts"] == 1 and not record.get("error")
+    assert "lost" in ctx.store.read("folded.json")
+
+
+def test_a_fold_reads_the_home_the_session_ran_under(home, tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import fold
+    ctx = _unexported(home, tmp_path, monkeypatch, hermes_home=home.path)
+    record = fold.fold_session(ctx, "lost")
+    assert record["prompts"] == 1 and not record.get("error")
+
+
+def test_a_session_unreadable_past_its_retries_is_folded_as_unreadable(home, tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import fold
+    ctx = _unexported(home, tmp_path, monkeypatch,
+                      updated=time.time() - hosts.Hermes.FOLD_RETRY_S - 1)
+    assert fold.fold_session(ctx, "lost")["error"] == "transcript unreadable"
+    assert fold.pending_sessions(ctx, now=time.time() + fold.STALE_S) == []
+
+
+def test_a_session_records_the_hermes_home_its_hooks_run_under(tmp_path):
+    import io
+    from tokeneconomizer.plugin import hook
+    repo = _repo(tmp_path / "repo")
+    env = dict(os.environ, HERMES_HOME="/profiles/work", TE_FOLD_SYNC="1",
+               TOKENECONOMIZER_HOME=str(tmp_path / "te"))
+    payload = {"hook_event_name": "SessionStart", "session_id": "s", "cwd": repo,
+               "source": "startup"}
+    hook.main(["--host", "hermes"], io.StringIO(json.dumps(payload)), io.StringIO(), env)
+    found = list((tmp_path / "te").rglob(os.path.join("sessions", "s.json")))
+    assert len(found) == 1
+    assert json.loads(found[0].read_text(encoding="utf-8"))["hermes_home"] == "/profiles/work"
+
+
 def test_a_hermes_session_is_folded_after_the_transcript_cwd_the_repository_reads(home, tmp_path):
     """`repos` learns where a session started from the first `cwd` in its log."""
     from tokeneconomizer.plugin import repos
     _conversation(home, "s", cwd="/w/repo")
     path = str(tmp_path / "s.json")
-    plugin.export(home.path, "s", path)
+    trace.hermes_export(home.db, "s", path)
     assert repos.session_cwd({"transcript": path}) == "/w/repo"
 
 

@@ -28,8 +28,9 @@ from .. import trace
 from . import accounting, denylist, sidecall
 from . import adapter as live_adapter
 from .adapter import LiveAdapter, load_catalog
+from .hosts import FoldLater
 
-STALE_S = 600           # an unfolded session whose transcript is quiet this long is over
+STALE_S = 600          # an unfolded session whose transcript is quiet this long is over
 # A fold never runs in a hook -- it is a detached process, or `te fold` -- so it can wait for
 # another fold to finish, up to one paid side call, and must never proceed without the lock:
 # two folds of one session would both find it unfolded and count it twice, in every mechanism's
@@ -356,7 +357,8 @@ CODEX_HIGH_RISK = frozenset({"image_media"})
 
 
 def fold_session(ctx, session_id, transcript_path=None):
-    """Fold one finished session. Returns the ledger record, or None if already folded."""
+    """Fold one finished session. Returns the ledger record, or None if already folded or left
+    pending for a later fold."""
     sess_name = os.path.join("sessions", f"{session_id}.json")
     with ctx.store.locked("fold", timeout=FOLD_LOCK_WAIT_S) as got:
         if not got:
@@ -365,8 +367,11 @@ def fold_session(ctx, session_id, transcript_path=None):
         if session_id in folded:
             return None
         sess = ctx.store.read(sess_name) or {}
-        transcript = ctx.host.complete(transcript_path or sess.get("transcript"), session_id,
-                                       sess.get("cwd") or ctx.repo.root)
+        try:
+            transcript = ctx.host.complete(transcript_path or sess.get("transcript"), session_id,
+                                           sess.get("cwd") or ctx.repo.root, sess)
+        except FoldLater:
+            return None
         record = {"kind": "session", "session_id": session_id, "host": ctx.host.name,
                   "repo": ctx.repo.label, "folded_at": time.time(),
                   "started": sess.get("started"), "ended": sess.get("ended"),
@@ -443,7 +448,7 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
         sess = ctx.store.read(os.path.join("sessions", name)) or {}
         tp = sess.get("transcript") or ""
         try:
-            quiet = now - os.path.getmtime(tp) >= stale_s
+            quiet = now - ctx.host.last_active(tp, sess) >= stale_s
         except OSError:
             quiet = False
         if sess.get("ended") or quiet:
