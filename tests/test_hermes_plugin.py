@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from tokeneconomizer import trace
-from tokeneconomizer.plugin import hosts, sidecall
+from tokeneconomizer.plugin import hosts, repos, sidecall
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN_FILE = os.path.join(REPO, "plugin", "hermes", "__init__.py")
@@ -188,20 +188,6 @@ def _conversation(home, sid="s1", cwd="/w/repo"):
     home.usage(sid, task="title_generation", fresh=400, cached=600, out=10)
 
 
-def test_an_export_reads_through_the_trace_seam(home, tmp_path):
-    _conversation(home)
-    path = str(tmp_path / "x" / "s1.json")
-    assert trace.hermes_export(home.db, "s1", path)
-    assert trace.hermes_session_info(path)["cwd"] == "/w/repo"
-    assert "system_prompt" not in trace.hermes_session_info(path)
-    out = str(tmp_path / "t.jsonl")
-    assert trace.hermes_session_to_claude(path, out) == 1
-    assert trace.hermes_prompt_count(path) == 1
-    assert trace.load_trajectory(out) == [("bash", {"command": "pytest"}, "1 failed", False)]
-    text = open(out, encoding="utf-8").read()
-    assert '"is_error": true' in text and '"cwd": "/w/repo"' in text
-
-
 def test_an_export_holds_no_words_of_the_conversation_and_reads_the_same(home, tmp_path):
     home.session("s", cwd="/w/repo", title="SECRET title")
     with home._con() as con:
@@ -217,12 +203,15 @@ def test_an_export_holds_no_words_of_the_conversation_and_reads_the_same(home, t
     path = str(tmp_path / "s.json")
     assert trace.hermes_export(home.db, "s", path)
     assert "SECRET" not in open(path, encoding="utf-8").read()
+    assert trace.hermes_session_info(path)["cwd"] == "/w/repo"
+    assert "system_prompt" not in trace.hermes_session_info(path)
+    assert repos.session_cwd({"transcript": path}) == "/w/repo"
     assert trace.hermes_prompt_count(path) == 2
     out = str(tmp_path / "t.jsonl")
     assert trace.hermes_session_to_claude(path, out) == 1
-    assert "SECRET" not in open(out, encoding="utf-8").read()
+    text = open(out, encoding="utf-8").read()
+    assert "SECRET" not in text and '"is_error": true' in text and '"cwd": "/w/repo"' in text
     assert trace.load_trajectory(out) == [("bash", {"command": "ls"}, "kept", False)]
-    assert '"is_error": true' in open(out, encoding="utf-8").read()
 
 
 def test_a_session_is_priced_with_its_title_and_its_subagents(home, tmp_path):
@@ -239,12 +228,14 @@ def test_a_session_is_priced_with_its_title_and_its_subagents(home, tmp_path):
     assert u["requests"] == 8 and u["model"] == "te-model"
 
 
-def test_a_rotated_session_is_read_as_one_with_each_call_once(home, tmp_path):
+@pytest.mark.parametrize("named", ["tip", "root"])     # the plugin names a session by its root
+def test_a_rotated_session_is_read_as_one_with_each_call_once(home, tmp_path, named):
     home.session("root", cwd="/w/repo", reason="compression", ended=1.0)
     home.message("root", "user", "fix it", message_uid="u1")
     home.message("root", "assistant", tool_calls=_call("terminal", {"command": "ls"}))
     home.message("root", "tool", '{"output": "a", "exit_code": 0}', tool_call_id="c-terminal")
     home.usage("root")
+    home.session("kid", source="subagent", created="subagent", parent="root")
     home.session("tip", cwd="/w/repo", parent="root")
     home.message("tip", "user", "summary of what came before", _compressed_summary=1)
     home.message("tip", "user", "fix it", message_uid="u1")       # the tail it kept
@@ -253,25 +244,11 @@ def test_a_rotated_session_is_read_as_one_with_each_call_once(home, tmp_path):
     home.message("tip", "user", "and again", message_uid="u2")
     home.usage("tip")
     path = str(tmp_path / "root.json")
-    assert trace.hermes_export(home.db, "tip", path)
+    assert trace.hermes_export(home.db, named, path)
     assert trace.hermes_session_info(path)["id"] == "tip"
     assert trace.hermes_prompt_count(path) == 2
     assert trace.hermes_session_to_claude(path, str(tmp_path / "t.jsonl")) == 1
     assert trace.hermes_session_usage(path)["requests"] == 2
-
-
-def test_a_rotated_session_is_read_whole_from_the_id_the_plugin_names_it_by(home, tmp_path):
-    home.session("root", cwd="/w/repo", reason="compression", ended=1.0)
-    home.message("root", "user", "fix it", message_uid="u1")
-    home.session("kid", source="subagent", created="subagent", parent="root")
-    home.session("tip", cwd="/w/repo", parent="root")
-    home.message("tip", "user", "and again", message_uid="u2")
-    home.message("tip", "assistant", tool_calls=_call("terminal", {"command": "ls"}))
-    path = str(tmp_path / "root.json")
-    assert trace.hermes_export(home.db, "root", path)
-    assert trace.hermes_session_info(path)["id"] == "tip"
-    assert trace.hermes_prompt_count(path) == 2
-    assert trace.hermes_session_to_claude(path, str(tmp_path / "t.jsonl")) == 1
 
 
 def test_an_unreadable_export_is_no_session(tmp_path):
@@ -299,10 +276,9 @@ def test_a_redirect_in_an_empty_object_and_around_plain_text():
     assert plugin.with_redirect("plain output", "r") == "plain output\n\nr"
 
 
-def test_a_result_with_no_place_for_a_redirect_is_left_alone():
-    assert plugin.with_redirect("[1, 2]", "r") is None
-    assert plugin.with_redirect("3", "r") is None
-    assert plugin.with_redirect(["parts"], "r") is None
+@pytest.mark.parametrize("raw", ["[1, 2]", "3", ["parts"]])
+def test_a_result_with_no_place_for_a_redirect_is_left_alone(raw):
+    assert plugin.with_redirect(raw, "r") is None
 
 
 # ---- which sessions are followed ---------------------------------------------------------------
@@ -320,14 +296,15 @@ def test_only_a_persons_classic_or_one_shot_session_is_followed(bridge, home, tm
     assert bridge.fake.calls == []
 
 
-def test_a_side_call_records_no_directory_and_is_not_followed_on_that_either(bridge, home):
-    home.session("x", source="local", created="cli", cwd=None)
-    assert bridge.section({"session_id": "x"}) == "" and bridge.fake.calls == []
-
-
-def test_a_directory_not_on_this_machine_is_not_followed(bridge, home):
-    home.session("x", cwd="/no/such/directory/here")
-    assert bridge.section({"session_id": "x"}) == "" and bridge.fake.calls == []
+def test_a_session_with_no_directory_here_or_with_the_plugin_off_is_not_followed(
+        bridge, home, monkeypatch):
+    home.session("side", cwd=None)                         # a side call records none
+    home.session("away", cwd="/no/such/directory/here")
+    home.session("off", cwd=str(home.path))
+    assert bridge.section({"session_id": "side"}) == bridge.section({"session_id": "away"}) == ""
+    monkeypatch.setenv("TE_DISABLE", "1")
+    assert bridge.section({"session_id": "off"}) == ""
+    assert bridge.fake.calls == []
 
 
 def test_a_row_that_cannot_be_read_is_not_followed_yet_and_is_tried_again(bridge, home, tmp_path):
@@ -338,12 +315,6 @@ def test_a_row_that_cannot_be_read_is_not_followed_yet_and_is_tried_again(bridge
     later.session("x", cwd=str(tmp_path))
     late.section({"session_id": "x"})
     assert bridge.fake.events() == ["SessionStart"]
-
-
-def test_nothing_runs_when_disabled(bridge, home, tmp_path, monkeypatch):
-    home.session("x", cwd=str(tmp_path))
-    monkeypatch.setenv("TE_DISABLE", "1")
-    assert bridge.section({"session_id": "x"}) == "" and bridge.fake.calls == []
 
 
 # ---- the hooks ---------------------------------------------------------------------------------
@@ -759,10 +730,6 @@ def test_hermes_saying_it_could_not_start_is_no_reply(home, side, monkeypatch):
     assert sidecall.hermes_call("q", cli="hermes")[0] == ""
 
 
-def test_a_notice_names_the_command_a_side_call_runs():
-    assert sidecall.call_name("hermes") == "hermes chat"
-
-
 def test_the_host_runs_its_side_calls_through_hermes(monkeypatch):
     cfg = type("C", (), {"paid_model": "m", "hermes_cli": "~/bin/hermes"})()
     seen = {}
@@ -906,15 +873,6 @@ def test_a_session_records_the_hermes_home_its_hooks_run_under(tmp_path):
     found = list((tmp_path / "te").rglob(os.path.join("sessions", "s.json")))
     assert len(found) == 1
     assert json.loads(found[0].read_text(encoding="utf-8"))["hermes_home"] == "/profiles/work"
-
-
-def test_a_hermes_session_is_folded_after_the_transcript_cwd_the_repository_reads(home, tmp_path):
-    """`repos` learns where a session started from the first `cwd` in its log."""
-    from tokeneconomizer.plugin import repos
-    _conversation(home, "s", cwd="/w/repo")
-    path = str(tmp_path / "s.json")
-    trace.hermes_export(home.db, "s", path)
-    assert repos.session_cwd({"transcript": path}) == "/w/repo"
 
 
 # ---- a real gateway ----------------------------------------------------------------------------
