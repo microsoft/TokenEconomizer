@@ -201,6 +201,16 @@ class Host:
     def tool_usage(self, trace_path):
         return trace.tool_usage(trace_path)
 
+    # Whether the agent keeps its sessions' logs where the plugin can read the ones from before
+    # it was installed (`history`).
+    keeps_history = False
+
+    def history(self, env, extra_dirs=()):
+        """The agent's own session logs, for importing a repository's earlier sessions:
+        [{"session_id", "folder", "path", "mtime", "size"}]. Nothing, where the agent keeps none
+        the plugin reads."""
+        return []
+
 
 def _failure_response(p):
     """A PostToolUseFailure payload's `error` as a response; None for any other payload. A
@@ -268,6 +278,32 @@ class ClaudeCode(Host):
 
     def tool_usage(self, trace_path):
         return trace.claude_tool_usage(os.path.realpath(trace_path))
+
+    keeps_history = True
+
+    def history(self, env, extra_dirs=()):
+        """Every top-level log under `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`)
+        and the `extra_dirs` (each a `projects` folder, or a config folder holding one); a
+        session filed in two of them is listed once, from the first."""
+        dirs = [trace.claude_projects_dir(env)]
+        for d in extra_dirs or ():
+            d = os.path.expanduser(str(d))
+            dirs.append(os.path.join(d, "projects") if os.path.isdir(os.path.join(d, "projects"))
+                        else d)
+        out, seen, seen_dirs = [], set(), set()
+        for d in dirs:
+            real = os.path.realpath(d)
+            if real in seen_dirs:
+                continue
+            seen_dirs.add(real)
+            for folder, path, mtime, size in trace.claude_history_logs(d):
+                sid = os.path.basename(path)[:-len(".jsonl")]
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                out.append({"session_id": sid, "folder": folder, "path": path, "mtime": mtime,
+                            "size": size})
+        return out
 
 
 _CODEX_SHELL = {"bash", "shell", "exec_command", "local_shell", "unified_exec",

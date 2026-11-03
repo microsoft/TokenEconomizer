@@ -442,6 +442,7 @@ repository is not used by Codex there), while settings are shared by every agent
 | `config set KEY=VALUE … [--global]` | change settings for this repository (or every one); see [Settings](#settings) |
 | `config unset KEY … [--global]` | remove the setting at this level, so the global value (or the default) applies |
 | `repomap` / `repomap refresh` | the cached repository map / make it now (see [Repository map](#repository-map)) |
+| `history` / `history import [--dry-run]` | Claude Code: what the import of this repository's earlier sessions did / run it now, or say what it would read (see [Earlier sessions](#earlier-sessions)) |
 | `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
 | `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
 | `repos merge KEY [INTO]` | merge one repository's state into another's (default: this one), for state whose checkouts are gone |
@@ -457,7 +458,7 @@ How to run them:
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 
-`doctor` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
+`doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.
 
 Inside an agent, each command is one model turn; from a terminal it costs nothing. Codex asks
@@ -551,6 +552,27 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | `repomap_tokens` | `2048` | the map's size, in tokens |
 | `repomap_python` | auto | the Python that has aider installed |
 | `repomap_timeout` | `8` | seconds the first prompt may wait for a ranked map before the cached one is used |
+
+<a id="earlier-sessions"></a>**Earlier sessions** (Claude Code). Claude Code keeps every
+session's log (`~/.claude/projects/`, or under `CLAUDE_CONFIG_DIR`). The first session start in a
+repository where nothing has been folded yet reads that repository's earlier sessions from there,
+in a background `te history import`, oldest first and each once, without any model call. A log
+belongs to the repository its recorded directory is in; when that directory no longer exists,
+to the repository whose root Claude Code would file under the same folder name (an exact match).
+Left out: a log written in the last ten minutes, one the plugin already saw, one with no prompt,
+one over 256 MB, one older than `history_days`, and a one-prompt `claude -p` or SDK run. A
+repository that already has folded sessions is not imported into (`history import` says why), so
+that earlier sessions are never learned after later ones; a session that ends during the import is
+folded after it. A deny list that rests on those earlier sessions is only proposed, even with
+`toolprune=auto`: the next session start says so, and nothing changes until you run `toolprune
+apply`. `status` counts the earlier sessions on their own.
+
+| Key | Default | What it sets |
+|---|---|---|
+| `history_import` | `true` | `false`: learn only from sessions the plugin sees end |
+| `history_max_sessions` | `200` | the most recent earlier sessions read |
+| `history_days` | `365` | how far back, in days |
+| `history_dirs` | none | further Claude Code `projects` folders to read, separated by commas |
 
 **Other settings:**
 

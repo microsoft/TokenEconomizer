@@ -2,7 +2,9 @@
 
     SessionStart      inject the repository's micro-skills (cached by the last fold), and
                       fold any earlier session that ended without its SessionEnd being seen;
-                      with `repomap` on, refresh a stale map in the background
+                      the first time in a repository (Claude Code), start the import of its
+                      sessions from before the plugin (`history`), in the background; with
+                      `repomap` on, refresh a stale map in the background
     UserPromptSubmit  open a prompt-turn for the loop guard; on a session's first prompt, add
                       the repository map (`repomap=on`)
     PostToolUse       fold the call into the turn's guard; a redirect when it first says the
@@ -22,9 +24,10 @@ changed course; `shadow` computes and logs every decision without acting on any 
 import hashlib
 import os
 import time
+import traceback
 
 from .. import loopguard
-from . import denylist, fold, repomap, repos, sidecall
+from . import denylist, fold, history, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -155,6 +158,15 @@ class LiveController:
         if note and not self.cfg.shadow:
             outputs.append(self.host.notice(note))
 
+        if not self.cfg.shadow:
+            try:
+                note = history.notice(self.ctx)
+            except Exception:           # a malformed history.json must not cost the output
+                note = None
+                self._record_error()
+            if note:
+                outputs.append(self.host.notice(note))
+
         if self.cfg.repomap != "off":
             if repomap.stale(self.ctx):
                 repomap.spawn_refresh(self.ctx)
@@ -170,8 +182,23 @@ class LiveController:
         repos.note_repo(self.ctx.root, self.ctx.repo)
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
+        try:
+            history.maybe_start(self.ctx)
+        except Exception:
+            self._record_error()
+        # Not while an import of earlier sessions runs: it folds these once it is done.
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
+
+    def _record_error(self):
+        """A traceback in `errors.log` for a step that failed open without failing the hook."""
+        try:
+            os.makedirs(self.ctx.root, exist_ok=True)
+            with open(os.path.join(self.ctx.root, "errors.log"), "a", encoding="utf-8") as fh:
+                fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} pid={os.getpid()}\n")
+                fh.write(traceback.format_exc())
+        except Exception:
+            pass
 
     def _toolprune_notices(self, seen):
         """The deny list's lines at session start, each said once: what `auto` removed from this
@@ -203,13 +230,19 @@ class LiveController:
         prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
         refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
         # Under `auto`, a list waiting for the repository to go quiet is no news yet: the
-        # session start after it is written says so (above). Only a refusal is.
+        # session start after it is written says so (above). A refusal is, and so is what
+        # rests on sessions from before the plugin, which `auto` leaves to the person.
+        history_only = False
         if self.cfg.toolprune == "auto" and not refused:
-            prop = []
+            waiting = set(unt.get("needs_apply") or [])
+            prop = [t for t in prop if t in waiting]
+            history_only = bool(prop)
         if prop and seen.get("untool") != ",".join(prop):
             out.append(self.host.notice(
                 f"TokenEconomizer: {len(prop)} {unit}(s) went unused in this repository's recent "
-                f"sessions ({few(prop)}). Review with `{cmd}`; "
+                f"sessions ({few(prop)})"
+                + (", counting sessions from before the plugin" if history_only else "")
+                + f". Review with `{cmd}`; "
                 + (f"they could not be applied ({refused}), and `{cmd} apply` tries again."
                    if refused else f"nothing changes until you run `{cmd} apply`.")))
             seen["untool"] = ",".join(prop)

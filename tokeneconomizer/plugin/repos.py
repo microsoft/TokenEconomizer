@@ -202,6 +202,11 @@ def session_cwd(rec, folded=None):
     return _transcript_cwd(_transcript_of(rec, folded)) or rec.get("cwd") or None
 
 
+def _imported(folded_entry):
+    """Was this `folded.json` entry imported from the agent's history (see `history`)?"""
+    return isinstance(folded_entry, dict) and bool(folded_entry.get("imported"))
+
+
 def _transcript_of(rec, folded_entry):
     return rec.get("transcript") or (folded_entry or {}).get("transcript") or ""
 
@@ -370,6 +375,10 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
             unlearned = (set(sids) & set(s_folded)) - set(d_folded)
         refold = set()
         for sid in unlearned:
+            # A session imported from the agent's history stays as it was folded: folded again
+            # it would land after the live sessions, out of time order.
+            if _imported((s_folded if sid in sids else d_folded).get(sid)):
+                continue
             rec = s_sess.get(sid) if sid in sids else d_sess.get(sid)
             entry = (s_folded if sid in sids else d_folded).get(sid)
             tp = _transcript_of(rec or {}, entry)
@@ -419,6 +428,13 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
             _merge_applied(src, dst)
             if src.read("notices.json") and not dst.read("notices.json"):
                 dst.write("notices.json", src.read("notices.json"))
+            # Whether the history was imported travels with the sessions it imported.
+            hist = src.read("history.json")
+            if isinstance(hist, dict) and not dst.read("history.json"):
+                if hist.get("state") in ("running", "partial"):
+                    hist = dict({k: v for k, v in hist.items() if k != "plan"},
+                                state="stopped", reason="its state was merged")
+                dst.write("history.json", hist)
         else:
             _write_lines(src, "ledger.jsonl", [r for r in s_ledger
                                                if r.get("session_id") not in incoming])
@@ -812,11 +828,16 @@ def listing(root, env=None, current=None):
         if not os.path.isdir(d):
             continue
         doc = Store(d).read("repo.json") or {}
-        agents, cwds, last = {}, set(), 0.0
+        agents, imported, cwds, last = {}, {}, set(), 0.0
         for h in _host_dirs(d):
             st = Store(os.path.join(d, h))
             sess = _sessions(st)
-            agents[h] = len(sess)
+            folded = st.read("folded.json") or {}
+            # Sessions imported from the agent's history are counted apart.
+            n_imp = sum(1 for sid in sess if _imported(folded.get(sid)))
+            agents[h] = len(sess) - n_imp
+            if n_imp:
+                imported[h] = n_imp
             for name in ("ledger.jsonl", "sessions"):
                 try:
                     last = max(last, os.path.getmtime(st.path(name)))
@@ -833,7 +854,7 @@ def listing(root, env=None, current=None):
             notes.append("your home directory: holds only sessions started in ~ itself")
         rows.append({"key": key, "label": doc.get("label") or dir_label(d) or key,
                      "how": doc.get("how", ""), "remote": doc.get("remote", ""),
-                     "agents": agents, "last": last, "state": d,
+                     "agents": agents, "imported": imported, "last": last, "state": d,
                      "checkouts": sorted(checkouts.get(key, [])), "cwds": sorted(cwds),
                      "current": bool(current and current.key == key), "notes": notes})
     try:

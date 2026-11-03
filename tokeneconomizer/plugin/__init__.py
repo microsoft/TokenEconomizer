@@ -13,7 +13,8 @@ fails open.
                     prompt-turn call by call, and hand a finished session to `fold`;
   * after a session -- `fold`: run `PrefixStage` and `ToolingStage` over the finished session,
                     off the agent's critical path; `denylist` writes an approved proposal into
-                    the agent's own settings file;
+                    the agent's own settings file; `history`: a repository's sessions from
+                    before the plugin, from the agent's own logs, folded once to learn from;
   * model calls  -- `sidecall`, `judge`: LLM calls through the agent's own CLI (the proposer
                     with micro-skills on, the judge with the loop guard on), charged to the
                     session's ledger (`accounting`);
