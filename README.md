@@ -312,9 +312,11 @@ repository have been idle for *q* minutes (or, at the latest, a day after the li
 conversation resumed after its tools change must write its whole history to the prompt cache again
 instead of reading it, and after an idle hour that cache has expired anyway.
 
-On Claude Code, the first session in a repository where nothing has been learned yet also reads
-that repository's earlier sessions from Claude Code's own logs, in the background, oldest first
-and without any model call (`history_import=off` to learn only from new sessions; see [Earlier
+On Claude Code, the plugin can also learn from a repository's earlier sessions, read from Claude
+Code's own logs oldest first and without any model call. This is off by default, and a
+repository's history is read only before the plugin has learned from any session there, so turn
+it on right after installing: with `config set history_import=on --global`, the first session in
+each repository reads that repository's earlier sessions in the background (see [Earlier
 sessions](plugin/README.md#earlier-sessions)). A deny list that rests on those earlier sessions
 waits for `toolprune apply`, even under `auto`.
 

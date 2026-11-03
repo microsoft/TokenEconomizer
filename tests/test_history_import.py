@@ -35,7 +35,9 @@ def claude_home(tmp_path):
 
 @pytest.fixture
 def env(tmp_path, claude_home):
+    """A person who turned the import on (`history_import` is off by default)."""
     return {"TOKENECONOMIZER_HOME": str(tmp_path / "home"), "TE_FOLD_SYNC": "1",
+            "TE_HISTORY_IMPORT": "on",
             "TE_TOOLPRUNE_QUIET_MINUTES": "0", "TE_MICROSKILLS": "envfacts",
             "CLAUDE_CONFIG_DIR": str(claude_home),
             "GIT_CEILING_DIRECTORIES": str(tmp_path), "PATH": os.environ.get("PATH", "")}
@@ -197,6 +199,25 @@ def test_history_import_off_reads_nothing_and_the_newest_are_kept(env, repo, cla
     assert ledger_ids(st) == ["old2", "old3"]
     doc = st.read("history.json")
     assert doc["over_limit"] == 2 and doc["skipped"]["too_old"] == 1
+
+
+def test_by_default_a_session_start_reads_no_history_and_an_import_by_hand_does(
+        env, repo, claude_home, tmp_path, monkeypatch, capsys):
+    """Off by default: nothing is read until the person asks, by the setting or by hand."""
+    assert load_config(str(tmp_path / "empty"), env={}).history_import is False
+    for i in range(2):
+        history_log(claude_home, repo, f"old{i}", trap(repo, i), age_s=3600 * (10 - i))
+    default = {k: v for k, v in env.items() if k != "TE_HISTORY_IMPORT"}
+    start_hook(default, repo, "a", tmp_path)
+    st = store_for(env, repo)
+    assert st.read("history.json") is None and not st.read("folded.json")
+
+    for k, v in default.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("TE_HISTORY_IMPORT", raising=False)
+    assert cli.main(["--cwd", repo, "--host", "claude", "history", "import"]) == 0
+    assert "imported 2 earlier session(s)" in capsys.readouterr().out
+    assert ledger_ids(st) == ["old0", "old1"]
 
 
 def test_a_moved_checkouts_logs_are_matched_by_their_exact_folder(env, repo, claude_home):

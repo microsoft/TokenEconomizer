@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; on Claude Code, the first time in a repository with nothing folded, starts a detached `te history import` of its sessions from before the plugin, and says once when that is done | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen; on Claude Code with `history_import` on, the first time in a repository with nothing folded, starts a detached `te history import` of its sessions from before the plugin, and says once when that is done | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -46,7 +46,8 @@ re-tuned. Three things it adds:
 
 **Earlier sessions** (`plugin/history.py`). Claude Code keeps every session's log, so the
 sessions a repository ran before the plugin was installed can be folded too: `te history
-import`, which the first session start in a repository runs by itself (`history_import`). Which
+import`, which the first session start in a repository runs by itself when `history_import` is
+on (it is off by default). Which
 logs are the repository's is decided as for a live session, by `repo_identity` of the directory
 each log records; where that directory is gone, by an exact match of the log's folder with the
 one Claude Code derives from the repository's root. A log written in the last ten minutes, one
@@ -619,7 +620,8 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   hand, for state whose checkouts are gone.
 
 Besides the logs of the sessions whose hooks it sees, the plugin reads Claude Code's own logs
-once per repository, for the import of its earlier sessions (`history_import`, on by default):
+once per repository, for the import of its earlier sessions (with `history_import` on, or `te
+history import`; off by default):
 the head of each log under `~/.claude/projects/` (or `CLAUDE_CONFIG_DIR`, and `history_dirs`), to
 tell which are the repository's, and those in full.
 
@@ -639,7 +641,9 @@ it, of `toolprune measure` on Claude Code. Those calls send
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
 `copilot -p` / `pi -p` / `opencode run` / `hermes chat`), billed where your session is. The proposer keeps the digests of the last eight
 sessions with its state, raw commands and output capped, so that each run sees more than the
-session that just ended.
+session that just ended. Sessions imported from Claude Code's history call no model, but their
+digests join that window, so the proposer's next call can include digests of sessions from
+before the plugin.
 
 The deny-list writer adds and removes only deny rules it recorded adding, never one you wrote, and
 adds a `settings.local.json` it creates to `.git/info/exclude`. A repository decides what its

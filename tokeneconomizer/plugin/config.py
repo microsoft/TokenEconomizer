@@ -52,8 +52,9 @@ person can tune by hand:
   * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
   * history_import              -- on Claude Code, fold a repository's sessions from before the
                                    plugin (Claude Code's own logs) once, at its first session
-                                   start, when nothing is folded there yet (`te history import`);
-                                   off: learn only from sessions the plugin sees end;
+                                   start, when nothing is folded there yet. Off by default:
+                                   the plugin learns only from sessions it sees end, and
+                                   `te history import` reads them by hand;
   * history_max_sessions, history_days -- the newest sessions that import takes, and how far
                                    back it reads;
   * history_dirs                -- further Claude Code `projects` folders to read, beside
@@ -176,7 +177,7 @@ class LiveConfig:
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
-    history_import: bool = True
+    history_import: bool = False
     history_max_sessions: int = 200
     history_days: int = 365
     history_dirs: list = field(default_factory=list)

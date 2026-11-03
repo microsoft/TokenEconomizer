@@ -3,9 +3,9 @@
 The plugin learns from sessions it sees end. Claude Code keeps every session's log
 (`~/.claude/projects/<folder>/<session id>.jsonl`, or under `$CLAUDE_CONFIG_DIR`), so the
 sessions a repository ran before the plugin was installed can be folded too, once, and learning
-starts at install rather than some sessions later. `te history import` does it; the first session
-start in a repository starts it by itself (`history_import`, on by default), in a detached
-process.
+starts at install rather than some sessions later. `te history import` does it; with
+`history_import` on (it is off by default), the first session start in a repository starts it
+by itself, in a detached process.
 
 Which logs are this repository's: each log's recorded directory is keyed with `repo_identity`,
 as a live session's is. Where that directory no longer exists (a moved checkout, a renamed

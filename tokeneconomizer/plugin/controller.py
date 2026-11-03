@@ -2,9 +2,10 @@
 
     SessionStart      inject the repository's micro-skills (cached by the last fold), and
                       fold any earlier session that ended without its SessionEnd being seen;
-                      the first time in a repository (Claude Code), start the import of its
-                      sessions from before the plugin (`history`), in the background; with
-                      `repomap` on, refresh a stale map in the background
+                      the first time in a repository (Claude Code, with `history_import`
+                      on), start the import of its sessions from before the plugin
+                      (`history`), in the background; with `repomap` on, refresh a stale map
+                      in the background
     UserPromptSubmit  open a prompt-turn for the loop guard; on a session's first prompt, add
                       the repository map (`repomap=on`)
     PostToolUse       fold the call into the turn's guard; a redirect when it first says the

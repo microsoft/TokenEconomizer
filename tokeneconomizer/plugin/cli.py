@@ -21,8 +21,9 @@
                                       make it now
     te history import [--dry-run]     Claude Code: fold this repository's sessions from before
                                       the plugin, from Claude Code's own logs (no model calls,
-                                      no deny list written; only before any session is folded,
-                                      and the first session start runs it by itself)
+                                      no deny list written; only before any session is folded;
+                                      with `history_import=on`, the first session start runs
+                                      it by itself)
     te history [import --status]      what that import did here
     te repos                          every repository with state here: how it was identified,
                                       its agents and sessions, the checkouts seen

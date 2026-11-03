@@ -673,9 +673,10 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 | `repomap_timeout` | `8` | seconds the first prompt may wait for a ranked map before the cached one is used |
 
 <a id="earlier-sessions"></a>**Earlier sessions** (Claude Code). Claude Code keeps every
-session's log (`~/.claude/projects/`, or under `CLAUDE_CONFIG_DIR`). The first session start in a
-repository where nothing has been folded yet reads that repository's earlier sessions from there,
-in a background `te history import`, oldest first and each once, without any model call. A log
+session's log (`~/.claude/projects/`, or under `CLAUDE_CONFIG_DIR`). With `history_import` on
+(it is off by default), the first session start in a repository where nothing has been folded
+yet reads that repository's earlier sessions from there, in a background `te history import`,
+oldest first and each once, without any model call; `history import` does the same by hand. A log
 belongs to the repository its recorded directory is in; when that directory no longer exists,
 to the repository whose root Claude Code would file under the same folder name (an exact match).
 Left out: a log written in the last ten minutes, one the plugin already saw, one with no prompt,
@@ -684,11 +685,14 @@ repository that already has folded sessions is not imported into (`history impor
 that earlier sessions are never learned after later ones; a session that ends during the import is
 folded after it. A deny list that rests on those earlier sessions is only proposed, even with
 `toolprune=auto`: the next session start says so, and nothing changes until you run `toolprune
-apply`. `status` counts the earlier sessions on their own.
+apply`. `status` counts the earlier sessions on their own. Since a repository's history is read
+only before its first session is folded, turn the import on right after installing
+(`config set history_import=on --global`), or run `history import` in a repository before its
+first session there ends.
 
 | Key | Default | What it sets |
 |---|---|---|
-| `history_import` | `true` | `false`: learn only from sessions the plugin sees end |
+| `history_import` | `false` | `true`: a repository's first session start reads its earlier sessions |
 | `history_max_sessions` | `200` | the most recent earlier sessions read |
 | `history_days` | `365` | how far back, in days |
 | `history_dirs` | none | further Claude Code `projects` folders to read, separated by commas |
