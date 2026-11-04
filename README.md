@@ -280,7 +280,9 @@ Inside an agent, a command costs one model turn; from a terminal it is free. The
 Tool pruning and the loop guard are on by default; with these defaults, the plugin calls a model
 only when a turn shows signs of looping: the judge, and the redirect it writes if it finds the
 turn stuck. Micro-skills is off by default, because its proposer adds model calls and how much it
-saves depends on the repository and the work you do there. Each mechanism has its own switch
+saves depends on the repository and the work you do there. What each of these calls reads, how
+often it runs and which model it uses are listed under
+[Model calls](plugin/README.md#model-calls-and-api-keys). Each mechanism has its own switch
 (`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
 are these settings:
 
