@@ -93,7 +93,10 @@ def load_calls(fp):
                 order.append(b.get("id"))
             elif b.get("type") == "tool_result":
                 cont = b.get("content")
-                txt = cont if isinstance(cont, str) else json.dumps(cont)
+                if isinstance(cont, list):
+                    txt = "\n".join(x.get("text", "") for x in cont if isinstance(x, dict))
+                else:
+                    txt = cont if isinstance(cont, str) else json.dumps(cont)
                 res[b.get("tool_use_id")] = txt
     return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
 

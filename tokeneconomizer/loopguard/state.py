@@ -106,7 +106,7 @@ def completed_calls(line, pend):
                 info = pend.pop(b.get("tool_use_id"), {"name": "?", "args": {}})
                 c = b.get("content")
                 if isinstance(c, list):  # content can be a list of text blocks
-                    c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+                    c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
                 out.append((canon_tool(info["name"]), info.get("args") or {},
                             c if isinstance(c, str) else ""))
         return out

@@ -53,8 +53,8 @@ def claude_calls(lines):
                 tid = b.get("tool_use_id")
                 c = b.get("content")
                 if isinstance(c, list):
-                    c = " ".join(x.get("text", "") for x in c
-                                 if isinstance(x, dict))
+                    c = "\n".join(x.get("text", "") for x in c
+                                  if isinstance(x, dict))
                 results[tid] = (c if isinstance(c, str) else "",
                                 not b.get("is_error", False))
     for tid in order:
