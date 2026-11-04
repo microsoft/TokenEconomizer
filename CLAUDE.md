@@ -18,6 +18,9 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
 - `plugin/` — the installable plugin directory: manifests per agent, hook files, launchers
   (`scripts/te`, `scripts/te-hook`), slash commands (`slash-commands/`, named in the Claude Code
   and Copilot manifests, since Codex would turn a `commands/` folder into duplicate skills), Codex
+  skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension, and the
+  opencode plugin (`opencode/`, one file whose default export serves 1.x via `server` and 2.x via
+  `setup`); `lib/` links the package
   skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension, the opencode
   and Hermes plugins; `lib/` links the package
 - `experiments/` — benchmark-only: `te_bench/` (adapters, arms, facade, benchmark-only
