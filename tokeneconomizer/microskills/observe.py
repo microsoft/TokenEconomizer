@@ -85,8 +85,7 @@ GENERIC = Vocabulary(
                           "gradlew", "dotnet", "mix", "swift", "rake"}),
     build_heads=frozenset({"make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier",
                            "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
-                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite",
-                           "pre-commit", "shellcheck"}),
+                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite"}),
     generic=True,
 )
 # `<tool> build`, `npm run lint`, ...: what a generic reading counts as building or checking.
@@ -146,10 +145,6 @@ ERROR_CLASSES = (
                                r"Operation timed out|timed out after|ETIMEDOUT", re.I)),
 )
 NETWORK_ERRORS = frozenset({"connection_refused", "name_resolution", "unreachable"})
-# The command a "not found" line names: `bash: ruff: command not found`, `/bin/sh: 1: ruff: not
-# found`, `zsh: command not found: ruff`, `'ruff' is not recognized ...`.
-_NOT_FOUND_NAME_RE = re.compile(r"([^\s:'\"]+):\s+(?:command\s+)?not found\b(?!:)|"
-                                r"command not found:\s+(\S+)|'([^']+)' is not recognized", re.I)
 FORM_ERRORS = frozenset({"module_missing", "command_missing", "script_missing",
                          "usage_error", "permission_denied"})
 
@@ -217,7 +212,7 @@ def _tokens(seg):
 class Observation:
     """One classified command segment."""
     __slots__ = ("call", "intent", "form", "head", "prefix", "hosts", "probe", "outcome",
-                 "segment", "labels", "label_err", "loaded", "tests_ran", "env", "not_found")
+                 "segment", "labels", "label_err", "loaded", "tests_ran", "env")
 
     def __init__(self, call, intent, form, head, prefix, segment, hosts=(), probe=None):
         self.call, self.intent, self.form, self.head, self.prefix = call, intent, form, head, prefix
@@ -225,9 +220,6 @@ class Observation:
         self.labels, self.label_err, self.loaded = (), False, False
         self.tests_ran = False
         self.env = False          # typed with `VAR=value` before it, which its form leaves out
-        # The "command not found" line names this command, not one it started (`make` running
-        # a recipe whose `cc` is missing prints `/bin/sh: 1: cc: not found`).
-        self.not_found = False
 
     def __repr__(self):
         return f"Obs({self.intent},{self.form!r},{self.outcome})"
@@ -661,10 +653,8 @@ def observe_task(transcript_path, vocab=None):
                          and (not o.hosts or any(h in out for h in o.hosts))] or \
                         [o for o in targets if o.intent == "fetch_remote"]
             chosen = named or (targets[-1:] if not success else [])
-            missing = _not_found_name(_error_line(out, err)) if err == "command_missing" else ""
             for o in chosen:
                 o.outcome = err
-                o.not_found = bool(missing) and _base(o.head) == missing
             if success:
                 for o in obs:
                     if o.outcome is None:
@@ -710,16 +700,6 @@ def _error_line(out, err):
     start = (out or "").rfind("\n", 0, m.start()) + 1
     end = (out or "").find("\n", m.end())
     return (out or "")[start:end if end >= 0 else None]
-
-
-def _base(path):
-    return (path or "").replace("\\", "/").rsplit("/", 1)[-1]
-
-
-def _not_found_name(line):
-    """The command a "not found" line says is missing, by its last path part; "" if none."""
-    m = _NOT_FOUND_NAME_RE.search(line or "")
-    return _base(next((g for g in m.groups() if g), "")) if m else ""
 
 
 def is_bare(form):
