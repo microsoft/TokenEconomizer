@@ -230,6 +230,10 @@ class LiveConfig:
                 v = value if isinstance(value, bool) else str(value).strip().lower() in (
                     "1", "true", "yes", "on")
             elif isinstance(cur, int):
+                if isinstance(value, bool):
+                    raise ValueError("not a number")
+                if isinstance(value, float) and not value.is_integer():
+                    raise ValueError("must be a whole number")
                 v = int(value)
                 lo = self._MIN.get(key, 1)
                 if v < lo:
