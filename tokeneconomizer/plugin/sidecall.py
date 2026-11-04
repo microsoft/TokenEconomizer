@@ -232,6 +232,11 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
         data = json.loads(out.stdout or "{}")
     except ValueError:
         data = {}
+    # With verbose on, Claude Code streams an array of events instead of one
+    # result object (#131): take the result event, as the single object would be.
+    if isinstance(data, list):
+        data = next((ev for ev in reversed(data)
+                     if isinstance(ev, dict) and ev.get("type") == "result"), {})
     if not data.get("result"):
         _no_reply("claude", out)
     usage = dict(data.get("usage") or {})
