@@ -523,6 +523,22 @@ reported. Replayed through the guard, the recorded SWE-bench sessions end well i
 turns on Claude Code (13,312 sessions), 84.5% on Copilot (6,710) and 87.8% on Codex (2,653), and
 the judge's gate opens in 18.1%, 15.8% and 5.8% of them.
 
+**What a successful Claude Code call exited with, 2026-11-04 (#128).** Claude Code gives a
+successful call no exit status and reports a non-zero exit only as a failure (`PostToolUseFailure`
+live, `is_error` in its log: of about 8,100 Bash results in one machine's logs, no success named
+an exit code). So every successful call was read by its output: a passing Playwright run that
+prints libuv's `Assertion failed` as it exits, or source read with `cat` that mentions an
+`Error`, counted as failing. A successful shell call now counts as exit 0 where that status
+covers the command: one command, an `&&` chain, or one whose earlier commands only read, move
+about, set up or report (`loopguard.turn.exit_status_covers`); `python repro.py | tail` is still
+read by its output. Two more: a file put back with `git checkout --` or `git restore` counts as
+an edit only when the turn edited it, and every test run the turn's tracker knows (Playwright,
+`npx vitest`, behind `dotenv … --`) counts among the redirect's verifications. Replayed through
+the guard, 3,806 recorded SWE-bench sessions on Claude Code had 7,730 failing outputs before and
+4,660 after; the judge's gate opened in 9.7% of them instead of 11.9%, 82 read as stuck instead
+of 113, and 91.6% ended well either way. Over 682 interactive turns the failing outputs went
+from 1,586 to 594 and the turns that opened the gate from 68 to 25.
+
 The plugin's proposer prompt lists each fact it holds with its claim, so a fact it has is not
 authored again under a new id; the experiments' prompt names the ids alone, as the paper ran it.
 

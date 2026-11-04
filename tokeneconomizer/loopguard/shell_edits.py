@@ -146,6 +146,41 @@ def _py_writes(text):
     return out
 
 
+def _restored(tokens):
+    """The paths a `git checkout -- <path>` or `git restore <path>` puts back; [] for any other
+    command."""
+    if tokens[0].rsplit("/", 1)[-1] != "git" or len(tokens) < 3 or \
+            tokens[1] not in ("checkout", "restore"):
+        return []
+    rest = (tokens[tokens.index("--") + 1:] if "--" in tokens
+            else tokens[2:] if tokens[1] == "restore" else [])
+    return [t for t in rest if not t.startswith("-")]
+
+
+def _bare(cmds):
+    """Each command with the `sudo`, `env`, `VAR=1` ... before it dropped; empty ones left out."""
+    out = []
+    for tokens in cmds:
+        while tokens and (tokens[0] in ("sudo", "command", "env", "time", "nohup")
+                          or re.match(r"^\w+=", tokens[0])):
+            tokens = tokens[1:]
+        if tokens:
+            out.append(tokens)
+    return out
+
+
+def shell_revert_targets(cmd):
+    """Basenames of the files a shell command puts back with `git checkout --` or `git
+    restore`: `shell_edit_targets` counts them as written, which they are; the loop guard counts
+    them as edits only for a file the turn edited."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        return []
+    shell, _ = _split_heredocs(cmd)
+    cmds, _ = _commands(shell)
+    names = [basename(p) for tokens in _bare(cmds) for p in _restored(tokens) if _not_scratch(p)]
+    return list(dict.fromkeys(n for n in names if n))
+
+
 def shell_edit_targets(cmd):
     """Basenames of the files a shell command writes, in order, without repeats."""
     if not isinstance(cmd, str) or not cmd.strip():
@@ -153,12 +188,7 @@ def shell_edit_targets(cmd):
     shell, bodies = _split_heredocs(cmd)
     cmds, writes = _commands(shell)
     found = [w for w in writes if _SOURCE_FILE.search(w)]
-    for tokens in cmds:
-        while tokens and (tokens[0] in ("sudo", "command", "env", "time", "nohup")
-                          or re.match(r"^\w+=", tokens[0])):
-            tokens = tokens[1:]
-        if not tokens:
-            continue
+    for tokens in _bare(cmds):
         head = tokens[0].rsplit("/", 1)[-1]
         if head == "sed":
             found += _inplace_files(
@@ -173,10 +203,8 @@ def shell_edit_targets(cmd):
             found += _PATCH_FILE.findall("\n".join(bodies + [" ".join(tokens[1:])])) or ["(patch)"]
         elif head == "patch" or (head == "git" and len(tokens) > 1 and tokens[1] == "apply"):
             found.append("(patch)")
-        elif head == "git" and len(tokens) > 2 and tokens[1] in ("checkout", "restore"):
-            rest = (tokens[tokens.index("--") + 1:] if "--" in tokens
-                    else tokens[2:] if tokens[1] == "restore" else [])
-            found += [t for t in rest if not t.startswith("-")]
+        else:
+            found += _restored(tokens)
     if _PYTHON.search(shell):
         found += _py_writes("\n".join([shell] + bodies))
     names = [p if p.startswith("(") else basename(p)

@@ -13,7 +13,9 @@ an adapter rather than a branch in a mechanism:
     false}` from PostToolUse would halt its loop (verified on 2.1.286), but Codex's replaces the
     tool result and the model carries on, and Copilot's runs every call; the person decides.
   * Tool results. Claude Code's Bash `tool_response` is `{stdout, stderr, interrupted, ...}` with
-    no exit code (verified); Codex's command items carry one, and it is used when present.
+    no exit code (verified), and a non-zero exit comes as `PostToolUseFailure` instead, so a
+    success is read as 0 where that status covers the command (`claude_success_code`); Codex's
+    command items carry one, and it is used when present.
   * The session log. Claude Code's transcript is read as-is; Codex's rollout is rewritten into
     exec-stream lines first (`trace.codex_rollout_to_exec`).
 
@@ -258,6 +260,21 @@ def _exit_code(resp):
     return None
 
 
+def claude_success_code(name, args, resp=None):
+    """The exit status of a Claude Code shell call that came back as a success. Claude Code
+    reports a non-zero exit only as a failure (`PostToolUseFailure`, and `is_error` in its log)
+    and gives a success no status, so the loop guard read the output's markers instead: a
+    passing Playwright run whose exit prints libuv's "Assertion failed", or source read with
+    `cat` that mentions an `Error`, counted as failing (#128). 0 when that status covers the work
+    the command ran (`loopguard.exit_status_covers`); else None, and the markers decide."""
+    from ..loopguard.state import canon_tool
+    from ..loopguard.turn import exit_status_covers
+    if canon_tool(name) != "bash" or (isinstance(resp, dict) and resp.get("interrupted")):
+        return None
+    cmd = args.get("command") if isinstance(args, dict) else None
+    return 0 if exit_status_covers(cmd) else None
+
+
 class ClaudeCode(Host):
     name = "claude"
     interrupt = "Press Esc to interrupt it."       # 2.1.306: the running command is killed too
@@ -268,6 +285,12 @@ class ClaudeCode(Host):
 
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        if code is None and _failure_response(p) is None:
+            code = claude_success_code(name, args, p.get("tool_response"))
+        return name, args, text, code
 
     def env_session_id(self, env):
         # Claude Code exports its session id to the Bash tool's shell (seen on 2.1.304).
