@@ -26,9 +26,10 @@ The families:
   EnvValue     code fails asking for an environment variable by name, and a later run that sets
                it succeeds. Fact: "Code that imports the project needs `V` set here: `V=x`
                works." Retires when that value fails the same way.
-  AbsentTool   a bare tool fails with command not found and has no working form here. Fact:
-               "`T ...` fails here with command not found: `T` is not installed in this
-               environment." Retires when `T` runs or a working form of it is found.
+  AbsentTool   a bare tool fails with command not found, the error naming that tool, and no
+               way of running it works here. Fact: "`T ...` fails here with command not found,
+               and no other way to run it has worked." Retires when `T` runs or a working form
+               of it is found.
 
 Each fact goes through the shared `lifecycle`. No LLM is involved: `opt_tokens` is 0. The block
 is capped at MAX_FACTS and MAX_TOKENS, and a lint refuses any fact that reads as completion or
@@ -117,8 +118,8 @@ class EnvFact:
                     f"`{p['var']}={good}` works" + (f", `{bad[0]}` does not." if bad else "."))
         if self.family == "absent_tool":
             t = p["tool"]
-            return (f"`{t} …` fails here with command not found: `{t}` is not installed in this "
-                    f"environment.")
+            return (f"`{t} …` fails here with command not found, and no other way to run it has "
+                    f"worked.")
         if self.family == "empty_probe":
             return ("This checkout has no git remote and no branches, tags or unreachable "
                     "objects beyond HEAD; its history ends at the checked-out commit.")
@@ -421,8 +422,8 @@ class EnvFactsDistiller:
             missing = {}
             for o in obs:
                 if (o.intent in ("run_build", "run_tests", "package_tool")
-                        and o.outcome == "command_missing" and is_bare(o.form)
-                        and " " not in o.form and o.form not in repaired):
+                        and o.outcome == "command_missing" and o.not_found
+                        and is_bare(o.form) and " " not in o.form and o.form not in repaired):
                     missing.setdefault(o.form, o.intent)
             worked = {_tool_of(o.form) for o in obs if form_worked(o)}
             for tool, intent in missing.items():
@@ -436,9 +437,12 @@ class EnvFactsDistiller:
                 tool = f.params["tool"]
                 seen = [o for o in obs if _tool_of(o.form) == tool]
                 contradicted = tool in repaired or any(form_worked(o) for o in seen)
-                missing_now = any(o.outcome == "command_missing" and o.form == tool
-                                  and is_bare(o.form) for o in seen)
-                prevented = f.id in injected and not contradicted and bool(obs or files)
+                missing_now = any(o.outcome == "command_missing" and o.not_found
+                                  and o.form == tool and is_bare(o.form) for o in seen)
+                # Injected, it counts a session only when that session ran another check of
+                # the same kind: one that never needed the tool says nothing about it.
+                prevented = (f.id in injected and not contradicted
+                             and any(o.intent == f.params.get("intent") for o in obs))
                 fired = missing_now or prevented
                 exercised = fired or contradicted
                 verdict = "contradict" if contradicted else ("confirm" if fired else None)
