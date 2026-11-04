@@ -57,7 +57,10 @@ def test_claude_call_ignores_events_without_a_result(monkeypatch):
 def test_failed_proposer_call_skips_proposal_instead_of_aborting_fold(tmp_path, monkeypatch):
     monkeypatch.setattr(dist, "PROPOSE_EVERY", 1)
 
+    calls = []
+
     def runner(prompt, model):
+        calls.append(prompt)
         raise RuntimeError("side call failed")
 
     root = str(tmp_path / "state")
@@ -68,3 +71,18 @@ def test_failed_proposer_call_skips_proposal_instead_of_aborting_fold(tmp_path, 
     d.update(path, iid="s0")  # must not raise
     d.save(root)
     assert d.facts == {}
+    # The failed call was made once and counts as the tick: the next waits its sessions.
+    assert len(calls) == 1 and d.last_propose == d.now
+
+
+def test_a_failed_proposer_call_is_noted_in_the_errors_log(tmp_path):
+    from tokeneconomizer.plugin import fold
+
+    def runner(prompt, model):
+        raise RuntimeError("side call failed")
+
+    call = fold._noted(str(tmp_path), runner)
+    with pytest.raises(RuntimeError):
+        call("a prompt", "agent")
+    log = (tmp_path / "errors.log").read_text(encoding="utf-8")
+    assert "(proposer side call)" in log and "RuntimeError: side call failed" in log

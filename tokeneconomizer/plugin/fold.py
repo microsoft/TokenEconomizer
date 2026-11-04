@@ -23,6 +23,7 @@ import os
 import shutil
 import tempfile
 import time
+import traceback
 
 from .. import trace
 from . import accounting, denylist, sidecall
@@ -64,6 +65,28 @@ def _run_dir(workdir, trace_path):
     return run
 
 
+def _noted(root, runner):
+    """The proposer's side call, with a failure written to `errors.log`. The distiller skips a
+    call that raises and the fold goes on, so nothing else would show that it failed."""
+    if runner is None:
+        return None
+
+    def call(*args, **kwargs):
+        try:
+            return runner(*args, **kwargs)
+        except Exception:
+            try:
+                os.makedirs(root, exist_ok=True)
+                with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
+                    fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} pid={os.getpid()} "
+                             f"(proposer side call)\n")
+                    fh.write(traceback.format_exc())
+            except Exception:
+                pass
+            raise
+    return call
+
+
 def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False):
     profile = ctx.config.microskills
     if profile == "off":
@@ -77,7 +100,7 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns. A session read from the agent's history never calls a model: the free
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
-    runner = (sidecall.runner_for(ctx.host.name, ctx.config)
+    runner = (_noted(ctx.root, sidecall.runner_for(ctx.host.name, ctx.config))
               if icfg.paid and not imported and not sidecall.paused(ctx.host.name, ctx.root)
               else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
