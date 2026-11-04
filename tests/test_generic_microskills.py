@@ -46,6 +46,78 @@ def test_a_build_tool_repair_becomes_a_fact(tmp_path):
     assert "`tsc …` fails here with command not found; `npx tsc …` works." in text
 
 
+def test_an_absent_linter_becomes_a_fact_and_a_working_form_does_not(tmp_path):
+    """`ruff` missing with no working form: an absent_tool fact. `tsc` missing with `npx tsc`
+    working is still a FormRepair, and `make build` never repairs `ruff`."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found"),
+            ("Bash", {"command": "make build"}, "built")]), iid=f"a{i}")
+    f = d.facts["absent_tool:ruff"]
+    assert f.family == "absent_tool" and f.state == "ACTIVE"
+    assert "`ruff …` fails here with command not found" in d.render()
+    assert not [x for x in d.facts if x.startswith("form_repair") and "ruff" in x]
+
+
+def test_an_absent_tool_retires_when_it_runs(tmp_path):
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found")]),
+            iid=f"a{i}")
+    assert d.facts["absent_tool:ruff"].state == "ACTIVE"
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "ruff check ."}, "All checks passed!")]), iid="a9")
+    assert d.facts["absent_tool:ruff"].state == "RETIRED"
+
+
+def test_a_program_missing_inside_make_is_not_learned_as_make_missing(tmp_path):
+    """`make` ran, and its recipe found no `cc`: the not-found line names `cc`, so nothing is
+    learned about `make`. A `ruff` whose own not-found line names it still is."""
+    d = ef.EnvFactsDistiller("acme/c", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/src/m{i}.c", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "make"},
+             "Exit code 2\ncc -o app main.c\n/bin/sh: 1: cc: not found\n"
+             "make: *** [Makefile:2: app] Error 127"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\n/bin/sh: 1: ruff: not found")]),
+            iid=f"m{i}")
+    assert "absent_tool:make" not in d.facts
+    assert d.facts["absent_tool:ruff"].state == "ACTIVE"
+
+
+def test_an_injected_absent_tool_counts_only_sessions_that_ran_a_check(tmp_path):
+    """A session that never needed a check says nothing about `ruff`; one that ran another
+    check (`mypy`) did without it."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found")]),
+            iid=f"a{i}")
+    assert "`ruff …` fails here with command not found" in d.render()
+    d.update(_session(tmp_path, 8, [
+        ("Edit", {"file_path": "/r/pkg/y.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "ls"}, "pkg")]), iid="a8")
+    assert d.last_digest["verdicts"]["absent_tool:ruff"] == (None, False, False)
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "mypy ."}, "Success: no issues found in 3 source files")]),
+        iid="a9")
+    assert d.last_digest["verdicts"]["absent_tool:ruff"] == ("confirm", True, True)
+
+
 def test_every_edited_file_counts_in_the_generic_reading(tmp_path):
     p = _session(tmp_path, 0, [
         ("Edit", {"file_path": "/r/src/main.go", "old_string": "a", "new_string": "b"}, "ok"),
