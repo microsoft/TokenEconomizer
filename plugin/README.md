@@ -780,6 +780,24 @@ writes. Tool pruning never calls a model. Turning micro-skills on adds its fact 
 every `microskills_propose_every` sessions (`microskills=envfacts` keeps only the facts found
 without a model call); `loopguard=off` turns the judge off along with the guard.
 
+What each call is sent, when it runs, and roughly how long its prompt is (about four characters to
+a token). No call is sent file contents or your prompts:
+
+| Call | When | What it reads | Prompt |
+|---|---|---|---|
+| Judge | in a turn that shows signs of looping, one call at a time, at most every 5 tool calls; after each "not stuck" answer the gap grows by 5 calls, up to 20 | the turn's last 24 actions (tool names, commands cut to 90 characters, edited file names, error signatures), its counts of edits, failing outputs and test runs, and how long this repository's turns usually are | at most about 1,500 tokens; the reply is a one-line verdict |
+| Redirect writer | right after the judge finds the turn stuck, at least `loopguard.judge_confidence` (0.7) sure | the judge's digest | at most about 1,500 tokens; the reply is 2 to 4 sentences |
+| Fact proposer | with `microskills=on` (or `distiller`), once every `microskills_propose_every` (3) sessions | digests of the last 8 sessions (for each: up to 12 command shapes, 6 checks and 6 failing commands with their error lines, all cut to 80 or 120 characters, and the edited files' names), and the facts already learned | a few thousand tokens, more when those sessions edited many files; the reply is a few facts and the patterns that test them |
+
+Each call is one request through the agent's CLI, which adds its own fixed instructions to the
+prompt; the plugin cannot leave those out, and the cost it records is the whole request's. The
+calls use the model `paid_model` names; when it is empty, `haiku` on Claude Code, and on the other
+agents the default listed under [Settings](#settings). `status` prints the repository's total as
+`plugin overhead`, with its share of all tokens. Per session, the repository's `ledger.jsonl`
+(under `~/.tokeneconomizer/repos/`) has the proposer's tokens in the session's record, under
+`overhead`, and a record of its own for each judge call (`"kind": "overhead"`, with the session's
+id).
+
 These calls run through **your own agent's CLI**: `claude -p`; `codex exec`; `copilot -p`, with
 every tool removed; and `pi -p`, with nothing loaded but the model. So they use whatever your
 sessions already use (a Claude subscription or Anthropic API key, your Codex login or OpenAI key,
