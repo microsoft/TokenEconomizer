@@ -1,12 +1,15 @@
 """The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
 
-    python -m tokeneconomizer.plugin.hook [--host claude|codex|copilot|hermes|opencode|pi]
+    python -m tokeneconomizer.plugin.hook [--host antigravity|claude|codex|copilot|hermes|opencode|pi]
+                                          [--event NAME]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
 also does nothing at all in two cases: `TE_DISABLE=1`, and `TE_SIDECALL=1`, which marks the
 nested agent process of the plugin's own paid side calls (`sidecall`) so it cannot recurse
 into these hooks.
+
+`--event` names the hook event for an agent whose payloads do not (Antigravity's).
 """
 import contextlib
 import json
@@ -34,6 +37,11 @@ def run(payload, env, host_hint=None):
         return {}
     if hasattr(host, "record_event"):
         host.record_event(payload)
+    if hasattr(host, "expand"):
+        # One call of this agent's hook stands for several events (Antigravity's `PreInvocation`
+        # is a prompt and the tool results before it): run each, then answer in the agent's terms.
+        outs = [LiveController(ctx, p).handle() for p in host.expand(payload, env)]
+        return host.render(payload.get("hook_event_name"), hosts.merge_outputs(*outs))
     return LiveController(ctx, payload).handle()
 
 
@@ -58,6 +66,7 @@ def main(argv=None, stdin=None, stdout=None, env=None):
     if "--host" in argv:
         i = argv.index("--host")
         hint = argv[i + 1] if i + 1 < len(argv) else None
+    event = argv[argv.index("--event") + 1] if "--event" in argv[:-1] else None
     out = {}
     try:
         # The agents send UTF-8 whatever the locale; a text stdin would decode it with the
@@ -67,6 +76,8 @@ def main(argv=None, stdin=None, stdout=None, env=None):
         if not (_truthy(env.get("TE_SIDECALL")) or _truthy(env.get("TE_DISABLE"))):
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
+                if event:
+                    payload.setdefault("hook_event_name", event)
                 # stdout carries exactly one JSON object back to the agent. The mechanisms
                 # print progress and warnings (ToolingStage's catalog warning, for one), and a
                 # single stray line there would make the agent discard the whole hook output.

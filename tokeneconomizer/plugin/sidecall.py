@@ -32,6 +32,8 @@ so no extra API key is needed and the call is billed where the session is:
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * Antigravity: `agy --output-format json --disable-slash-commands --print=<prompt>` in a
+    throwaway directory, on the person's default model; its usage is in the reply.
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
@@ -396,6 +398,37 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     return text or "", None
 
 
+def agy_call(prompt, model="", cli="agy", timeout=TIMEOUT_S):
+    """A side call through `agy --print`, in an empty throwaway directory, on the person's default
+    model unless `model` names one. `--print=<prompt>` is one argument: `-p` followed by a flag
+    would take the flag for the prompt. A tool that needs permission is denied in print mode,
+    which a completion does not miss. The reply's usage is priced like a session's: agy names
+    no model, so on the ledger's fallback curve unless `model` does."""
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        cmd = [*program(cli), "--output-format", "json", "--disable-slash-commands"]
+        if model:
+            cmd += ["--model", model]
+        cmd.append(f"--print={prompt}")
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    try:
+        data = json.loads(out.stdout or "{}")
+    except ValueError:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    text = data.get("response") if data.get("status") == "SUCCESS" else ""
+    text = text if isinstance(text, str) else ""
+    if not text.strip():
+        _no_reply("antigravity", out)
+    usage, eff = data.get("usage"), None
+    if isinstance(usage, dict) and text.strip():
+        eff, _ = accounting.effective({
+            "input_tokens": usage.get("input_tokens"),
+            "cache_read_input_tokens": usage.get("cache_read_tokens"),
+            "output_tokens": usage.get("output_tokens"), "model": model or "antigravity"})
+    return text.strip(), eff
+
+
 HERMES_SOURCE = "tool"
 # Hermes refuses a `--source` it does not know (`invalid_params`, 0.22.5, though its docs say any
 # value is stored), and `tool` is the one meant for this: hidden from its session pickers, and not
@@ -648,7 +681,7 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
-          "hermes": "hermes chat"}
+          "hermes": "hermes chat", "antigravity": "agy -p"}
 
 
 def call_name(host_name):
@@ -670,6 +703,8 @@ def runner_for(host_name, config):
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "cursor":
         return lambda prompt, _m="agent": cursor_call(prompt, model=model)
+    if host_name == "antigravity":
+        return lambda prompt, _m="agent": agy_call(prompt, model=model)
     if host_name == "hermes":
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
