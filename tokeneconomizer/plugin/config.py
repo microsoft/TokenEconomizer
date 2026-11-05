@@ -50,6 +50,9 @@ person can tune by hand:
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;
   * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
+  * droid_sidecall              -- on Droid, allow the plugin's own model calls. They run
+                                   `droid exec`, which writes a session log of its own, so this
+                                   is off by default: `microskills=envfacts` learns without it;
   * history_import              -- on Claude Code, fold a repository's sessions from before the
                                    plugin (Claude Code's own logs) once, at its first session
                                    start, when nothing is folded there yet. Off by default:
@@ -177,6 +180,7 @@ class LiveConfig:
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
+    droid_sidecall: bool = False
     history_import: bool = False
     history_max_sessions: int = 200
     history_days: int = 365

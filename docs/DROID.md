@@ -77,9 +77,14 @@ The plugin's settings live in `~/.tokeneconomizer/config.json`:
 
 ```sh
 te --host droid config set microskills=envfacts   # learn facts, no model call
+te --host droid config set microskills=on         # and let a model propose more, every k sessions
+te --host droid config set droid_sidecall=on      # allow the plugin's own model calls
 te --host droid config set loopguard=nudge        # the judge stays off until side calls are on
 te --host droid config set toolprune=off          # the only honest value on Droid
 ```
+
+`droid_sidecall` is the switch for the calls described below; `TE_DROID_SIDECALL=1` in the
+environment of the session does the same, for a Droid started from a terminal.
 
 `TE_DISABLE=1` in a session's environment turns every hook into a no-op. `te --host droid doctor`
 reports the Droid version, the session directory, side-call state and recent errors.
@@ -89,8 +94,10 @@ reports the Droid version, the session directory, side-call state and recent err
 Micro-skills' paid proposer and the loop guard's judge normally call the agent's own CLI. On
 Droid that is `droid exec`, which writes a session log of its own under `~/.factory/sessions`.
 Droid has no documented flags for a pure completion (no tools, no hooks, no log), so the adapter
-does not make that call unless `TE_DROID_SIDECALL=1` is set. With it off, `microskills=envfacts`
-still learns, and the loop guard keeps its rule-based backstop.
+does not make that call unless it is allowed, by `config set droid_sidecall=on` or by
+`TE_DROID_SIDECALL=1` in the session's environment. The setting is the one that also works from
+the Factory desktop app, where a session's environment cannot be chosen. With the calls off,
+`microskills=envfacts` still learns, and the loop guard keeps its rule-based backstop.
 
 When it is on, the call runs at Droid's default read-only autonomy in a throwaway directory, and
 its cost is read from the usage Droid records for it.
