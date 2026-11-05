@@ -323,7 +323,9 @@ events used by the adapter. The transcript format is private and its hooks do no
 token usage. TokenEconomizer records only the relevant hook events under its private state folder,
 uses them to learn repository facts and watch for loops, and reports Cursor session cost as
 unavailable. The loop guard's model calls use `cursor-agent` in read-only Ask mode; their token
-usage is also unavailable in the current CLI output. Cursor support is macOS and Linux only.
+usage is also unavailable in the current CLI output. Headless runs (`cursor-agent -p`, verified on
+2026.11.05) deliver no prompt or stop hook, so the adapter counts prompts from Cursor's own
+transcript and closes the turn when the run ends as completed. Cursor support is macOS and Linux only.
 On Windows, Cursor runs these hook commands through PowerShell, which cannot run the POSIX
 `te-hook` launcher.
 

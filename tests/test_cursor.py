@@ -161,3 +161,109 @@ def test_notices_name_each_agents_side_call_command():
     assert [sidecall.call_name(h) for h in hosts] == [
         "claude -p", "codex exec", "copilot -p", "pi -p", "opencode run", "cursor-agent -p",
         "hermes chat"]
+
+
+def _headless_run(repo, env, agent_log, end=None):
+    """The events `cursor-agent -p` delivers: no beforeSubmitPrompt, no stop (cursor-agent
+    2026.11.05). transcript_path is null on the first events, then Cursor's own log."""
+    base = {"session_id": "h1", "conversation_id": "h1", "generation_id": "h1",
+            "workspace_roots": [repo]}
+    run(dict(base, hook_event_name="sessionStart", transcript_path=None), env, host_hint="cursor")
+    tools = [("call_a\nfc_1", "Shell", {"command": "ls", "cwd": repo, "timeout": 30000},
+              json.dumps({"output": "", "exitCode": 0}), None),
+             ("call_b\nfc_2", "Read", {"file_path": f"{repo}/a.py"}, "x = 1", agent_log)]
+    for tid, name, tin, out, tpath in tools:
+        run(dict(base, hook_event_name="postToolUse", tool_use_id=tid, tool_name=name,
+                 tool_input=tin, tool_output=out, transcript_path=tpath), env, host_hint="cursor")
+    run(dict(base, hook_event_name="sessionEnd", transcript_path=agent_log,
+             **(end or {"reason": "completed", "final_status": "completed",
+                        "duration_ms": 5})), env, host_hint="cursor")
+
+
+def _agent_log(tmp_path, users=1):
+    log = tmp_path / "agent-transcripts" / "h1" / "h1.jsonl"
+    log.parent.mkdir(parents=True)
+    rows = []
+    for _ in range(users):
+        rows += [{"role": "user", "message": {"content": [{"type": "text", "text": "q"}]}},
+                 {"role": "assistant", "message": {"content": [{"type": "text", "text": "a"}]}},
+                 {"type": "turn_ended", "status": "success"}]
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return str(log)
+
+
+def test_cursor_headless_run_yields_one_turn_closed_normally_at_session_end(tmp_path, cursor_env):
+    repo, env, store = cursor_env
+    env = dict(env, TE_LOOPGUARD="on")
+    _headless_run(repo, env, _agent_log(tmp_path))
+    sess = store.read("sessions/h1.json")
+    assert sess["turn"] is None and len(sess["turns"]) == 1
+    assert sess["turns"][0]["resolved_proxy"] is True
+    assert sess["turns"][0]["tool_calls"] == 2
+    assert (store.read("envelope.json") or {}).get("resolved_turns") == [2]
+
+
+@pytest.mark.parametrize("end", [
+    {"reason": "aborted", "final_status": "aborted"}, {"reason": "user_close"}, {"duration_ms": 1}])
+def test_cursor_session_end_closes_open_turn_as_not_normal_unless_completed(
+        tmp_path, cursor_env, end):
+    repo, env, store = cursor_env
+    env = dict(env, TE_LOOPGUARD="on")
+    _headless_run(repo, env, _agent_log(tmp_path), end=end)
+    sess = store.read("sessions/h1.json")
+    assert len(sess["turns"]) == 1 and sess["turns"][0]["resolved_proxy"] is False
+
+
+def test_cursor_completed_session_end_does_not_close_a_turn_twice(cursor_env):
+    repo, env, store = cursor_env
+    env = dict(env, TE_LOOPGUARD="on")
+    base = {"conversation_id": "c2", "generation_id": "g2", "workspace_roots": [repo]}
+    run(dict(base, hook_event_name="beforeSubmitPrompt", prompt="go"), env, host_hint="cursor")
+    run(dict(base, hook_event_name="postToolUse", tool_name="Shell", tool_use_id="t",
+             tool_input={"command": "ls"},
+             tool_output=json.dumps({"output": "", "exitCode": 0})), env, host_hint="cursor")
+    run(dict(base, hook_event_name="stop", status="completed"), env, host_hint="cursor")
+    run(dict(base, hook_event_name="sessionEnd", reason="completed", final_status="completed"),
+        env, host_hint="cursor")
+    sess = store.read("sessions/c2.json")
+    assert len(sess["turns"]) == 1
+    assert (store.read("envelope.json") or {}).get("resolved_turns") == [1]
+
+
+def test_cursor_prompt_count_falls_back_to_agent_transcript(tmp_path, cursor_env):
+    repo, env, store = cursor_env
+    _headless_run(repo, env, _agent_log(tmp_path, users=2))
+    host = Cursor()
+    spool = host.transcript(host.prepare({"conversation_id": "h1"}, env))
+    assert host.prompt_count(spool) == 2
+    # tool_use_ids with a newline and a null transcript_path survive the round trip
+    out = host.mechanism_trace(spool, str(tmp_path))
+    assert [(n, a) for n, a, _r, _ok in trace.load_trajectory(out)] == [
+        ("Bash", {"command": "ls", "cwd": repo, "timeout": 30000}),
+        ("Read", {"file_path": f"{repo}/a.py"})]
+
+
+def test_cursor_prompt_count_prefers_recorded_prompts_and_tolerates_gaps(tmp_path):
+    spool, log = tmp_path / "s.jsonl", tmp_path / "agent.jsonl"
+    log.write_text(json.dumps({"role": "user"}) + "\n")
+    rows = [{"hook_event_name": "PostToolUse", "agent_transcript": str(log)}]
+    spool.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert trace.cursor_prompt_count(str(spool)) == 1
+    spool.write_text("\n".join(json.dumps(r) for r in rows + [
+        {"hook_event_name": "UserPromptSubmit", "prompt": "p"}]) + "\n")
+    assert trace.cursor_prompt_count(str(spool)) == 1       # the spool's own count wins
+    log.unlink()                                             # a vanished agent log counts as 0
+    spool.write_text(json.dumps(rows[0]) + "\n")
+    assert trace.cursor_prompt_count(str(spool)) == 0
+
+
+def test_cursor_prepare_keeps_agent_transcript_path_only_when_set(tmp_path):
+    host, env = Cursor(), {"TOKENECONOMIZER_HOME": str(tmp_path)}
+    null = host.prepare({"hook_event_name": "sessionStart", "session_id": "s",
+                         "conversation_id": "s", "transcript_path": None}, env)
+    assert "agent_transcript" not in null
+    real = host.prepare({"hook_event_name": "sessionEnd", "session_id": "s", "conversation_id": "s",
+                         "transcript_path": "/home/u/.cursor/projects/x/agent-transcripts/s/s.jsonl"},
+                        env)
+    assert real["agent_transcript"].endswith("/s/s.jsonl")
+    assert real["transcript_path"].endswith("cursor-sessions/s.jsonl")
