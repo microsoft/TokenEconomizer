@@ -377,6 +377,7 @@ are these settings:
 | *c* | `loopguard.judge_confidence` | 0.7 | how sure the judge must be that a turn is stuck |
 | *r* | `loopguard_nudges` | 1 | redirects per turn before the guard only tells you |
 | *b* | `loopguard.backstop_mult` | 2.5 | how many times its usual length a churning turn may run before it is redirected without the judge |
+| | `droid_sidecall` | off | on Droid, allow the plugin's own model calls, which run `droid exec` |
 
 Change them with `config set`, shown here in Claude Code's form (other agents type it as in
 [Everyday commands](#everyday-commands)):
@@ -387,6 +388,11 @@ Change them with `config set`, shown here in Claude Code's form (other agents ty
 /tokeneconomizer:config set toolprune_evidence=20          # p = 20: wait for twenty unused prompts
 /tokeneconomizer:config set loopguard_nudges=2             # r = 2: redirect twice before telling you
 ```
+
+On Droid, the plugin's own calls run `droid exec`, which writes a session log of its own, so
+they stay off until `config set droid_sidecall=on` (`TE_DROID_SIDECALL=1` does the same from a
+terminal). With them off, `microskills=envfacts` still learns and the loop guard keeps its
+rule-based backstop; only the paid fact proposer and the judge wait.
 
 Tool pruning counts prompts so that long sessions weigh more, and requires *m* sessions so that a
 single session never decides alone. It writes the deny list only once your sessions in the

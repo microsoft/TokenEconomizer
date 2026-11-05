@@ -160,6 +160,25 @@ def test_side_calls_are_off_unless_the_person_enables_them(tmp_path, monkeypatch
     assert callable(sidecall.runner_for("droid", cfg))
 
 
+def test_the_setting_turns_side_calls_on_without_a_variable(tmp_path, monkeypatch):
+    """The desktop app cannot set an environment variable for its hooks, so the same switch
+    is a setting."""
+    from tokeneconomizer.plugin import sidecall
+    from tokeneconomizer.plugin.config import load_config, write_config
+    monkeypatch.delenv("TE_DROID_SIDECALL", raising=False)
+    write_config(str(tmp_path / "config.json"), {"droid_sidecall": "on"})
+    cfg = load_config(str(tmp_path), env={})
+    assert cfg.droid_sidecall is True
+    assert callable(sidecall.runner_for("droid", cfg))
+
+
+def test_the_setting_is_off_by_default_and_shown_by_config_show():
+    from tokeneconomizer.plugin.cli import _config_view
+    from tokeneconomizer.plugin.config import LiveConfig
+    assert LiveConfig().droid_sidecall is False
+    assert _config_view(LiveConfig())["droid"] == {"state": "off", "droid_sidecall": False}
+
+
 def test_the_settings_usage_is_normalized_for_pricing():
     from tokeneconomizer.plugin import sidecall
     usage = sidecall._droid_usage({"inputTokens": 5, "outputTokens": 7,

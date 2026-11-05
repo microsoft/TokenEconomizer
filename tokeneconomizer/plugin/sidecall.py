@@ -749,8 +749,10 @@ NO_SIDE_CALLS = frozenset({"antigravity"})
 
 
 def droid_enabled(env=None):
-    """Whether Droid side calls are allowed. They are OFF by default: `droid exec` writes a
-    session log of its own under `~/.factory/sessions`, so a person enables them knowingly."""
+    """Whether `TE_DROID_SIDECALL` allows Droid side calls. The `droid_sidecall` setting does
+    the same from the config file, which is the only way from the desktop app. They are OFF by
+    default: `droid exec` writes a session log of its own under `~/.factory/sessions`, so a
+    person enables them knowingly."""
     env = os.environ if env is None else env
     return str(env.get("TE_DROID_SIDECALL") or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -887,9 +889,10 @@ def _host_call(host_name, config):
     if host_name == "copilot":
         return lambda prompt, _m="agent": copilot_call(prompt, model=model)
     if host_name == "droid":
-        # Off unless the person turned it on: see `droid_enabled`. No runner means the free
-        # layer still learns; only the paid proposer and judge wait.
-        if not droid_enabled():
+        # Off unless the person turned it on, by the setting or the variable: see
+        # `droid_enabled`. No runner means the free layer still learns; only the paid proposer
+        # and the judge wait.
+        if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
             return None
         return lambda prompt, _m="agent": droid_call(prompt, model=model)
     return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku")

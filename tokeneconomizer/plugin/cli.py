@@ -583,6 +583,8 @@ def _config_view(cfg):
                     "history_max_sessions": d.pop("history_max_sessions"),
                     "history_days": d.pop("history_days"),
                     "history_dirs": d.pop("history_dirs")},
+        "droid": {"state": "on" if cfg.droid_sidecall else "off",
+                  "droid_sidecall": d.pop("droid_sidecall")},
         "other": d,
         "warnings": cfg.warnings,
     }
@@ -623,7 +625,7 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
-    if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
+    if {canonical(k) for k in updates} & {"microskills", "loopguard", "droid_sidecall"} and sidecall.resume(
             ctx.host.name, ctx.root):
         print(f"the plugin's model calls through `{sidecall.call_name(ctx.host.name)}` will be "
               f"tried again")

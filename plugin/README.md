@@ -617,8 +617,9 @@ in the project's own folder: a directory that holds several repositories is lear
 `tokenUsage` to `<session id>.settings.json` beside its log, and the plugin prices the session
 from it (an unknown model is labelled `fallback`). **What does not:** tool pruning, because the
 TUI has no persistent per-tool setting (Factory issue #65). **Model calls** run through
-`droid exec` and are off unless `TE_DROID_SIDECALL=1`: that command writes a session log of its
-own, so enabling it is a deliberate choice. With it off, `microskills=envfacts` still learns.
+`droid exec` and are off until `config set droid_sidecall=on` (or `TE_DROID_SIDECALL=1` in a
+terminal session): that command writes a session log of its own, so enabling it is a deliberate
+choice. With it off, `microskills=envfacts` still learns.
 
 **Not verified yet:** a fact reaching a live Droid model. The hook output is covered by tests;
 Droid appending it to the model's context is documented by Factory but has not been observed
