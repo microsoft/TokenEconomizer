@@ -621,9 +621,10 @@ TUI has no persistent per-tool setting (Factory issue #65). **Model calls** run 
 terminal session): that command writes a session log of its own, so enabling it is a deliberate
 choice. With it off, `microskills=envfacts` still learns.
 
-**Not verified yet:** a fact reaching a live Droid model. The hook output is covered by tests;
-Droid appending it to the model's context is documented by Factory but has not been observed
-here.
+**Verified live on 2026-11-05:** a fact reaching a live Droid model. A new session
+(`bb18c4fc`) received the 793-character block as `hookSpecificOutput.additionalContext`, and the
+model repeated it verbatim. The hook output is covered by tests; Droid appending it to the
+model's context has now been observed.
 
 ## What to expect
 

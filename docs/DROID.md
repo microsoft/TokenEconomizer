@@ -110,9 +110,11 @@ its cost is read from the usage Droid records for it.
 - Documented by Factory and relied on here: `SessionStart` appends
   `hookSpecificOutput.additionalContext`; `UserPromptSubmit` and `PostToolUse` accept
   `additionalContext`; there is no `systemMessage` and no `PostToolUseFailure`.
-- **Not verified**: a learned fact reaching a live Droid model. The hook writes the right JSON,
-  but the last hop (Droid appending it to the model's context) has not been observed end to end.
-  Treat this as the open item for Droid support.
+- **Verified live on 2026-11-05**, on Droid 0.233.0: a new session (`bb18c4fc`) received the
+  793-character block as `hookSpecificOutput.additionalContext`, and the model repeated it
+  verbatim. The hook's JSON, Droid appending it to the model's context, and the model repeating
+  it have now all been observed end to end. The block was three facts at the time; a fourth was
+  added by the next fold.
 
 Droid's session and hook formats are internal. The adapter fails open: any error answers `{}` and
 writes one line to `~/.tokeneconomizer/errors.log`, so a Droid update can at worst stop the plugin
@@ -132,6 +134,7 @@ Deleting that directory forgets everything it learned.
 
 ## Compatibility
 
-Tested on Droid `0.233.0` (macOS). After a Droid update, run one session and check
-`te --host droid doctor` and `~/.tokeneconomizer/errors.log`. If Droid changes the session log
-shape, `te --host droid history import` will import nothing, which is the safe failure.
+Tested on Droid `0.233.0` (macOS), including the live injection of a learned block on
+2026-11-05. After a Droid update, run one session and check `te --host droid doctor` and
+`~/.tokeneconomizer/errors.log`. If Droid changes the session log shape,
+`te --host droid history import` will import nothing, which is the safe failure.
