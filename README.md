@@ -183,6 +183,7 @@ mkdir -p ~/.config/opencode/plugins
 ln -s "$PWD/TokenEconomizer/plugin/opencode/tokeneconomizer.ts" ~/.config/opencode/plugins/
 ```
 
+The one file serves both generations: opencode 1.x reads its `server` entry, 2.x its `setup`.
 Start `opencode` and send a prompt, then check in the repository with
 `~/.tokeneconomizer/bin/te --host opencode status`. opencode has no plugin commands, so the
 plugin's commands run from a terminal.
@@ -226,7 +227,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
-| opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
+| opencode (experimental) | 1.19.5, 2.2.0 and 2.2.5 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
@@ -236,8 +237,9 @@ have not been tested yet.
 - **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
   `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`, using your clone's
   full path; `git pull` in the clone updates it.
-- **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
-  2.x terminal UI.
+- **opencode** support is experimental. One plugin file serves both generations (1.x reads its
+  `server` entry, 2.x its `setup`): verified live on 1.19.5 and 2.2.0, the 2.x entry also runs
+  against 2.2.5 in CI. It has not been tested in the 2.x terminal UI.
 - **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
   from a live Agent session has not yet been verified.
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local

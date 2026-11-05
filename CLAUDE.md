@@ -19,7 +19,8 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   (`scripts/te`, `scripts/te-hook`), slash commands (`slash-commands/`, named in the Claude Code
   and Copilot manifests, since Codex would turn a `commands/` folder into duplicate skills), Codex
   skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension, the opencode
-  and Hermes plugins; `lib/` links the package
+  plugin (`opencode/`, one file whose default export serves 1.x via `server` and 2.x via
+  `setup`) and the Hermes plugin; `lib/` links the package
 - `experiments/` — benchmark-only: `te_bench/` (adapters, arms, facade, benchmark-only
   controllers), `te_harness/` (Docker runners), `scripts/`, `workloads/`, its own `tests/`;
   its `README.md` is the run book
