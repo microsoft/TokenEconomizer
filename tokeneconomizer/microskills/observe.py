@@ -118,6 +118,8 @@ _CONDA_RUN_RE = re.compile(r"^(?:conda|mamba)\s+run\s+(?:--no-capture-output\s+|
                            r"(?:-n|--name)\s+([\w.-]+)\s+")
 _TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
+# Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
+_TOOL_LAUNCH_RE = re.compile(r"^(uvx|uv\s+tool\s+run|pipx\s+run)\s+")
 _INTERP_VERSIONED_RE = re.compile(r"^(?:python|node)\d(?:\.\d+)?$")
 _ENV_ASSIGN_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)+")
 _ASSIGN_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -357,6 +359,10 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             if m and m.end() > 0:
                 prefix = (prefix + " " if prefix else "") + "npx"
                 body = body[m.end():]
+            elif vocab.generic and (m := _TOOL_LAUNCH_RE.match(body)):
+                launcher = "pipx run" if m.group(1).startswith("pipx") else "uvx"
+                prefix = (prefix + " " if prefix else "") + launcher
+                body = body[m.end():]
         toks = _tokens(body)
         while toks and (toks[0] in PREFIX_HEADS or _ASSIGN_TOKEN_RE.match(toks[0])):
             if _ASSIGN_TOKEN_RE.match(toks[0]):          # `env VAR=value cmd`
@@ -397,6 +403,9 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
             mod = rest[rest.index("-m") + 1] if rest.index("-m") + 1 < len(rest) else ""
             if mod in vocab.runner_modules:
                 return Observation(call, "run_tests", form(f"{head} -m {mod}"), head, prefix, seg)
+            # `python -m mypy` runs the checker itself, not the interpreter.
+            if vocab.generic and mod in vocab.build_heads:
+                return Observation(call, "run_build", form(f"{head} -m {mod}"), head, prefix, seg)
         script = _runner_script(rest, vocab)
         if script and (script != "manage.py" or "test" in rest):
             return Observation(call, "run_tests", form(f"{head} {script}"), head, prefix, seg)
@@ -726,4 +735,4 @@ def is_bare(form):
     """A form with no activation prefix and no explicit path is 'bare'."""
     head = form.split()[0] if form else ""
     return "/" not in head and " activate " not in form and " run " not in form and \
-        not form.startswith(("conda run", "poetry run", "pipenv run", "uv run", "npx "))
+        not form.startswith(("conda run", "poetry run", "pipenv run", "uv run", "npx ", "uvx "))
