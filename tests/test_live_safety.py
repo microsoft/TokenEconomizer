@@ -17,7 +17,7 @@ import pytest
 from tokeneconomizer.plugin import denylist, toolcheck
 from tokeneconomizer.plugin.paths import ensure_launcher, secure_root
 from tokeneconomizer.plugin.store import Store
-from tests.conftest import symlink_or_skip
+from tests.conftest import git_sh, symlink_or_skip
 from tests.test_live_hooks import repo  # noqa: F401
 
 PLUGIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin")
@@ -97,8 +97,8 @@ def test_a_loose_state_root_is_made_private_and_the_launcher_is_owner_only(tmp_p
                     reason="POSIX permission bits: Windows keeps a profile private by ACL")
 def test_the_command_line_creates_its_state_private(repo, tmp_path):
     env = dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "home"))
-    subprocess.run(["sh", os.path.join(PLUGIN, "scripts", "te"), "--cwd", repo, "config", "set",
-                    "spiral=off"], env=dict(env, TE_PYTHON=sys.executable), check=True,
+    subprocess.run([git_sh() or "sh", os.path.join(PLUGIN, "scripts", "te"), "--cwd", repo,
+                    "config", "set", "spiral=off"], env=dict(env, TE_PYTHON=sys.executable), check=True,
                    capture_output=True)
     made = [os.path.join(d, n) for d, ds, fs in os.walk(env["TOKENECONOMIZER_HOME"])
             for n in ds + fs] + [env["TOKENECONOMIZER_HOME"]]

@@ -19,10 +19,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from tests.conftest import git_sh
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugin")
 CODEX = shutil.which("codex")
-SH = ["sh"] if os.name == "nt" else []
+# Windows runs no shebang: the launchers go through Git Bash's `sh`.
+SH = [git_sh() or "sh"] if os.name == "nt" else []
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("TE_CODEX_E2E") != "1" or not CODEX,
