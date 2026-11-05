@@ -219,6 +219,23 @@ def claude_no_mcp(cli, cwd):
     return ["--strict-mcp-config", "--mcp-config", path]
 
 
+def _claude_json_result(stdout):
+    """One result object out of what `-p --output-format json` printed. With the user's
+    `verbose: true`, Claude Code prints a JSON ARRAY of stream events (`system`,
+    `assistant`, ..., `result`) instead of the bare result object, and the result is its
+    last element -- anything else it prints still parses as one object (#131)."""
+    try:
+        data = json.loads(stdout or "{}")
+    except ValueError:
+        return {}
+    if isinstance(data, list):
+        for ev in reversed(data):
+            if isinstance(ev, dict) and ev.get("type") == "result":
+                return ev
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     cli = cli or claude_cli()
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
@@ -228,10 +245,7 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
                              cwd=cwd)
-    try:
-        data = json.loads(out.stdout or "{}")
-    except ValueError:
-        data = {}
+    data = _claude_json_result(out.stdout)
     if not data.get("result"):
         _no_reply("claude", out)
     usage = dict(data.get("usage") or {})

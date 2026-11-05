@@ -626,7 +626,15 @@ class Distiller:
                                        {i: f.claim for i, f in self.facts.items()},
                                        set(self.extractors), excerpts, external=external,
                                        generic=self.generic)
-        raw, eff = self.runner(prompt, self.model)
+        raw, eff = None, None
+        try:
+            raw, eff = self.runner(prompt, self.model)
+        except Exception:
+            # A failed side call (a `verbose` array, a timeout, a CLI that would not run)
+            # skips this proposal instead of aborting the fold, and backs off one cadence
+            # so a broken runner is not paid again every tick (#131).
+            self.last_propose = self.now
+            return
         if eff is not None:
             self.opt_tokens += eff
         exts, facts = parse_payload(raw)
