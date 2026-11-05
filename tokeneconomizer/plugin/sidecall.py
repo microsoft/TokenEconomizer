@@ -32,6 +32,10 @@ so no extra API key is needed and the call is billed where the session is:
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * Grok: `grok -p <prompt> --output-format json` in a throwaway directory, on the person's default
+    model, with the shell, edit, write and web tools and subagents removed
+    (`--disallowed-tools`); no approval flag is passed. It leaves a session under
+    `~/.grok/sessions/`, which no hook tracks (they do nothing under `TE_SIDECALL`).
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
@@ -396,6 +400,32 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     return text or "", None
 
 
+# Removed from a Grok side call, which only answers (grok 1.0.70's tool filtering,
+# `grok -p` docs); a name the CLI does not know is warned about and removes nothing.
+GROK_DENIED = "run_terminal_cmd,search_replace,write,web_search,web_fetch,Agent"
+
+
+def grok_call(prompt, model="", cli="grok", timeout=TIMEOUT_S):
+    """A side call through `grok -p --output-format json` in an empty throwaway directory, on the
+    person's default model unless `model` names one. Grok reports input without the cached
+    reads, as the ledger does."""
+    cmd = [*program(cli), "-p", prompt, "--output-format", "json", "--no-auto-update",
+           "--disallowed-tools", GROK_DENIED]
+    if model:
+        cmd += ["--model", model]
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    text, usage = trace.grok_json_reply(out.stdout)
+    if not text:
+        _no_reply("grok", out)
+    eff = None
+    if usage:
+        usage["model"] = usage.get("model") or model or "grok"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 HERMES_SOURCE = "tool"
 # Hermes refuses a `--source` it does not know (`invalid_params`, 0.22.5, though its docs say any
 # value is stored), and `tool` is the one meant for this: hidden from its session pickers, and not
@@ -670,6 +700,8 @@ def runner_for(host_name, config):
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "cursor":
         return lambda prompt, _m="agent": cursor_call(prompt, model=model)
+    if host_name == "grok":
+        return lambda prompt, _m="agent": grok_call(prompt, model=model)
     if host_name == "hermes":
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
