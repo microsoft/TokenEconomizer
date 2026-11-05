@@ -676,9 +676,11 @@ was not.)
   the text as on Claude Code (Droid reports no exit code field that the adapter relies on).
 * **Tool pruning** is not available: the TUI has no persistent per-tool setting, and Factory
   issue #65 asks for one (`droid exec --only-tools` is exec-only).
-* **Not verified:** a fact written by the hook reaching a live Droid model. The hook output is
-  covered, the last hop is not. Also unverified: whether `droid exec` can be restricted to a
-  pure completion, which is why side calls are off unless `TE_DROID_SIDECALL=1`.
+* **Verified live on 2026-11-05:** a fact written by the hook reached a live Droid model. A new
+  session (`bb18c4fc`) received the 793-character block as
+  `hookSpecificOutput.additionalContext`, and the model repeated it verbatim. The hook output
+  and the last hop are both observed. Still unverified: whether `droid exec` can be restricted
+  to a pure completion, which is why side calls are off unless `TE_DROID_SIDECALL=1`.
 
 ## 4. State and privacy
 

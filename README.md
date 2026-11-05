@@ -293,10 +293,11 @@ have not been tested yet.
   [its limits](plugin/README.md#hermes-agent).
 - **Factory Droid** support is experimental: it was tested on 0.233.0 only, on macOS. Droid
   documents the hook contract this adapter uses, and the plugin's own hook output is covered by
-  tests, but a learned fact reaching a live Droid model has not yet been verified. Droid's TUI
-  has no persistent per-tool setting (Factory issue #65), so tool pruning is not available; its
-  session logs are read for micro-skills and the loop guard, and priced from the usage Droid
-  writes beside each log. See [its notes](docs/DROID.md).
+  tests; a learned fact reaching a live Droid model was verified on 2026-11-05 (a new session
+  received the 793-character block as `hookSpecificOutput.additionalContext` and the model
+  repeated it). Droid's TUI has no persistent per-tool setting (Factory issue #65), so tool
+  pruning is not available; its session logs are read for micro-skills and the loop guard, and
+  priced from the usage Droid writes beside each log. See [its notes](docs/DROID.md).
 
 ### Everyday commands
 
