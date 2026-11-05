@@ -821,6 +821,7 @@ def cmd_doctor(args):
                            sidecall.hermes_cli() if h == "hermes" else h)]
     none_installed = "none of claude, codex, copilot, droid, grok, hermes, opencode, pi on PATH"
     print(f"agents      {', '.join(agents) or none_installed}")
+    ctx = _ctx(args)          # the per-agent lines below read the settings in effect
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:
@@ -857,8 +858,12 @@ def cmd_doctor(args):
     if "droid" in agents:
         sessions = os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
             os.path.expanduser("~"), ".factory", "sessions")
-        side = ("on (TE_DROID_SIDECALL=1)" if sidecall.droid_enabled()
-                else "off (set TE_DROID_SIDECALL=1 to try them)")
+        if getattr(ctx.config, "droid_sidecall", False):
+            side = "on (the `droid_sidecall` setting)"
+        elif sidecall.droid_enabled():
+            side = "on (TE_DROID_SIDECALL=1)"
+        else:
+            side = ("off (set `droid_sidecall=on` or TE_DROID_SIDECALL=1 to try them)")
         print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
               f"available in the TUI")
     if "hermes" in agents:
@@ -874,7 +879,6 @@ def cmd_doctor(args):
             pkgs = []
         mine = [p for p in pkgs if "tokeneconomizer" in json.dumps(p).lower()]
         print(f"pi          package {'installed: ' + str(mine[0]) if mine else 'not in ' + settings}")
-    ctx = _ctx(args)
     print(f"repository  {ctx.repo.root}: {repos.describe(ctx.repo)}; state {ctx.repo.key}")
     home_git = os.path.join(paths.home_dir(), ".git")
     for path in repos.ignored_git_entries(args.cwd):
