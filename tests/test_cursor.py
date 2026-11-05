@@ -266,4 +266,4 @@ def test_cursor_prepare_keeps_agent_transcript_path_only_when_set(tmp_path):
                          "transcript_path": "/home/u/.cursor/projects/x/agent-transcripts/s/s.jsonl"},
                         env)
     assert real["agent_transcript"].endswith("/s/s.jsonl")
-    assert real["transcript_path"].endswith("cursor-sessions/s.jsonl")
+    assert Path(real["transcript_path"]).parts[-2:] == ("cursor-sessions", "s.jsonl")
