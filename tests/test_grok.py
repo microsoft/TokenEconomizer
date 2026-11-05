@@ -415,7 +415,13 @@ def test_a_grok_side_call_is_a_headless_completion_that_removes_what_acts(monkey
     assert text == "- use python -m pytest" and eff and eff > 0
     cmd = seen["cmd"]
     assert cmd[:5] == ["grok", "-p", "propose facts", "--output-format", "json"]
-    assert cmd[cmd.index("--disallowed-tools") + 1] == sidecall.GROK_DENIED
+    # An allowlist of one read-only tool (fails closed), the MCP dispatchers removed, and deny
+    # rules behind it -- never a deny list of guessed names, which removed nothing on 1.0.70.
+    assert cmd[cmd.index("--tools") + 1] == sidecall.GROK_TOOLS == "read_file"
+    assert cmd[cmd.index("--disallowed-tools") + 1] == "use_tool,search_tool"
+    denied = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--deny"]
+    assert {"Bash", "Edit", "Write"} <= set(denied)
+    assert "run_terminal_command" not in cmd and "search_replace" not in cmd
     assert cmd[cmd.index("--model") + 1] == "grok-4.7"
     assert "--always-approve" not in cmd and "--yolo" not in cmd
     assert seen["env"]["TE_SIDECALL"] == "1" and seen["stdin"] == subprocess.DEVNULL

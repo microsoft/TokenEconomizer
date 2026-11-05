@@ -400,9 +400,18 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     return text or "", None
 
 
-# Removed from a Grok side call, which only answers (grok 1.0.70's tool filtering,
-# `grok -p` docs); a name the CLI does not know is warned about and removes nothing.
-GROK_DENIED = "run_terminal_cmd,search_replace,write,web_search,web_fetch,Agent"
+# A Grok side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. An allowlist fails closed where a deny list does not: `grok -p` runs in `auto`
+# permission mode, and a deny list naming a tool by a wrong name removes nothing (grok 1.0.70 ran
+# a shell command with `--disallowed-tools run_terminal_cmd`; its shell is `run_terminal_command`)
+# -- nor does `--tools ""`, which grok reads as no filter at all. `--tools` cannot be empty, so it
+# keeps the one read-only tool; `use_tool` / `search_tool`, the MCP dispatchers grok adds to any
+# allowlist, are removed, and deny rules back the shell and writers in case a tool is renamed.
+# Verified on 1.0.70: the session's tool_definitions.json lists only `read_file`, and a prompt
+# asking for a shell command and a file write leaves the directory untouched.
+GROK_TOOLS = "read_file"
+GROK_REMOVED = "use_tool,search_tool"
+GROK_DENY_RULES = ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task")
 
 
 def grok_call(prompt, model="", cli="grok", timeout=TIMEOUT_S):
@@ -410,7 +419,8 @@ def grok_call(prompt, model="", cli="grok", timeout=TIMEOUT_S):
     person's default model unless `model` names one. Grok reports input without the cached
     reads, as the ledger does."""
     cmd = [*program(cli), "-p", prompt, "--output-format", "json", "--no-auto-update",
-           "--disallowed-tools", GROK_DENIED]
+           "--tools", GROK_TOOLS, "--disallowed-tools", GROK_REMOVED,
+           *(a for rule in GROK_DENY_RULES for a in ("--deny", rule))]
     if model:
         cmd += ["--model", model]
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
