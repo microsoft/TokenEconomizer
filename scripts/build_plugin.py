@@ -28,7 +28,7 @@ import shutil
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
+IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".DS_Store")
 
 
 def build(out):
@@ -80,6 +80,11 @@ def build_droid(out):
     # such event).
     shutil.copyfile(os.path.join(REPO, "plugin", "hooks", "droid-hooks.json"),
                     os.path.join(plugin_out, "hooks", "hooks.json"))
+    for name in ("droid-hooks.json", "codex-hooks.json", "copilot-hooks.json",
+                 "cursor-hooks.json"):        # other agents' hook files: Droid reads one
+        stale = os.path.join(plugin_out, "hooks", name)
+        if os.path.exists(stale):
+            os.remove(stale)
     # Slash commands become Droid commands. Droid has an Execute tool, not Claude's Bash, and
     # expands ${DROID_PLUGIN_ROOT}.
     commands_out = os.path.join(plugin_out, "commands")
