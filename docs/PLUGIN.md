@@ -654,6 +654,32 @@ was not.)
 * **Side call, verified on 1.0.70.** With the side call's flags, the run's recorded tool list held
   only `read_file`, and a prompt asking it to create a file left none.
 
+**Factory Droid 0.233.0 -- adapter built 2026-11-05, partially verified:**
+
+* The hook contract is Claude-shaped (`session_id`, `transcript_path`, `cwd`,
+  `hook_event_name`) with Droid's own tool names (`Execute`, `Script`, `Create`, `Edit`,
+  `ApplyPatch`, ...). Factory's documentation names the same events this plugin registers --
+  `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd` -- and says a
+  `SessionStart` hook's `hookSpecificOutput.additionalContext` is appended to the new session's
+  context. Droid documents no `systemMessage` and no `PostToolUseFailure`.
+* **Offline, tested here:** the session reader and the tool-name mapping; prompt counting
+  (Droid's own `user_only` and `llm_only` messages and injected reminders are not prompts);
+  folding a session and the history import; the `SessionStart` hook's own JSON, including an
+  injected fact; usage and pricing; and the loop guard's redirect and notice paths on Droid
+  payloads. `tests/test_droid.py` and `tests/test_live_hooks.py` cover each.
+* **Session cost.** Droid's transcript carries no usage, but `<session id>.settings.json`
+  beside it carries `tokenUsage` (`inputTokens`, `outputTokens`, `cacheCreationTokens`,
+  `cacheReadTokens`, `thinkingTokens`, `factoryCredits`). Only `tokenUsage` is read;
+  `inclusiveTokenUsage` also counts child sessions, which are folded on their own.
+* **Tool results** are `tool_result` blocks with `is_error`, the same shape as Claude Code's
+  log; the live `PostToolUse` `tool_response` shape varies by tool, so shell status is read from
+  the text as on Claude Code (Droid reports no exit code field that the adapter relies on).
+* **Tool pruning** is not available: the TUI has no persistent per-tool setting, and Factory
+  issue #65 asks for one (`droid exec --only-tools` is exec-only).
+* **Not verified:** a fact written by the hook reaching a live Droid model. The hook output is
+  covered, the last hop is not. Also unverified: whether `droid exec` can be restricted to a
+  pure completion, which is why side calls are off unless `TE_DROID_SIDECALL=1`.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory

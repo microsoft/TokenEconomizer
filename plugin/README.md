@@ -1,13 +1,14 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), Grok Build (experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
+(experimental), Grok Build (experimental), opencode (experimental), Hermes Agent (experimental)
+and Factory Droid (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
   [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
-  [Hermes Agent](#hermes-agent)
+  [Hermes Agent](#hermes-agent) · [Factory Droid](#factory-droid)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -538,6 +539,45 @@ log a warning for the empty section of a session with no facts.
 
 **Uninstall.** `hermes plugins disable tokeneconomizer`, `rm ~/.hermes/plugins/tokeneconomizer`,
 `hermes gateway restart`. Optional: `rm -rf ~/.tokeneconomizer`.
+
+## Factory Droid
+
+Experimental. Full notes are in [`docs/DROID.md`](../docs/DROID.md).
+
+**1. Install.** Droid needs a native plugin layout, so build the Droid bundle (it copies the
+Python package into `lib/`, since Droid copies the plugin directory into its cache):
+
+```sh
+python scripts/build_plugin.py --droid
+droid plugin marketplace add "$PWD/dist/tokeneconomizer-droid"
+droid plugin install tokeneconomizer@tokeneconomizer-droid --scope user
+```
+
+Start a new Droid session: hooks are snapshotted at startup.
+
+**2. Check it.** Run `/tokeneconomizer-status`, or from a terminal in the repository
+`~/.tokeneconomizer/bin/te --host droid status`.
+
+**3. Import earlier sessions.** Droid's own logs are read by the same history import as the
+other hosts:
+
+```sh
+~/.tokeneconomizer/bin/te --host droid history import
+```
+
+It runs only into a repository with nothing folded yet and makes no model call. Start sessions
+in the project's own folder: a directory that holds several repositories is learned as one.
+
+**What works.** Micro-skills, the loop guard and session cost. Droid writes each session's
+`tokenUsage` to `<session id>.settings.json` beside its log, and the plugin prices the session
+from it (an unknown model is labelled `fallback`). **What does not:** tool pruning, because the
+TUI has no persistent per-tool setting (Factory issue #65). **Model calls** run through
+`droid exec` and are off unless `TE_DROID_SIDECALL=1`: that command writes a session log of its
+own, so enabling it is a deliberate choice. With it off, `microskills=envfacts` still learns.
+
+**Not verified yet:** a fact reaching a live Droid model. The hook output is covered by tests;
+Droid appending it to the model's context is documented by Factory but has not been observed
+here.
 
 ## What to expect
 

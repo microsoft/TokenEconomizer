@@ -332,6 +332,11 @@ def _stuck(host, n=40):
     if host in ("claude", "codex"):
         return stuck_calls(n, host if host == "codex" else None)
     fail = "FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2"
+    if host == "droid":
+        return [("Edit", {"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"},
+                 {"output": "ok", "exitCode": 0}) if k % 2 == 0 else
+                ("Execute", {"command": "pytest -q"}, {"output": fail, "exitCode": 1})
+                for k in range(n)]
     if host == "pi":
         return [("edit", {"path": "/r/pkg/a.py", "oldText": "x", "newText": "y"}, {"content": "ok"})
                 if k % 2 == 0 else ("bash", {"command": "pytest -q"},
@@ -345,7 +350,7 @@ def _stuck(host, n=40):
             for k in range(n)]
 
 
-@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi"])
+@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi", "droid"])
 @pytest.mark.parametrize("mode", ["interactive", "headless"])
 @pytest.mark.parametrize("setting", ["nudge", "stop"])
 def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
@@ -363,10 +368,18 @@ def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
         lambda o: o.get("systemMessage") or "")
     to_model = [ctx_key(o) for o in outs if ctx_key(o)]
     stuck = [shown(o) for o in outs if "still looks stuck" in shown(o)]
+    assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
+    if host == "droid":
+        # Droid documents no `systemMessage`: the notice is relayed through the model's reply,
+        # the channel it actually shows.
+        assert stuck == []
+        relay = [t for t in to_model if t and "still looks stuck" in t]
+        assert len(relay) == 1 and "it does not change your task" in relay[0]
+        assert any("Process check (automated)" in (t or "") for t in to_model)
+        return
     assert len(stuck) == 1                                             # one notice
     hint = hosts.HOSTS[host]().stop_hint(mode == "headless")
     assert stuck[0].endswith(hint)
-    assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
     if host == "claude":
         # Claude Code keeps hook messages out of the main view, so the notice also goes to the
         # model, word for word, to pass on in its reply; the redirect comes first.

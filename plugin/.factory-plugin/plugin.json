@@ -1,0 +1,12 @@
+{
+  "name": "tokeneconomizer",
+  "description": "Experience-driven cost control for Factory Droid: short repository facts learned from earlier sessions are injected at session start, each session is priced from Droid's own usage, and a guard redirects a turn stuck in a failing loop. Tool pruning is off on Droid (its TUI has no persistent tool list to change).",
+  "version": "0.2.0",
+  "author": {
+    "name": "TokenEconomizer authors"
+  },
+  "homepage": "https://github.com/microsoft/TokenEconomizer",
+  "repository": "https://github.com/microsoft/TokenEconomizer",
+  "license": "Apache-2.0",
+  "keywords": ["cost", "tokens", "context", "hooks", "micro-skills", "failure-loops", "droid"]
+}

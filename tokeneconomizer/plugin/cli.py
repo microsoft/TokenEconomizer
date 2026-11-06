@@ -19,8 +19,8 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
-    te history import [--dry-run]     Claude Code: fold this repository's sessions from before
-                                      the plugin, from Claude Code's own logs (no model calls,
+    te history import [--dry-run]     fold this repository's sessions from before the plugin,
+                                      from the agent's own logs (no model calls,
                                       no deny list written; only before any session is folded;
                                       with `history_import=on`, the first session start runs
                                       it by itself)
@@ -264,7 +264,7 @@ def cmd_status(args):
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
           f"({ledger['overhead_frac']:.1%})")
-    hist = history.describe(out["history"])
+    hist = history.describe(out["history"], ctx.host.name)
     if hist:
         print(f"  history      {hist}")
     i = out["microskills"]
@@ -654,7 +654,7 @@ def _print_history(ctx, doc):
         print(f"no import of earlier sessions recorded for {ctx.repo.label}"
               + ("" if ctx.config.history_import else " (history_import is off)"))
         return
-    print(f"{ctx.repo.label}: {history.describe(doc) or doc.get('state')}")
+    print(f"{ctx.repo.label}: {history.describe(doc, ctx.host.name) or doc.get('state')}")
     skipped = doc.get("skipped") if isinstance(doc.get("skipped"), dict) else {}
     if doc.get("over_limit"):
         skipped = dict(skipped, older_than_the_newest=doc["over_limit"])
@@ -663,13 +663,13 @@ def _print_history(ctx, doc):
 
 
 def cmd_history(args):
-    """`te history [import]`: a repository's sessions from before the plugin (Claude Code)."""
+    """`te history [import]`: a repository's sessions from before the plugin."""
     ctx = _ctx(args)
     if args.action == "status" or args.status:
         _print_history(ctx, history.summary(ctx))
         return 0
     if not ctx.host.keeps_history:
-        print(f"{ctx.host.name}: no session history the plugin reads (Claude Code only)")
+        print(f"{ctx.host.name}: no session history the plugin reads")
         return 1
     if args.dry_run:
         p = history.plan(ctx)
@@ -813,11 +813,12 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("claude", "codex", "copilot", "grok", "hermes", "opencode", "pi")
+    agents = [h for h in ("claude", "codex", "copilot", "droid", "grok", "hermes", "opencode",
+                          "pi")
               if _sh.which(sidecall.claude_cli() if h == "claude" else
                            sidecall.hermes_cli() if h == "hermes" else h)]
-    print(f"agents      "
-          f"{', '.join(agents) or 'none of claude, codex, copilot, grok, hermes, opencode, pi on PATH'}")
+    none_installed = "none of claude, codex, copilot, droid, grok, hermes, opencode, pi on PATH"
+    print(f"agents      {', '.join(agents) or none_installed}")
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:
@@ -851,6 +852,13 @@ def cmd_doctor(args):
         if ctrust is not None:
             print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "
                   f"untrusted folder's .github/copilot settings are ignored)")
+    if "droid" in agents:
+        sessions = os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
+            os.path.expanduser("~"), ".factory", "sessions")
+        side = ("on (TE_DROID_SIDECALL=1)" if sidecall.droid_enabled()
+                else "off (set TE_DROID_SIDECALL=1 to try them)")
+        print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
+              f"available in the TUI")
     if "hermes" in agents:
         link = os.path.join(sidecall.hermes_home(), "plugins", "tokeneconomizer")
         print(f"hermes      plugin {'linked at ' + link if os.path.exists(link) else 'not in ' + link}"

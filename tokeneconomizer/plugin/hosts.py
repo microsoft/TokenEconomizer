@@ -229,6 +229,31 @@ class Host:
         the plugin reads."""
         return []
 
+    # -- the session-log details the history import reads ---------------------------------
+    def log_head(self, path):
+        """`{cwd, started, entrypoint?}` for a session log: the header the import filters on."""
+        return trace.claude_log_head(path)
+
+    def safe_session_id(self, sid):
+        return trace.claude_safe_session_id(sid)
+
+    def prompt_turns(self, path):
+        return trace.claude_prompt_turns(path)
+
+    def turn_calls(self, turn_lines):
+        return trace.claude_calls(turn_lines)
+
+    def turn_interrupted(self, turn_lines):
+        return trace.claude_turn_interrupted(turn_lines)
+
+    def turn_answered(self, turn_lines):
+        return trace.claude_turn_answered(turn_lines)
+
+    def folder_matches(self, root, folder):
+        """Does a log's folder name this repository's root, when the log's cwd is gone?"""
+        return folder in {trace.claude_project_folder(root),
+                          trace.claude_project_folder(os.path.realpath(root))}
+
 
 def _failure_response(p):
     """A PostToolUseFailure payload's `error` as a response; None for any other payload. A
@@ -1015,8 +1040,109 @@ def _ancestor_args(limit=4):
     return out
 
 
-HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok}
+_DROID_SHELL = {"execute", "script"}
+_DROID_EDIT = {"edit", "multiedit", "str_replace"}
+_DROID_CREATE = {"create", "write"}
+
+
+class Droid(Host):
+    """Factory Droid, through `plugin/.factory-plugin/` and its `hooks/hooks.json`.
+
+    Droid runs the Claude-shaped hook contract (`session_id`, `transcript_path`, `cwd`,
+    `hook_event_name`) with its own tool names, and documents the same context channels:
+    `hookSpecificOutput.additionalContext` from SessionStart, `additionalContext` from
+    UserPromptSubmit and PostToolUse. It documents no `systemMessage` and no
+    `PostToolUseFailure`: a failed tool is a `tool_result.is_error` block in the session log,
+    and a hook message is only visible in Droid's detailed transcript view. Notices therefore
+    go through the model (`relays_notices`), never into the person's context as plugin chatter.
+
+    The session log is `~/.factory/sessions/<workspace>/<session-id>.jsonl`; its blocks are
+    Claude Code's, so `trace.droid_session_to_claude` unwraps the message records and the
+    existing readers take it from there. Usage lives beside it in `<session id>.settings.json`
+    (`trace.droid_session_usage`), so a folded session is priced like any other.
+
+    The TUI has no persistent per-tool setting (`droid exec --only-tools` has no interactive
+    equivalent; Factory issue #65), so tool pruning is not available here: `denylist.supports`
+    says so and the controller writes nothing.
+    """
+    name = "droid"
+    # Droid documents no interrupt key beyond its own UI; this is the generic instruction.
+    interrupt = "Interrupt the agent to stop it."
+    prompt_context = True              # documented: UserPromptSubmit additionalContext
+    relays_notices = True
+    keeps_history = True
+
+    def notice(self, text):
+        # No `systemMessage` in Droid's contract; stdout of a hook is only in the detailed
+        # transcript view. The controller relays an abort through the model when
+        # `relays_notices` is set, so this stays empty rather than adding plugin chatter.
+        return {}
+
+    def env_session_id(self, env):
+        return str(env.get("TE_SESSION_ID") or env.get("FACTORY_SESSION_ID") or "")
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        low = name.lower()
+        if low in _DROID_SHELL:
+            cmd = args.get("command", args.get("script", ""))
+            return "bash", {"command": str(cmd or "")}, text, code
+        if low in _DROID_CREATE or low in _DROID_EDIT:
+            path = args.get("file_path") or args.get("path") or ""
+            return ("create" if low in _DROID_CREATE else "edit"), dict(args, path=path), text, code
+        if low in ("applypatch", "apply_patch"):
+            patch = next((v for v in (args.get("input"), args.get("patch"), args.get("command"))
+                          if isinstance(v, str)), "")
+            paths = _PATCH_FILE_RE.findall(patch)
+            return "edit", {"path": paths[0] if paths else "", "paths": paths}, text, code
+        return name, args, text, code
+
+    def headless(self, env, transcript=None):
+        # Droid does not publish a mode marker on the hook's environment; a TUI session is the
+        # default, and the wrong guess only changes the wording of an abort notice.
+        return False
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "droid_trace.jsonl")
+        n = trace.droid_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def session_usage(self, transcript_path):
+        return trace.droid_session_usage(transcript_path)
+
+    def prompt_count(self, transcript_path):
+        return trace.droid_prompt_count(transcript_path)
+
+    # -- the history import --------------------------------------------------------------
+    def history(self, env, extra_dirs=()):
+        """Every top-level session under `$DROID_SESSIONS_DIR` (else `~/.factory/sessions`),
+        newest last. Subagent sessions are left out: they carry `callingSessionId` and are part
+        of the session that launched them."""
+        rows = []
+        for row in trace.droid_sessions(None, env):
+            if row.get("parent"):
+                continue
+            rows.append({"session_id": row["id"], "folder": row.get("folder"),
+                         "path": row["path"], "mtime": row["mtime"], "size": row["size"]})
+        return rows
+
+    def log_head(self, path):
+        return trace.droid_log_head(path)
+
+    def safe_session_id(self, sid):
+        return trace.droid_safe_session_id(sid)
+
+    def prompt_turns(self, path):
+        return trace.droid_prompt_turns(path)
+
+    def folder_matches(self, root, folder):
+        # Droid files a session under its workspace path with every separator written as `-`:
+        # `/Users/me/repo` becomes `-Users-me-repo`. Only asked when the recorded cwd is gone.
+        return folder == os.path.abspath(root).replace("\\", "-").replace("/", "-")
+
+
+HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
+         "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok}
 
 
 def default_host(env=None, recent=None):
@@ -1035,6 +1161,10 @@ def default_host(env=None, recent=None):
         return "cursor"
     if env.get("GROK_SESSION_ID"):
         return "grok"
+    # Droid marks its shell with the session it runs; checked last, so an agent started from
+    # inside Droid is read as its own host.
+    if env.get("FACTORY_SESSION_ID") or env.get("DROID_PLUGIN_ROOT"):
+        return "droid"
     return recent if recent in HOSTS else "claude"
 
 
@@ -1057,6 +1187,11 @@ def detect(payload, env=None, hint=None):
         return Codex()
     if "/session-state/" in sp and tp.endswith("events.jsonl"):
         return Copilot()
+    # Droid's sessions live under `.factory/sessions/<workspace>/<id>.jsonl`; its plugin hooks
+    # also mark the environment. The transcript test comes first, so a Droid session started
+    # from inside another agent is still Droid's.
+    if "/.factory/sessions/" in sp or (not tp and (env or {}).get("DROID_PLUGIN_ROOT")):
+        return Droid()
     # Claude Code always sends a transcript path; Copilot sends none before Stop, and marks its
     # hook processes. (Hooks inherit the parent's environment, so the marker alone would also
     # tag a Claude Code session started from inside Copilot -- hence the transcript test first.)
