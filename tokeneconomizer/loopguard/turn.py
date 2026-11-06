@@ -250,6 +250,7 @@ class TurnGuard:
         self.verifications = int(d.get("verifications", 0))
         self.judge_pending = d.get("judge_pending") or None   # {"id", "since", "segment"}
         self.nudge_ready = d.get("nudge_ready") or None       # a redirect the judge wrote
+        self.held = d.get("held") or None     # a decision no hook could say yet: [action, reason]
 
     def to_dict(self):
         return {"turn_key": self.turn_key, "st": state_to_dict(self.st),
@@ -262,7 +263,8 @@ class TurnGuard:
                 "writer_tokens": self.writer_tokens, "last_edit": self.last_edit,
                 "last_verify": self.last_verify, "last_verify_failed": self.last_verify_failed,
                 "edits": self.edits, "verifications": self.verifications,
-                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready}
+                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready,
+                "held": self.held}
 
     # ---- outcome tracking for the ended-green proxy ----------------------------------
     def _track(self, name, args, result, exit_code, shell_edits=()):
@@ -397,7 +399,7 @@ class TurnGuard:
         fold_shell_edits(self.whole, shell_edits)
         self.cum_turns += 1
         self._track(name, args, result, exit_code, shell_edits)
-        if self.aborted:
+        if self.aborted or self.held:
             return None
 
         backstop = thr.get("backstop_turns")

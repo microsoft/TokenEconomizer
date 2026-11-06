@@ -71,6 +71,15 @@ for `toolprune apply`, and the next session start says so.
 Every hook fails open: any error becomes an empty output (no change) and a traceback in
 `~/.tokeneconomizer/errors.log`. The hooks are stdlib only, and none waits on a model call.
 
+One session's hooks run one at a time (`plugin/hookqueue.py`): an agent that calls tools in
+parallel starts their hooks together, and each one rewrites the session document. A hook that gets
+no lock within a few seconds saves its event to the session's queue and answers nothing, and
+whoever holds the lock applies the queue. `SessionStart`, and `UserPromptSubmit` under
+`repomap=on`, answer with context, so they are not queued: they wait, and then run without the
+lock. A decision the guard reaches on a queued call has no answer to go in, so it waits on the turn
+and the turn's next call acts on it, a call late. A turn that ends first drops it (an `undelivered`
+event): no nudge is counted, and there is no one left to redirect.
+
 ## 2. What changes relative to the experimental setting
 
 | | Experiments | Plugin | Why |
