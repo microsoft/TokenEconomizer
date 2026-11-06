@@ -270,9 +270,16 @@ def claude_success_code(name, args, resp=None):
     and gives a success no status, so the loop guard read the output's markers instead: a
     passing Playwright run whose exit prints libuv's "Assertion failed", or source read with
     `cat` that mentions an `Error`, counted as failing (#128). 0 when that status covers the work
-    the command ran (`loopguard.exit_status_covers`); else None, and the markers decide."""
+    the command ran (`loopguard.exit_status_covers`); else None, and the markers decide.
+
+    An Edit, MultiEdit or Write that came back as a success applied (one that did not -- the
+    text not found, the file not read first -- is a failure too), and its result is the file's
+    text, not an outcome: edits to a document that mentions `assert` or `failed` counted as
+    errors (#151). 0 for those, always."""
     from ..loopguard.state import canon_tool
     from ..loopguard.turn import exit_status_covers
+    if canon_tool(name) in ("edit", "create"):
+        return 0
     if canon_tool(name) != "bash" or (isinstance(resp, dict) and resp.get("interrupted")):
         return None
     cmd = args.get("command") if isinstance(args, dict) else None
