@@ -265,7 +265,8 @@ def test_from_a_plain_terminal_te_is_about_the_agent_that_last_worked_here(tmp_p
     Code state of a repository only Codex (or Pi) had worked in."""
     from tokeneconomizer.plugin import cli
     from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
-    for k in ("TE_HOST", "CLAUDECODE", "COPILOT_CLI"):
+    for k in ("TE_HOST", "CLAUDECODE", "COPILOT_CLI", "FACTORY_SESSION_ID",
+              "DROID_PLUGIN_ROOT", "CURSOR_AGENT", "CURSOR_PROJECT_DIR"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
     work = tmp_path / "work"
