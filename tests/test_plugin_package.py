@@ -160,6 +160,77 @@ def test_the_launcher_fails_open_without_python(tmp_path):
     assert code == 0 and json.loads(out) == {}
 
 
+def _python_shims(tmp_path, **dirs):
+    """Stand-ins for the Pythons a Windows PATH can hold: a directory of `sh` scripts per keyword,
+    in PATH order, each logging its launch as `<keyword> probe|run` and then running this Python,
+    or exiting 1 as the Microsoft Store's alias does. Returns that PATH and the log."""
+    log = tmp_path / "launches.log"
+    real = sys.executable.replace("\\", "/")
+    path = []
+    for name, (sub, names, works) in dirs.items():
+        d = tmp_path / sub
+        d.mkdir(parents=True)
+        for n in names:
+            run = f'exec "{real}" "$@"' if works else "exit 1"
+            (d / n).write_text(f'#!/bin/sh\ncase $1 in -c) w=probe ;; *) w=run ;; esac\n'
+                               f'echo "{name} $w" >>"{log.as_posix()}"\n{run}\n', newline="\n")
+            os.chmod(d / n, 0o755)
+        path.append(str(d))
+    return os.pathsep.join(path), log
+
+
+def _launches(log):
+    return log.read_text().splitlines() if log.exists() else []
+
+
+# Forward slashes: these PATHs have no `tr` for the launchers to turn backslashes with.
+def _launcher(name):
+    return os.path.join(PLUGIN, "scripts", name).replace("\\", "/")
+
+
+@pytest.mark.parametrize("script,args", [("te-hook", []), ("te", ["--help"])])
+def test_on_windows_a_python_outside_windowsapps_comes_before_an_alias(tmp_path, script, args):
+    """Each launch of the Python Install Manager's alias in WindowsApps leaks memory in AppXSvc
+    (python/pymanager#396), and the hook runs on every tool call: the same name further down
+    PATH, here the manager's global shortcut, runs instead, and the alias is not even tried."""
+    path, log = _python_shims(tmp_path,
+                              alias=("Microsoft/WindowsApps", ["python3", "python"], True),
+                              shortcut=("Python/bin", ["python3"], True))
+    p = subprocess.run(SH + [_launcher(script), *args], input="{}", capture_output=True,
+                       text=True, env=_hook_env(tmp_path, OS="Windows_NT", PATH=path), timeout=60)
+    assert p.returncode == 0, p.stderr
+    assert _launches(log) == ["shortcut run"]
+
+
+def test_on_windows_the_store_alias_does_not_hide_a_python_after_it(tmp_path):
+    """The Microsoft Store's `python3` and `python` aliases run nothing; a python.org Python
+    after them on PATH is found by name, and neither alias is launched."""
+    path, log = _python_shims(tmp_path,
+                              store=("Microsoft/WindowsApps", ["python3", "python"], False),
+                              org=("Python312", ["python"], True))
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, err = _run_hook(_launcher("te-hook"),
+                               {"hook_event_name": "SessionStart", "session_id": "s",
+                                "cwd": str(work), "source": "startup"},
+                               _hook_env(tmp_path, OS="Windows_NT", PATH=path))
+    assert code == 0 and json.loads(out) == {}, err
+    assert os.path.isdir(tmp_path / "home" / "repos")      # it ran
+    assert _launches(log) == ["org run"]
+
+
+def test_on_windows_an_alias_is_still_the_last_resort(tmp_path):
+    """With nothing outside WindowsApps, each alias is tried before use: the Store's, which runs
+    nothing, is passed over, and a working one runs the hook."""
+    path, log = _python_shims(tmp_path,
+                              store=("Store/Microsoft/WindowsApps", ["python3"], False),
+                              alias=("Microsoft/WindowsApps", ["python"], True))
+    code, out, err = _run_hook(_launcher("te-hook"), {},
+                               _hook_env(tmp_path, OS="Windows_NT", PATH=path))
+    assert code == 0 and json.loads(out) == {}, err
+    assert _launches(log) == ["store probe", "alias probe", "alias run"]
+
+
 def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch):
     sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
     try:

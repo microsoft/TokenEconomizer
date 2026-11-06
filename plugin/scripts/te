@@ -1,6 +1,6 @@
 #!/bin/sh
 # TokenEconomizer command line (`te status`, `te toolprune show`, `te config`, ...).
-# Windows (Git Bash): see te-hook for the backslashes in $0 and the Microsoft Store alias.
+# Windows (Git Bash): see te-hook for the backslashes in $0 and the WindowsApps aliases.
 self=$0
 if [ "${OS:-}" = Windows_NT ]; then
   case $self in *\\*) self=$(printf '%s' "$self" | tr '\\' '/') ;; esac
@@ -8,17 +8,41 @@ fi
 dir=$(CDPATH= cd -- "${self%/*}" && pwd)
 # Session logs are UTF-8; without this, Python on Windows reads them in the ANSI code page.
 export PYTHONUTF8=1
-for py in "${TE_PYTHON:-}" python3 python py; do
-  [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
-  if [ "${OS:-}" = Windows_NT ]; then
-    case $(command -v "$py") in
-      *WindowsApps*) "$py" -c "" </dev/null >/dev/null 2>&1 || continue ;;
+# The first `$1` in a PATH directory outside WindowsApps.
+outside_windowsapps() (
+  IFS=:; set -f
+  for d in $PATH; do
+    case $d in ''|*WindowsApps*) continue ;; esac
+    [ -f "$d/$1" ] && [ -x "$d/$1" ] && printf '%s\n' "$d/$1" && exit 0
+  done
+  exit 1
+)
+p=
+if [ "${OS:-}" = Windows_NT ]; then
+  for py in "${TE_PYTHON:-}" python3 python py; do
+    [ -n "$py" ] && p=$(command -v "$py") || continue
+    case $p in
+      *WindowsApps*) if [ "$py" = "${TE_PYTHON:-}" ]; then
+                       "$p" -c "" </dev/null >/dev/null 2>&1 && break
+                     else
+                       p=$(outside_windowsapps "$py") && break
+                     fi ;;
+      *) break ;;
     esac
-    [ "$py" = py ] && exec py -3 "$dir/te_bootstrap.py" cli "$@"
-  elif [ "$py" = py ]; then
-    continue                    # Python's `py` launcher is Windows-only; elsewhere it is not Python
-  fi
-  exec "$py" "$dir/te_bootstrap.py" cli "$@"
-done
+    p=
+  done
+  [ -n "$p" ] || for py in python3 python py; do
+    p=$(command -v "$py") && "$p" -c "" </dev/null >/dev/null 2>&1 && break
+    p=
+  done
+else
+  for py in "${TE_PYTHON:-}" python3 python; do   # `py` is Python's launcher only on Windows
+    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 && p=$py && break
+  done
+fi
+if [ -n "$p" ]; then
+  [ "$py" = py ] && exec "$p" -3 "$dir/te_bootstrap.py" cli "$@"
+  exec "$p" "$dir/te_bootstrap.py" cli "$@"
+fi
 echo "te: no python3 on PATH (set TE_PYTHON)" >&2
 exit 1
