@@ -232,3 +232,82 @@ def test_a_pi_session_counts_the_prompts_on_its_active_branch(tmp_path):
         msg("x", "b", "user"), msg("y", "x", "assistant"),        # abandoned
         msg("c", "b", "user"), msg("d", "c", "toolResult"), msg("e", "d", "assistant")])
     assert trace.pi_prompt_count(p) == 2
+
+
+# Valid JSON that is not an object. A reader that takes every line for a record calls `.get` on
+# it. The array holds each marker a reader looks for before it parses a line.
+NON_OBJECT_LINES = [
+    "null", "42", '"text"',
+    '["usage", "session_meta", "turn_context", "token_count", "response_item", '
+    '"session.start", "type", "system"]']
+
+
+def _around_non_objects(records):
+    import json
+    return NON_OBJECT_LINES + [json.dumps(r) for r in records] + NON_OBJECT_LINES
+
+
+def test_a_non_object_line_does_not_discard_the_calls_around_it():
+    claude = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "Bash", "input": {"command": "ls"}}]}}
+    codex = {"type": "item.completed",
+             "item": {"type": "command_execution", "command": "ls", "exit_code": 0}}
+    start = {"type": "tool.execution_start",
+             "data": {"toolCallId": "c", "toolName": "bash", "arguments": {"command": "ls"}}}
+    done = {"type": "tool.execution_complete", "data": {"toolCallId": "c", "success": True}}
+    assert [c[:2] for c in trace.claude_calls(_around_non_objects([claude]))] == [
+        ("Bash", {"command": "ls"})]
+    assert [c[:2] for c in trace.codex_exec_calls(_around_non_objects([codex]))] == [
+        ("shell", {"command": "ls"})]
+    assert [c[:2] for c in trace.copilot_event_calls(_around_non_objects([start, done]))] == [
+        ("bash", {"command": "ls"})]
+
+
+def test_a_non_object_line_does_not_stop_a_session_from_being_read(tmp_path):
+    from tokeneconomizer.trace.copilot import copilot_session_cwd
+    claude = {"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 5}}}
+    meta = {"type": "session_meta", "payload": {"cwd": "/w", "cli_version": "1.0"}}
+    count = {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"input_tokens": 10, "cached_input_tokens": 4,
+                              "output_tokens": 3}}}}
+    start = {"type": "session.start", "data": {"context": {"cwd": "/repo"}}}
+    p = tmp_path / "claude.jsonl"
+    p.write_text("\n".join(_around_non_objects([claude])))
+    assert trace.claude_session_usage(str(p))["input_tokens"] == 5
+    r = tmp_path / "rollout.jsonl"
+    r.write_text("\n".join(_around_non_objects([meta, count])))
+    assert trace.codex_session_meta(str(r)) == {"cwd": "/w", "cli_version": "1.0"}
+    usage = trace.codex_session_usage(str(r))
+    assert (usage["input_tokens"], usage["output_tokens"], usage["requests"]) == (6, 3, 1)
+    assert copilot_session_cwd(_around_non_objects([start])) == "/repo"
+
+
+def test_a_non_object_line_does_not_stop_a_rollout_from_being_converted(tmp_path):
+    done = {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "CommandExecution", "command": ["ls"], "exit_code": 0}}}
+    call = {"type": "response_item", "payload": {
+        "type": "function_call", "name": "x", "call_id": "c", "arguments": "{}"}}
+    r, out = tmp_path / "rollout.jsonl", tmp_path / "exec.jsonl"
+    r.write_text("\n".join(_around_non_objects([done, call])))
+    assert trace.codex_rollout_to_exec(str(r), str(out)) == 1
+    assert trace.codex_capability_trace(str(r), str(out)) == 2
+
+
+def test_a_non_object_line_does_not_empty_a_tool_catalog():
+    system = {"type": "system", "tools": ["Bash"]}
+    checkpoint = {"type": "session.usage_checkpoint", "data": {"promptCacheBreakState": [
+        {"models": {"m": {"tools": [{"name": "view"}]}}}]}}
+    text = "\n".join(_around_non_objects([system]))
+    assert trace.parse_tool_catalog_claude(text, snapshot={}) == {"Bash": ""}
+    text = "\n".join(_around_non_objects([checkpoint]))
+    assert trace.parse_tool_names_copilot(text) == {"view": ""}
+
+
+def test_the_loop_guard_and_the_capability_audit_skip_a_non_object_line(tmp_path):
+    from tokeneconomizer.loopguard.state import completed_calls
+    from tokeneconomizer.toolprune.codex import inspect_usage
+    assert [completed_calls(line, {}) for line in NON_OBJECT_LINES] == [[]] * 4
+    reconnect = {"type": "error", "message": "Reconnecting... 1/5"}
+    p = tmp_path / "exec.jsonl"
+    p.write_text("\n".join(_around_non_objects([reconnect])))
+    assert inspect_usage(str(p))["reconnects"] == 1

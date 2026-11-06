@@ -46,7 +46,7 @@ def codex_exec_calls(lines):
             ev = json.loads(line)
         except Exception:
             continue
-        if ev.get("type") != "item.completed":
+        if not isinstance(ev, dict) or ev.get("type") != "item.completed":
             continue
         item = ev.get("item") or {}
         kind = item.get("type")
@@ -148,6 +148,8 @@ def codex_rollout_to_exec(rollout_path, out_path):
                 ev = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(ev, dict):
+                continue
             payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
             if ev.get("type") == "session_meta" and thread is None:
                 thread = payload.get("id") or payload.get("session_id")
@@ -183,6 +185,8 @@ def codex_capability_trace(rollout_path, out_path):
             try:
                 ev = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(ev, dict):
                 continue
             p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
             if ev.get("type") != "response_item" or p.get("type") not in (
@@ -226,6 +230,8 @@ def codex_session_meta(rollout_path):
             ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
         p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
         if ev.get("type") == "session_meta":
             meta.setdefault("cwd", p.get("cwd"))
@@ -248,6 +254,8 @@ def codex_session_usage(rollout_path):
         try:
             ev = json.loads(line)
         except ValueError:
+            continue
+        if not isinstance(ev, dict):
             continue
         p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
         if p.get("type") != "token_count":
