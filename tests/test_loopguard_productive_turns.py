@@ -92,3 +92,31 @@ def test_a_vitest_run_behind_dotenv_is_a_verification_and_a_test_run():
     g.fold("Bash", {"command": cmd}, " Tests  3 passed (3)", 0)
     g.fold("Bash", {"command": "npx vitest run b.test.ts"}, " Tests  2 passed (2)", 0)
     assert g.verifications == 2 and g.st.test_runs == 2
+
+
+def test_successful_claude_edits_of_files_containing_assert_or_failed_are_not_errors():
+    h = hosts.ClaudeCode()
+    edit = {"hook_event_name": "PostToolUse", "tool_name": "Edit",
+            "tool_input": {"file_path": "/r/README.md"},
+            "tool_response": {"filePath": "/r/README.md", "oldString": "old",
+                              "newString": "the failed case asserts the value",
+                              "originalFile": "old\n",
+                              "structuredPatch": [{"lines": ["+the failed case asserts the value"]}],
+                              "replaceAll": False, "userModified": False}}
+    write = {"hook_event_name": "PostToolUse", "tool_name": "Write",
+             "tool_input": {"file_path": "/r/test_a.py"},
+             "tool_response": {"type": "create", "filePath": "/r/test_a.py",
+                               "content": "def test_x():\n    assert False, 'failed'\n",
+                               "originalFile": None, "structuredPatch": []}}
+    g = TurnGuard()
+    for p in (edit, write, edit):
+        name, args, text, code = h.tool_call(p)
+        assert text == ""
+        g.fold(name, args, text, code)
+    assert g.whole.error_outputs == 0 and g.whole.repeated_fail_sigs == 0
+    failure = {"hook_event_name": "PostToolUseFailure", "tool_name": "Edit",
+               "tool_input": {"file_path": "/r/README.md"},
+               "error": "Error: String to replace not found in file."}
+    name, args, text, code = h.tool_call(failure)
+    g.fold(name, args, text, code)
+    assert g.whole.error_outputs == 1
