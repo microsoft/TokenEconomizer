@@ -22,6 +22,9 @@ Each finished session goes through three steps:
    retires on contradiction (for a command-spelling fact, two contradicting sessions in a row),
    and is injected only while the failure it prevents keeps occurring, or keeps being
    prevented, in at least 40% of the sessions that exercise it (over at least four).
+   A person can also retire a fact by hand (`stage.forget_facts`; the plugin's
+   `te microskills forget`): it leaves the block, and its id goes into its layer's
+   `forgotten` set, so the fact is never formed again under that id.
 
 `stage.PrefixStage` ties these together for a caller: render the block before a session, fold
 the session in after it. The block is capped (`MAX_FACTS`, `MAX_TOKENS`), and a lint refuses any
@@ -33,4 +36,4 @@ fact that reads as completion or verification advice.
 | `envfacts.py` | `EnvFactsDistiller`: the five LLM-free fact families, rendering, caps |
 | `distiller.py` | `Distiller`: the model-backed proposer (part of `microskills=on`) and its detector DSL |
 | `lifecycle.py` | `Lifecycle`: formation, retirement, the firing gate |
-| `stage.py` | `PrefixStage`, `ComposedDistiller` |
+| `stage.py` | `PrefixStage`, `ComposedDistiller`, `forget_facts` |

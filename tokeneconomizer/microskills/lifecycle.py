@@ -9,7 +9,9 @@ floor -- or at once, for a high-stakes fact, on one clean contradiction. An ACTI
 injected only while it clears the FIRING GATE: the waste it prevents occurred (or, once injected,
 kept being prevented) on at least FIRE_GATE of the tasks that exercised it.
 """
+import json
 import os
+import time
 
 # ---- lifecycle knobs (the validated replay constants) ----------------------
 K_PROMOTE   = 3      # confirmations (drifted, where drift applies) to promote -> ACTIVE
@@ -115,3 +117,72 @@ class Lifecycle:
             hard = self.high and verdict == "contradict" and HARD_KILL
             if hard or self.score(now) < SCORE_FLOOR:
                 self.state, self.retired_at = "RETIRED", now
+
+
+# ---- forgetting: a person retires a fact by hand -----------------------------
+# Seconds slept between tries of a Windows `os.replace`, which fails while another process has the
+# target open; POSIX renames over an open file at once.
+_REPLACE_BACKOFF = (0.01, 0.02, 0.05, 0.1, 0.2)
+
+
+def write_json_atomic(path, obj):
+    """Write `obj` to `path` through a temporary file and `os.replace`: a reader, or a write cut
+    short, never leaves half a document behind."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2)
+        for delay in _REPLACE_BACKOFF if os.name == "nt" else ():
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                time.sleep(delay)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+class Forgetting:
+    """The forgotten facts of a distiller (`self.facts`: id -> fact). A forgotten fact leaves
+    `facts`, so it is neither rendered nor folded; its id is kept in `forgotten`, with the claim
+    it made and its record, so that it is never learned again under that id and `unforget` can
+    put it back as it was. `FACT_CLS` reads a record back."""
+    FACT_CLS = None
+
+    @staticmethod
+    def _claim_of(fact):
+        claim = fact.claim
+        return claim() if callable(claim) else claim
+
+    def known_ids(self):
+        return set(self.facts) | set(self.forgotten)
+
+    def forget(self, fid):
+        """True when `fid` is forgotten now, False when it already was; KeyError when no fact
+        has that id."""
+        if fid in self.forgotten:
+            return False
+        fact = self.facts.pop(fid)
+        self.forgotten[fid] = {"claim": self._claim_of(fact), "record": fact.to_dict()}
+        return True
+
+    def unforget(self, fid):
+        """True when `fid` is back among the facts, False when it was not forgotten; KeyError
+        when no fact has that id."""
+        if fid not in self.forgotten:
+            if fid in self.facts:
+                return False
+            raise KeyError(fid)
+        rec = self.forgotten.pop(fid).get("record")
+        if rec:
+            self.facts[fid] = self.FACT_CLS.from_dict(rec)
+        return True
+
+    def drop_forgotten(self):
+        """Take out any forgotten id the last fold learned again."""
+        for fid in self.forgotten:
+            self.facts.pop(fid, None)

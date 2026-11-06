@@ -23,7 +23,7 @@ import re
 from ..names import repo_filename
 from ..trace import call_cwds
 from ..trace.claude import CONVERSATION
-from .lifecycle import Lifecycle, edited_files, edited_pyfiles
+from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
 # ---- proposer cadence / caps / gates ---------------------------------------
 PROPOSE_EVERY  = 8      # one LLM proposer call per this many tasks (PrefixStage rebinds
@@ -541,7 +541,7 @@ def _reparse_cmds(dg):
 
 
 # ---- distiller -------------------------------------------------------------
-class Distiller:
+class Distiller(Forgetting):
     """Learns and injects a per-repo operating manual over the task stream.
 
     Public surface (the injection Stage calls these):
@@ -551,6 +551,8 @@ class Distiller:
         d.update(transcript_path, iid=..., resolved=...) # fold in the finished task
         d.save(root)
     """
+    FACT_CLS = Fact
+
     def __init__(self, repo, runner=None, model="agent", external_facts=None, vocab=None):
         self.repo = repo
         # The plugin's generic reading (`Vocabulary.generic`): the generic digest and prompt.
@@ -567,6 +569,7 @@ class Distiller:
         self.last_propose = -1
         self.extractors = {}            # name -> Extractor
         self.raw_window = []            # bounded recent [(cmd,out)] per task
+        self.forgotten = {}             # id -> {claim, record}: never admitted again
 
     # ---- featurization -----------------------------------------------------
     def _observe_fact(self, fact, now, dg, files):
@@ -686,6 +689,8 @@ class Distiller:
 
     def _admit(self, spec):
         fid = spec.get("id")
+        if fid in self.forgotten:
+            return False, "forgotten"
         if fid not in self.facts:
             hits = self._ground(spec)
             if hits < MIN_CITE:
@@ -762,13 +767,14 @@ class Distiller:
         window = [dict(dg, _cmd_blob=dg.get("_cmd_blob", "")[-BLOB_CAP:],
                        _out_blob=dg.get("_out_blob", "")[-2 * BLOB_CAP:])
                   for dg in self.window[-WINDOW:]]
-        json.dump({"repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
-                   "last_propose": self.last_propose,
-                   "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
-                   "facts": {k: f.to_dict() for k, f in self.facts.items()},
-                   "window": window,
-                   "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]},
-                  open(self._path(root, self.repo), "w", encoding="utf-8"), indent=2)
+        write_json_atomic(self._path(root, self.repo), {
+            "repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
+            "last_propose": self.last_propose,
+            "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
+            "facts": {k: f.to_dict() for k, f in self.facts.items()},
+            "forgotten": self.forgotten,
+            "window": window,
+            "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]})
 
     @classmethod
     def load(cls, repo, root, runner=None, model="agent", external_facts=None, vocab=None):
@@ -784,6 +790,8 @@ class Distiller:
         self.facts = {k: Fact.from_dict(v) for k, v in d.get("facts", {}).items()}
         self.window = list(d.get("window") or [])[-WINDOW:]
         self.raw_window = [[(c, "") for c in cmds] for cmds in d.get("raw_cmds") or []]
+        self.forgotten = dict(d.get("forgotten") or {})
+        self.drop_forgotten()
         return self
 
     def debug_row(self):
@@ -796,3 +804,4 @@ class Distiller:
             if isinstance(row.get(fid), dict):
                 row[fid]["rev"] = f.spec.get("rev", 1)
         return row
+
