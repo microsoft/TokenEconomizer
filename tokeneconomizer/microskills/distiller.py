@@ -626,7 +626,14 @@ class Distiller:
                                        {i: f.claim for i, f in self.facts.items()},
                                        set(self.extractors), excerpts, external=external,
                                        generic=self.generic)
-        raw, eff = self.runner(prompt, self.model)
+        # A failed side call skips the proposal instead of aborting the fold (#131). It still
+        # counts as a tick: a CLI that keeps failing is called every PROPOSE_EVERY sessions, as
+        # a working one is, not at every fold.
+        try:
+            raw, eff = self.runner(prompt, self.model)
+        except Exception:
+            self.last_propose = self.now
+            return
         if eff is not None:
             self.opt_tokens += eff
         exts, facts = parse_payload(raw)
