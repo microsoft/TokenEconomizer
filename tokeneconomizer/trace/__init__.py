@@ -6,9 +6,9 @@ here and nowhere else:
   * `calls`    -- `load_trajectory`: any agent's log as ordered `(name, args, result, ok)` calls;
                   `call_cwds`, `tool_usage`, `strip_rtk_prefix`;
   * `catalog`  -- the tool list a session loaded, from whichever source the agent publishes;
-  * `claude`, `codex`, `copilot`, `grok`, `hermes`, `opencode`, `pi` -- each agent's own session file:
-                  usage, metadata, prompt-turns, and the conversions that let the readers above
-                  handle it.
+  * `antigravity`, `claude`, `codex`, `copilot`, `grok`, `hermes`, `opencode`, `pi` -- each agent's
+                  own session file: usage, metadata, prompt-turns, and the conversions that let
+                  the readers above handle it.
 
 Stdlib only.
 """
@@ -27,6 +27,8 @@ from .codex import (codex_capability_trace, codex_exec_calls, codex_prompt_count
 from .copilot import (copilot_event_calls, copilot_mcp_servers, copilot_prompt_count,
                       copilot_session_meta, copilot_session_usage, copilot_turns,
                       mcp_server_of)
+from .antigravity import (antigravity_prompt_count, antigravity_read,
+                          antigravity_session_to_claude, antigravity_session_usage)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
 from .grok import (grok_json_reply, grok_prompt_count, grok_result, grok_session_to_claude,
                    grok_session_usage, grok_tool)
@@ -51,6 +53,8 @@ __all__ = [
     "codex_session_meta", "codex_session_usage", "rollout_item_to_exec",
     "copilot_event_calls", "copilot_mcp_servers", "copilot_prompt_count", "copilot_session_meta",
     "copilot_session_usage", "copilot_turns", "mcp_server_of",
+    "antigravity_prompt_count", "antigravity_read", "antigravity_session_to_claude",
+    "antigravity_session_usage",
     "cursor_events_to_claude", "cursor_prompt_count",
     "grok_json_reply", "grok_prompt_count", "grok_result", "grok_session_to_claude",
     "grok_session_usage", "grok_tool",

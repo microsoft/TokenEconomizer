@@ -1,0 +1,13 @@
+{
+  "tokeneconomizer": {
+    "SessionStart": [
+      { "type": "command", "command": "./scripts/te-hook --host antigravity --event SessionStart", "timeout": 15 }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "./scripts/te-hook --host antigravity --event PreInvocation", "timeout": 10 }
+    ],
+    "Stop": [
+      { "type": "command", "command": "./scripts/te-hook --host antigravity --event Stop", "timeout": 10 }
+    ]
+  }
+}

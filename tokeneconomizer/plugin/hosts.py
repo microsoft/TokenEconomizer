@@ -773,6 +773,182 @@ class Hermes(Host):
         return trace.hermes_session_usage(transcript_path)
 
 
+class Antigravity(Host):
+    """Antigravity CLI (`agy`), through the plugin's `hooks.json` (verified on 1.5.1).
+
+    agy's hook contract differs from the shared one, so this adapter translates both ways:
+
+      * Payloads are camelCase and name no event; the hook file's command names it (`--event`).
+        `SessionStart`, `PreInvocation` (before every model call) and `Stop` are the events used.
+        A `PreToolUse` hook is never registered: one that prints `{}` makes agy deny the tool.
+        `PostToolUse` is not needed -- its payload holds no tool result, and the transcript, which
+        has every result of the previous model call by the next `PreInvocation`, does.
+      * There is no prompt event either. `PreInvocation` with `invocationNum` 0 (a number protojson
+        leaves out of the payload) is the first model call of a prompt, with the prompt in
+        `lastUserInput`. `expand` turns one agy call into the controller's events: the results the
+        transcript gained since the last call become `PostToolUse` events (those of a turn that
+        just ended before the new prompt's `UserPromptSubmit`), and `Stop` closes the turn.
+      * Output is `injectSteps`: a persistent `systemMessage` step at `SessionStart`, an
+        `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Nothing reaches the
+        person from a hook, so a notice goes through the model (`relay`), as on Cursor.
+      * There is no `SessionEnd`: a conversation is folded by the next session start in its
+        repository once its transcript has been quiet for `fold.STALE_S`.
+
+    The cursor into the transcript, the turn counter and nothing else are kept per conversation
+    in `<state root>/antigravity-sessions/`. Tool pruning is not supported, and subagents' calls
+    are not in the transcript, so they are not seen.
+    """
+    name = "antigravity"
+    # The only prompt-time channel is the ephemeral message, which agy drops after the turn: the
+    # repository map goes in at SessionStart, where it persists.
+    prompt_context = False
+    relays_notices = True
+    interrupt = "Press Esc to cancel the turn."
+    end_run = "Press Ctrl+C to end the run."
+    STATE_DIR = "antigravity-sessions"
+    STATE_KEEP_S = 30 * 86400
+
+    def session_id(self, p):
+        return str(p.get("session_id") or p.get("conversationId") or "")
+
+    def transcript(self, p):
+        return p.get("transcript_path") or p.get("transcriptPath") or ""
+
+    def cwd(self, p, env):
+        roots = p.get("workspacePaths")
+        root = roots[0] if isinstance(roots, list) and roots else ""
+        return p.get("cwd") or root or os.getcwd()
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def context(self, event, text):
+        return {"additionalContext": text}
+
+    def notice(self, text):
+        return {"additionalContext": self.relay(text)}
+
+    def stopped_normally(self, p):
+        return (p or {}).get("terminationReason") == "NO_TOOL_CALL"
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        resp = p.get("tool_response")
+        if code is None and isinstance(resp, dict) and resp.get("isError"):
+            code = 1                # a step agy marks as failed, whatever it printed
+        return name, args, text, code
+
+    # -- one agy hook call -> the controller's events -------------------------------------
+    def _state_path(self, env, cid):
+        from .paths import state_root
+        return os.path.join(state_root(env), self.STATE_DIR, cid + ".json")
+
+    def _load(self, env, cid):
+        try:
+            with open(self._state_path(env, cid), encoding="utf-8") as fh:
+                st = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return st if isinstance(st, dict) else None
+
+    def _save(self, env, cid, st):
+        path = self._state_path(env, cid)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(st, fh)
+        os.replace(tmp, path)
+
+    def _prune(self, env):
+        """Forget cursors of conversations nobody has used for `STATE_KEEP_S`."""
+        folder = os.path.dirname(self._state_path(env, "x"))
+        try:
+            for name in os.listdir(folder):
+                path = os.path.join(folder, name)
+                if time.time() - os.path.getmtime(path) > self.STATE_KEEP_S:
+                    os.remove(path)
+        except OSError:
+            pass
+
+    def expand(self, payload, env):
+        """The controller events one agy hook call stands for, in order; see the class."""
+        event = payload.get("hook_event_name")
+        cid = trace.claude_safe_session_id(self.session_id(payload))
+        if event not in ("SessionStart", "PreInvocation", "Stop") or not cid:
+            return []
+        base = {"session_id": cid, "cwd": self.cwd(payload, env),
+                "transcript_path": self.transcript(payload)}
+        if event == "SessionStart":
+            self._prune(env)
+            if self._load(env, cid) is None:
+                self._save(env, cid, self._fresh(base["transcript_path"]))
+            return [dict(base, hook_event_name="SessionStart", source="startup")]
+        # The first call of a prompt carries no `invocationNum` (protojson drops a zero).
+        first = event == "PreInvocation" and not payload.get("invocationNum")
+        st = self._load(env, cid)
+        path = base["transcript_path"]
+        out, items = [], []
+        if st is None:
+            st = self._fresh(path)
+        else:
+            items, st["offset"], st["last_step_index"] = trace.antigravity_read(
+                path, int(st.get("offset") or 0), int(st.get("last_step_index", -1)),
+                final=first or event == "Stop")
+        key = f"{cid}:{st['turn_seq']}"
+        for item in (i for i in items if i["kind"] == "tool"):
+            out.append(dict(base, hook_event_name="PostToolUse", prompt_id=key,
+                            tool_name=item["name"], tool_input=item["args"],
+                            tool_response={"content": item["content"][:RESULT_CAP],
+                                           "exit_code": item["exit_code"],
+                                           "isError": item["is_error"]}))
+        if first:
+            st["turn_seq"] = int(st.get("turn_seq") or 0) + 1
+            out.append(dict(base, hook_event_name="UserPromptSubmit",
+                            prompt=str(payload.get("lastUserInput") or ""),
+                            prompt_id=f"{cid}:{st['turn_seq']}"))
+        elif event == "Stop":
+            out.append(dict(base, hook_event_name="Stop",
+                            terminationReason=payload.get("terminationReason")))
+        self._save(env, cid, st)
+        return out
+
+    @staticmethod
+    def _fresh(path):
+        """The state of a conversation first seen now. Reading starts at the transcript's current
+        end, so a resumed conversation's earlier steps are not replayed as if they just happened."""
+        try:
+            size = os.path.getsize(path)
+        except (OSError, TypeError):
+            size = 0
+        return {"offset": size, "last_step_index": -1, "turn_seq": 0}
+
+    def render(self, payload, out, ctx=None):
+        """agy's answer to this hook call, from the controller's merged output."""
+        event = payload.get("hook_event_name")
+        hso = out.get("hookSpecificOutput")
+        parts = [hso.get("additionalContext") if isinstance(hso, dict) else None,
+                 out.get("additionalContext"), out.get("systemMessage")]
+        text = "\n\n".join(t for t in parts if t)
+        if not text or event == "Stop":
+            return {}
+        if event == "SessionStart":
+            return {"injectSteps": [{"systemMessage": {"systemMessage": text}}]}
+        return {"injectSteps": [{"ephemeralMessage": text}]}
+
+    # -- the finished session, in the shapes the mechanisms read --------------------------
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "antigravity_trace.jsonl")
+        n = trace.antigravity_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.antigravity_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.antigravity_session_usage(transcript_path)
+
+
 class Grok(Host):
     """The Grok Build CLI (`grok`, xAI), verified on 1.0.70.
 
@@ -1016,7 +1192,8 @@ def _ancestor_args(limit=4):
 
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok}
+         "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
+         "antigravity": Antigravity}
 
 
 def default_host(env=None, recent=None):
@@ -1042,6 +1219,9 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
+    if (payload or {}).get("conversationId") and "/antigravity" in str(
+            payload.get("transcriptPath") or "").replace("\\", "/"):
+        return Antigravity()
     tp = str((payload or {}).get("transcript_path") or "")
     sp = tp.replace("\\", "/")              # a Windows path, with either separator
     # grok runs Claude Code's plugin hooks, with no `--host`, so it is told from Claude Code

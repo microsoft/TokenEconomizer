@@ -326,12 +326,14 @@ class LiveController:
 
         None before this repository has an envelope -- the guard does not act on a repository
         whose usual turns it has not learned (the rule fallback never acts without one either).
-        While this agent's model calls are paused, a judge that never answers: the turn is
-        spared, as a missing verdict is, rather than redirected on the rule alone."""
+        While this agent's model calls are paused, or it has none (`sidecall.NO_SIDE_CALLS`),
+        a judge that never answers: the turn is spared, as a missing verdict is, rather than
+        redirected on the rule alone."""
         from .judge import AsyncJudge, NoVerdict
         if envelope is None:
             return None
-        if sidecall.paused(self.host.name, self.ctx.root):
+        if self.host.name in sidecall.NO_SIDE_CALLS or sidecall.paused(self.host.name,
+                                                                         self.ctx.root):
             return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 

@@ -64,7 +64,8 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode**, **Cursor Agent**, **Grok Build** and **Hermes Agent**. Each italic
+with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent** and
+the **Antigravity CLI**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -192,6 +193,21 @@ Confirm `tokeneconomizer` is enabled in `grok plugin list`, start `grok`, and ch
 The learned facts arrive with the session's first tool call, not at its start
 ([its limits](plugin/README.md#grok-build)).
 
+**Antigravity CLI** (`agy`; experimental; micro-skills' LLM-free facts only)
+
+```sh
+python scripts/build_plugin.py --out dist/marketplace
+agy plugin install dist/marketplace/tokeneconomizer
+```
+
+Start `agy` and send a prompt in a repository, then check with
+`~/.tokeneconomizer/bin/te --host antigravity status`. `agy` has no plugin commands, so the
+plugin's commands run from a terminal. The plugin makes no model call through `agy`, which has no
+option that runs a prompt with every tool off, so the paid proposer and the loop guard are off
+and tool pruning is not available. macOS and Linux only:
+on Windows `agy` runs hook commands through `cmd /c`, and this plugin's launcher is a POSIX shell
+script. See [its limits](plugin/README.md#antigravity-cli).
+
 **opencode** (experimental)
 
 ```sh
@@ -228,6 +244,7 @@ To update:
 |---|---|
 | Claude Code, Copilot CLI, opencode | `git pull` in the clone |
 | Hermes Agent | `git pull` in the clone, then `hermes gateway restart` |
+| Antigravity CLI | build the bundle again and `agy plugin install` it |
 | Codex | `git pull` in the clone, then the `codex plugin add` line again |
 | Pi | `pi update --extensions` |
 
@@ -246,6 +263,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
+| Antigravity CLI (experimental) | agy 1.5.1, macOS and Linux | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
@@ -265,6 +283,9 @@ have not been tested yet.
 - **Grok Build** support is experimental: it was verified on 1.0.70 only, against its documented
   hook contract and live hook payloads. Learned facts reach the model with the session's first tool
   call, and tool pruning is not available. See [its limits](plugin/README.md#grok-build).
+- **Antigravity CLI** support is experimental: it was written against agy 1.5.1's hook contract
+  and transcript format, which are not a public interface, and only micro-skills' LLM-free facts
+  are supported: the plugin makes no model call through `agy`. See [its limits](plugin/README.md#antigravity-cli).
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
   model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
   redirect reaching a real model are verified there; the still-stuck notice reaching a person is
@@ -286,13 +307,14 @@ commands. They have the same names on every agent; only the way you type them di
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
 | Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
+| Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
 | Command | What it does |
 |---|---|
 | `status` | what it learned and did here, and what your sessions cost |
 | `microskills` | the facts it injects, and those still forming |
-| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode or Hermes Agent) |
+| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode, Hermes Agent or the Antigravity CLI) |
 | `toolprune restore` | give them back; they will not be removed again |
 | `config` | every setting in effect |
 | `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
@@ -375,6 +397,7 @@ what it can leave out differs:
 | Grok Build | nothing yet | — |
 | opencode | nothing yet | — |
 | Hermes Agent | nothing yet | — |
+| Antigravity CLI | nothing yet | — |
 
 Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it
 creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that says
