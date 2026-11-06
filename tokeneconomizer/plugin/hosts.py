@@ -882,7 +882,7 @@ class Antigravity(Host):
         if event == "SessionStart":
             self._prune(env)
             if self._load(env, cid) is None:
-                self._save(env, cid, {"offset": 0, "last_step_index": -1, "turn_seq": 0})
+                self._save(env, cid, self._fresh(base["transcript_path"]))
             return [dict(base, hook_event_name="SessionStart", source="startup")]
         # The first call of a prompt carries no `invocationNum` (protojson drops a zero).
         first = event == "PreInvocation" and not payload.get("invocationNum")
@@ -890,13 +890,7 @@ class Antigravity(Host):
         path = base["transcript_path"]
         out, items = [], []
         if st is None:
-            # A conversation whose start this plugin did not see: what happened before is not
-            # replayed as if it had just happened.
-            try:
-                size = os.path.getsize(path)
-            except OSError:
-                size = 0
-            st = {"offset": size, "last_step_index": -1, "turn_seq": 0}
+            st = self._fresh(path)
         else:
             items, st["offset"], st["last_step_index"] = trace.antigravity_read(
                 path, int(st.get("offset") or 0), int(st.get("last_step_index", -1)),
@@ -918,6 +912,16 @@ class Antigravity(Host):
                             terminationReason=payload.get("terminationReason")))
         self._save(env, cid, st)
         return out
+
+    @staticmethod
+    def _fresh(path):
+        """The state of a conversation first seen now. Reading starts at the transcript's current
+        end, so a resumed conversation's earlier steps are not replayed as if they just happened."""
+        try:
+            size = os.path.getsize(path)
+        except (OSError, TypeError):
+            size = 0
+        return {"offset": size, "last_step_index": -1, "turn_seq": 0}
 
     def render(self, event, out):
         """agy's answer to `event`, from the controller's merged output."""

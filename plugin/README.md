@@ -499,7 +499,7 @@ log a warning for the empty section of a session with no facts.
 
 ## Antigravity CLI
 
-Experimental: **micro-skills and the loop guard**, written against `agy` 1.5.1 on macOS and Linux
+Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1 on macOS and Linux
 (agy runs hook commands through `cmd /c` on Windows, and the launcher is a POSIX shell script).
 
 **1. Install.** Build the self-contained plugin, which copies the package into it, and install the
@@ -516,27 +516,26 @@ validator says it is never loaded.
 
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host antigravity status` in the
 repository. agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
-is off by default: `te --host antigravity config set microskills=on` (or `envfacts`, without model
-calls).
+is off by default: `te --host antigravity config set microskills=envfacts`.
 
 **How it works, and what it does not do.**
 
 - Three hooks are registered: `SessionStart` (injects the learned facts), `PreInvocation` (before
-  every model call: opens a turn at a new prompt, feeds the loop guard the tool results since the
-  last call, and carries its redirect as an ephemeral message) and `Stop`.
+  every model call: opens a turn at a new prompt and reads the tool results since the last call)
+  and `Stop`.
 - It never registers `PreToolUse`: a `PreToolUse` hook that prints `{}` makes agy deny the tool.
   `PostToolUse` is unused: its payload holds no tool result, so the results are read from the
   conversation's `transcript_full.jsonl` instead. A cursor into it is kept in
   `~/.tokeneconomizer/antigravity-sessions/`, private to you.
 - agy has no `SessionEnd`: a conversation is folded by the next session start in that repository,
   once its transcript has been quiet for 10 minutes.
-- Nothing a hook prints reaches your view, so the loop guard's notice goes through the model, which
-  may word it differently or leave it out. Press Esc in the UI (Ctrl+C for `agy -p`) to stop a turn.
 - Tool pruning is not available. Calls a subagent makes are not in the transcript and are not seen.
   The transcript names no model, so session cost is priced on a labelled fallback, and older agy
   versions leave token counts out of most of it.
-- Model calls (the proposer, the loop guard's judge) run `agy --print` in a throwaway directory on
-  your default model (`paid_model` names another). Each one may leave a conversation in agy's history.
+- The plugin makes no model call through `agy`: it has no option that runs a prompt with every
+  tool off, and such a call's prompt holds text a repository controls. So micro-skills' paid
+  proposer never runs, and the loop guard, which needs a judge's verdict to act, never redirects
+  a turn.
 
 ## What to expect
 

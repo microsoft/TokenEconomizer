@@ -176,7 +176,7 @@ hook events locally and reports session cost as unavailable. Cursor support is m
 only: on Windows, Cursor runs hook commands through PowerShell, and this plugin's launcher is a
 POSIX shell script.
 
-**Antigravity CLI** (`agy`; experimental; micro-skills and the loop guard)
+**Antigravity CLI** (`agy`; experimental; micro-skills' LLM-free facts only)
 
 ```sh
 python scripts/build_plugin.py --out dist/marketplace
@@ -185,7 +185,9 @@ agy plugin install dist/marketplace/tokeneconomizer
 
 Start `agy` and send a prompt in a repository, then check with
 `~/.tokeneconomizer/bin/te --host antigravity status`. `agy` has no plugin commands, so the
-plugin's commands run from a terminal, and tool pruning is not available. macOS and Linux only:
+plugin's commands run from a terminal. The plugin makes no model call through `agy`, which has no
+option that runs a prompt with every tool off, so the paid proposer and the loop guard are off
+and tool pruning is not available. macOS and Linux only:
 on Windows `agy` runs hook commands through `cmd /c`, and this plugin's launcher is a POSIX shell
 script. See [its limits](plugin/README.md#antigravity-cli).
 
@@ -261,8 +263,8 @@ have not been tested yet.
   own transcript and a run that ends as completed closes its turn. Session usage stays unavailable,
   and the interactive TUI has not been tested.
 - **Antigravity CLI** support is experimental: it was written against agy 1.5.1's hook contract
-  and transcript format, which are not a public interface, and only micro-skills and the loop guard
-  are supported. See [its limits](plugin/README.md#antigravity-cli).
+  and transcript format, which are not a public interface, and only micro-skills' LLM-free facts
+  are supported: the plugin makes no model call through `agy`. See [its limits](plugin/README.md#antigravity-cli).
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
   model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
   redirect reaching a real model are verified there; the still-stuck notice reaching a person is
@@ -398,7 +400,7 @@ redirects, you see one line that ends with how to stop it:
 > calls). Press Esc to interrupt it.
 
 Where that line appears, and how to stop the turn, in the terminal UI and in a headless run
-(`claude -p`, `codex exec`, `copilot -p`, `pi -p`, `opencode run`, `hermes -z`, `agy -p`):
+(`claude -p`, `codex exec`, `copilot -p`, `pi -p`, `opencode run`, `hermes -z`):
 
 | Agent | Interactive: where it shows | How to stop | Headless: where it shows | How to stop |
 |---|---|---|---|---|
@@ -408,7 +410,6 @@ Where that line appears, and how to stop the turn, in the terminal UI and in a h
 | Pi | as a notification | Esc | on stderr | Ctrl+C |
 | opencode | as a notification | Esc | on stderr | Ctrl+C |
 | Hermes Agent | in the model's reply | Ctrl+C | in the final reply | Ctrl+C |
-| Antigravity CLI | in the model's reply | Esc | in the final reply | Ctrl+C |
 
 - **Claude Code** shows a plugin's own lines only in its detailed transcript (Ctrl+O), so the
   plugin asks Claude to repeat this one in its reply; the model may word it differently or leave
@@ -419,7 +420,6 @@ Where that line appears, and how to stop the turn, in the terminal UI and in a h
 - **opencode** 2.x prints the line to the opencode server's error output, not in its terminal UI.
 - **Hermes Agent**: the plugin asks the model to repeat the line, since no hook was found to reach
   the person's view; a model may word it differently or leave it out.
-- **Antigravity CLI**: the same, for the same reason.
 
 In a headless run nobody may be watching, so a flagged turn runs until it ends or reaches the
 agent's own limits; afterwards, `te status` counts the redirects and "still stuck" notices.

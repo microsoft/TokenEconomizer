@@ -147,6 +147,20 @@ def test_a_conversation_this_plugin_did_not_start_is_not_replayed(tp, env):
     assert kinds(got) == [("UserPromptSubmit", "fix it", f"{CID}:1")]
 
 
+def test_a_resumed_conversation_does_not_replay_its_old_calls_at_session_start(tp, env):
+    host, t = Antigravity(), Transcript(tp)
+    t.prompt("old")
+    t.call([sh("ls")], [out(0)])                # before this plugin saw the conversation
+    host.expand(hook_payload(tp, "SessionStart"), env)
+    assert kinds(host.expand(hook_payload(tp, "PreInvocation"), env)) == [
+        ("UserPromptSubmit", "fix it", f"{CID}:1")]
+    t.call([sh("pwd")], [out(0)])
+    got = host.expand(hook_payload(tp, "PreInvocation", invocationNum=1), env)
+    assert [e["tool_input"]["command"] for e in got] == ["pwd"]
+
+
+@pytest.mark.skipif(os.name == "nt",
+                    reason="POSIX permission bits: Windows keeps the state private by ACL")
 def test_the_cursor_file_is_private(tp, env):
     Antigravity().expand(hook_payload(tp, "SessionStart"), env)
     state = Path(env["TOKENECONOMIZER_HOME"]) / "antigravity-sessions"
@@ -391,42 +405,22 @@ def test_a_stuck_turn_is_redirected_through_an_ephemeral_message(tp, tmp_path, e
 
 
 # ---- the side call -------------------------------------------------------------------------
-@pytest.mark.real_sidecalls
-def test_the_side_call_runs_agy_print_and_prices_its_usage(monkeypatch):
-    seen = []
-    reply = {"conversation_id": "c", "status": "SUCCESS", "response": "DONE\n", "num_turns": 1,
-             "usage": {"input_tokens": 36496, "output_tokens": 1406, "thinking_tokens": 1185,
-                       "cache_read_tokens": 100, "total_tokens": 37902}}
-
-    def fake_run(cmd, **kw):
-        seen.append((cmd, kw))
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(reply), "")
-
-    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
-    text, eff = sidecall.agy_call("is it stuck? -p", model="paid-m")
-    assert text == "DONE" and eff
-    (cmd, kw), = seen
-    assert cmd == ["agy", "--output-format", "json", "--disable-slash-commands", "--model",
-                   "paid-m", "--print=is it stuck? -p"]
-    assert kw["env"]["TE_SIDECALL"] == "1" and kw["stdin"] == subprocess.DEVNULL
-    assert kw["cwd"] != os.getcwd() and "te-side-" in kw["cwd"]
-    runner = sidecall.runner_for("antigravity", type("C", (), {"paid_model": ""})())
-    assert runner("p") == ("DONE", eff)
-    assert sidecall.call_name("antigravity") == "agy -p"
+def test_antigravity_makes_no_side_call(monkeypatch):
+    # agy has no option that runs a turn with every tool off, and a side call's prompt holds
+    # text a repository controls: the proposer and the judge get no runner.
+    started = []
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda *a, **k: started.append(a))
+    assert sidecall.runner_for("antigravity", type("C", (), {"paid_model": "m"})()) is None
+    assert not hasattr(sidecall, "agy_call") and started == []
 
 
-@pytest.mark.real_sidecalls
-def test_a_failed_side_call_is_no_reply(monkeypatch):
-    noted = []
-    monkeypatch.setattr(sidecall, "_no_reply", lambda host, o: noted.append(host))
-    bad = {"status": "ERROR", "finished_reason": "x", "response": "partial"}
-    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
-        cmd, 1, json.dumps(bad), ""))
-    assert sidecall.agy_call("p") == ("", None)
-    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
-        cmd, 0, "not json", ""))
-    assert sidecall.agy_call("p") == ("", None)
-    assert noted == ["antigravity", "antigravity"]
+def test_a_stuck_looking_agy_turn_never_starts_a_judge(tp, env, monkeypatch):
+    from tokeneconomizer.plugin import controller, judge
+    spawned = []
+    monkeypatch.setattr(judge, "spawn_job", lambda *a, **k: spawned.append(a))
+    ctl = type("C", (), {"host": Antigravity(), "ctx": None, "sid": CID})()
+    verdict = controller.LiveController._judge(ctl, {"judge_confidence": 0.5}, envelope={})
+    assert isinstance(verdict, judge.NoVerdict) and spawned == []
 
 
 # ---- packaging -----------------------------------------------------------------------------
