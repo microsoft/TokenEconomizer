@@ -685,9 +685,16 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   redirect but the backstop's, which still counts.
 * **Pi** — tool pruning is not planned there, since Pi declares only four tools by default.
 * **Cursor Agent (experimental)** — hook event mapping follows Cursor's published hook schemas.
-  Cursor 3.24.9 loaded the local plugin, but hook delivery from a live Agent session has not been
-  verified. Cursor's transcript format is undocumented, and its hook payloads do not expose
-  session token usage. The adapter records prompt and tool events for learning and loop detection;
+  Cursor 3.24.9 loaded the local plugin. Verified on `cursor-agent` 2026.11.05 (macOS) with
+  `cursor-agent --trust -p`: `sessionStart`, `postToolUse`, `afterShellExecution` and `sessionEnd`
+  are delivered; `beforeSubmitPrompt` and `stop` are not (registered, never fired), and
+  `postToolUseFailure` was not exercised. An `additional_context` reply to both `sessionStart` and
+  `postToolUse` reaches the model. `transcript_path` is null on `sessionStart` and the first
+  `postToolUse`, then Cursor's own log. Without `beforeSubmitPrompt` the first tool call opens the
+  turn, the prompt count is read from the user rows of Cursor's own transcript, and a `sessionEnd`
+  reporting `completed` closes the open turn as normal. The interactive TUI has not been tested.
+  Cursor's transcript format is undocumented, and its hook payloads do not expose
+  session token usage (the `-p` JSON result has it; hooks never see it). The adapter records prompt and tool events for learning and loop detection;
   session and side-call costs are reported as unavailable. Tool pruning is not implemented for
   Cursor. macOS and Linux only: Windows Cursor runs hooks through PowerShell, and the launcher
   is a POSIX shell script.

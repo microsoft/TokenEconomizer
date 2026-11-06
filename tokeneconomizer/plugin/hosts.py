@@ -155,6 +155,10 @@ class Host:
     def stopped_normally(self, p):
         return True
 
+    def completed_at_end(self, p):
+        """Whether a turn still open at SessionEnd finished normally (its Stop never came)."""
+        return False
+
     # Whether the loop guard's still-stuck notice must also go through the model, because the
     # agent does not put hook messages where the person looks.
     relays_notices = False
@@ -582,6 +586,11 @@ class Cursor(Host):
         p["hook_event_name"] = self._EVENTS.get(p.get("hook_event_name"), "")
         if p.get("session_id"):
             from .paths import state_root
+            # Cursor's own transcript (null until the second tool call of a run); the spool
+            # below stays the adapter's transcript, and carries this path for the prompt count.
+            agent = p.get("transcript_path")
+            if isinstance(agent, str) and agent.endswith(".jsonl"):
+                p["agent_transcript"] = agent
             p["transcript_path"] = os.path.join(
                 state_root(env), "cursor-sessions", os.path.basename(p["session_id"]) + ".jsonl")
         if p["hook_event_name"] == "SessionStart":
@@ -613,16 +622,18 @@ class Cursor(Host):
 
     def record_event(self, payload):
         event = payload.get("hook_event_name")
-        if event not in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
+        if event not in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
             return
         path = self.transcript(payload)
-        if not path:
+        # SessionEnd only adds the transcript path to a spool that exists: a session with no
+        # recorded events has nothing to fold, and the controller treats it as such.
+        if not path or (event == "SessionEnd" and not os.path.exists(path)):
             return
         # The adapter reads these fields only. Cursor also sends user_email and the raw
         # tool_output; neither is stored. Tool text is capped where the guard folds it.
         row = {}
         for key in ("hook_event_name", "prompt", "cwd", "tool_use_id", "generation_id",
-                    "tool_name", "tool_input", "error"):
+                    "tool_name", "tool_input", "error", "agent_transcript"):
             value = payload.get(key)
             if value not in (None, ""):
                 row[key] = value
@@ -677,6 +688,12 @@ class Cursor(Host):
 
     def stopped_normally(self, p):
         return (p or {}).get("status") == "completed"
+
+    def completed_at_end(self, p):
+        # Headless `-p` runs deliver no `stop`, so a run that ends "completed" closes its open
+        # turn here. (`final_status` and `reason` verified on cursor-agent 2026.11.05.)
+        p = p or {}
+        return (p.get("final_status") or p.get("reason")) == "completed"
 
 
 class Hermes(Host):

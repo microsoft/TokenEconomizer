@@ -32,6 +32,8 @@ def copilot_event_calls(lines):
             ev = json.loads(line)
         except Exception:
             continue
+        if not isinstance(ev, dict):
+            continue
         t = ev.get("type")
         d = ev.get("data", {}) if isinstance(ev.get("data"), dict) else {}
         if t == "tool.execution_start":
@@ -53,9 +55,12 @@ def copilot_session_cwd(lines):
         if '"session.start"' not in line:
             continue
         try:
-            d = json.loads(line).get("data") or {}
+            ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
+        d = ev.get("data") or {}
         cwd = (d.get("context") or {}).get("cwd")
         return cwd if isinstance(cwd, str) else None
     return None

@@ -25,6 +25,10 @@ try:
 except ImportError:          # pragma: no cover - POSIX
     msvcrt = None
 
+_WINDOWS = os.name == "nt"
+# Seconds slept between tries of a Windows `os.replace`: about 0.4 s in all before giving up.
+_REPLACE_BACKOFF = (0.01, 0.02, 0.05, 0.1, 0.2)
+
 
 def _try_lock(fh):
     """Take an exclusive lock on `fh` without blocking; raise OSError when it is held."""
@@ -41,6 +45,19 @@ def _unlock(fh):
     else:
         fh.seek(0)
         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _replace(src, dst):
+    """`os.replace`, retried briefly on Windows, where it raises PermissionError while another
+    process has `dst` open (a hook reading it, an indexer, antivirus). POSIX renames over an
+    open file, so there it is one call."""
+    if _WINDOWS:
+        for delay in _REPLACE_BACKOFF:
+            try:
+                return os.replace(src, dst)
+            except PermissionError:
+                time.sleep(delay)
+    return os.replace(src, dst)
 
 
 class Store:
@@ -71,7 +88,7 @@ class Store:
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(obj, fh, indent=2, sort_keys=True)
-            os.replace(tmp, target)
+            _replace(tmp, target)
         finally:
             try:
                 os.unlink(tmp)
