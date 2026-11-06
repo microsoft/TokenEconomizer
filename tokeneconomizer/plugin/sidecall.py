@@ -33,8 +33,9 @@ so no extra API key is needed and the call is billed where the session is:
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
   * Grok: `grok -p <prompt> --output-format json` in a throwaway directory, on the person's default
-    model, with the shell, edit, write and web tools and subagents removed
-    (`--disallowed-tools`); no approval flag is passed. It leaves a session under
+    model, with only the read-only `read_file` tool allowed (`--tools read_file`), grok's MCP
+    dispatchers removed (`--disallowed-tools`) and the shell, edit, write, web and subagent
+    tools denied (`--deny`); no approval flag is passed. It leaves a session under
     `~/.grok/sessions/`, which no hook tracks (they do nothing under `TE_SIDECALL`).
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side

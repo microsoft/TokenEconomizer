@@ -641,8 +641,9 @@ was not.)
   own; grok's default timeout for an observe hook is 5 s, so `SessionStart`'s explicit 15 s matters.
 * **Not exercised.** Plugin slash commands under grok, `grok plugin install` from this repository
   (the docs show `grok plugin install <name> --trust` for a marketplace plugin, and plugins off until
-  enabled),
-  the side call's flags against a live grok, and `--resume` delivery of the start context.
+  enabled), and `--resume` delivery of the start context.
+* **Side call, verified on 1.0.70.** With the side call's flags, the run's recorded tool list held
+  only `read_file`, and a prompt asking it to create a file left none.
 
 ## 4. State and privacy
 
