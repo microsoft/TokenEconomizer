@@ -1,9 +1,9 @@
 #!/bin/sh
 # TokenEconomizer hook launcher: run the hook dispatcher under the first Python 3 on PATH.
 # Fails open -- with no usable Python the hook prints an empty object, which changes nothing.
-# On Windows (Git Bash), $0 can arrive with backslashes, and `python3` can be the Microsoft Store
-# alias under WindowsApps, which is on PATH but runs nothing: such an alias is tried before use,
-# and the `py` launcher is the last candidate.
+# On Windows (Git Bash), $0 can arrive with backslashes. The Microsoft Store alias under WindowsApps
+# runs nothing, and every probe of it starts AppXSvc (python/pymanager#396), so a Python outside
+# WindowsApps is tried first and the alias is probed only as a last resort; `py` is the final candidate.
 self=$0
 if [ "${OS:-}" = Windows_NT ]; then
   case $self in *\\*) self=$(printf '%s' "$self" | tr '\\' '/') ;; esac
@@ -11,18 +11,35 @@ fi
 dir=$(CDPATH= cd -- "${self%/*}" && pwd)
 # Session logs are UTF-8; without this, Python on Windows reads them in the ANSI code page.
 export PYTHONUTF8=1
-for py in "${TE_PYTHON:-}" python3 python py; do
-  [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
-  if [ "${OS:-}" = Windows_NT ]; then
-    case $(command -v "$py") in
-      *WindowsApps*) "$py" -c "" </dev/null >/dev/null 2>&1 || continue ;;
-    esac
+outside_windowsapps() {
+  set -f; _ifs=$IFS; IFS=:
+  for _d in $PATH; do
+    case $_d in ''|*WindowsApps*) continue ;; esac
+    for _f in "$_d/$1.exe" "$_d/$1"; do
+      if [ -f "$_f" ] && [ -x "$_f" ]; then IFS=$_ifs; set +f; printf '%s\n' "$_f"; return 0; fi
+    done
+  done
+  IFS=$_ifs; set +f; return 1
+}
+if [ "${OS:-}" = Windows_NT ]; then
+  for py in "${TE_PYTHON:-}" python3 python py; do
+    [ -n "$py" ] && p=$(command -v "$py" 2>/dev/null) || continue
+    case $p in *WindowsApps*) p=$(outside_windowsapps "$py") || continue ;; esac
+    [ "$py" = py ] && exec "$p" -3 "$dir/te_bootstrap.py" hook "$@"
+    exec "$p" "$dir/te_bootstrap.py" hook "$@"
+  done
+  for py in "${TE_PYTHON:-}" python3 python py; do
+    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -c "" </dev/null >/dev/null 2>&1 || continue
     [ "$py" = py ] && exec py -3 "$dir/te_bootstrap.py" hook "$@"
-  elif [ "$py" = py ]; then
-    continue                    # Python's `py` launcher is Windows-only; elsewhere it is not Python
-  fi
-  exec "$py" "$dir/te_bootstrap.py" hook "$@"
-done
+    exec "$py" "$dir/te_bootstrap.py" hook "$@"
+  done
+else
+  for py in "${TE_PYTHON:-}" python3 python; do
+    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
+    exec "$py" "$dir/te_bootstrap.py" hook "$@"
+  done
+fi
 # Drain stdin with a builtin (no `cat` when PATH is empty), then answer "no change".
 while IFS= read -r _line; do :; done
 echo '{}'

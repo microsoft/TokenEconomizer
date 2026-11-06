@@ -153,6 +153,44 @@ def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
     assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
 
 
+def _script(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+    os.chmod(path, 0o755)
+
+
+def test_on_windows_the_launcher_prefers_python_outside_windowsapps(tmp_path):
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    pybin = tmp_path / "Python" / "bin"
+    for name in ("python3", "python3.exe"):
+        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
+    _script(pybin / "python3", f'exec "{sys.executable}" "$@"')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, OS="Windows_NT",
+                                       PATH=f"{winapps}:{pybin}:{os.environ.get('PATH', '')}"))
+    assert code == 0 and json.loads(out) == {}
+    assert os.path.isdir(tmp_path / "home" / "repos")
+    assert not (tmp_path / "alias_called").exists()
+
+
+def test_on_windows_the_launcher_probes_and_skips_a_broken_alias_when_it_is_the_only_python(tmp_path):
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    for name in ("python3", "python3.exe"):
+        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, OS="Windows_NT", PATH=str(winapps)))
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "alias_called").exists()
+
+
 def test_the_launcher_fails_open_without_python(tmp_path):
     code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
                              {"hook_event_name": "SessionStart"},
