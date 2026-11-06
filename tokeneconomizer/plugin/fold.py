@@ -64,16 +64,20 @@ def _run_dir(workdir, trace_path):
     return run
 
 
+def _microskills_config(ctx, profile):
+    from tokeneconomizer.config import InjectionConfig
+    return InjectionConfig(enabled=True, profile=profile,
+                           propose_every=ctx.config.microskills_propose_every,
+                           max_facts=ctx.config.microskills_max_facts,
+                           max_tokens=ctx.config.microskills_max_tokens)
+
+
 def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False):
     profile = ctx.config.microskills
     if profile == "off":
         return None
-    from tokeneconomizer.config import InjectionConfig
     from tokeneconomizer.microskills import PrefixStage
-    icfg = InjectionConfig(enabled=True, profile=profile,
-                           propose_every=ctx.config.microskills_propose_every,
-                           max_facts=ctx.config.microskills_max_facts,
-                           max_tokens=ctx.config.microskills_max_tokens)
+    icfg = _microskills_config(ctx, profile)
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns. A session read from the agent's history never calls a model: the free
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
@@ -96,6 +100,42 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
         "sessions": int(prior.get("sessions", 0)) + 1,
         "imported_sessions": int(prior.get("imported_sessions", 0)) + bool(imported)})
     return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
+
+
+class Busy(RuntimeError):
+    """Another fold holds this repository's learning state."""
+
+
+def forget_microskills(ctx, ids, undo=False):
+    """`te microskills forget` (`unforget` with `undo`): forget the facts `ids` in this
+    repository's learning state, so that no later fold learns them again, and render the cached
+    block again without them (with them, for `unforget`). Returns [(id, changed, claim)];
+    raises KeyError with the unknown ids, changing nothing, and `Busy` when a fold holds the
+    state longer than the lock waits."""
+    from tokeneconomizer.microskills import PrefixStage, forget_facts
+    adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
+                          catalog={}, protect=ctx.config.toolprune_protect)
+    vocab = adapter.env_vocabulary()
+    with ctx.store.locked("mechanisms") as got:
+        if not got:
+            raise Busy("a fold of this repository's sessions holds its state")
+        out = forget_facts(ctx.repo.label, ctx.mech_dir, ids, vocab=vocab, undo=undo)
+        prior = ctx.store.read("injection.json")
+        profile = (ctx.config.microskills if ctx.config.microskills != "off"
+                   else (prior or {}).get("profile"))
+        if not any(changed for _, changed, _ in out) or prior is None or not profile:
+            return out
+        stage = PrefixStage(_microskills_config(ctx, profile), ctx.repo.label, ctx.mech_dir,
+                            False, adapter=adapter, agent=ctx.host.name)
+        rendered = stage.render() or ""
+        facts = dict(stage.distiller.debug_row()) if stage.distiller else {}
+        # What only a fold knows (the last session's verdicts) stays as the fold left it.
+        facts.update({k: v for k, v in (prior.get("facts") or {}).items()
+                      if k.startswith("_") and k not in facts})
+        ctx.store.write("injection.json", dict(
+            prior, rendered=rendered, rendered_ids=stage.injected_ids(), facts=facts,
+            updated=time.time()))
+    return out
 
 
 def enough_evidence(sessions, prompts, cfg, high_risk=False):
