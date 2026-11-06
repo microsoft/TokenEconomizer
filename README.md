@@ -265,7 +265,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
-| Factory Droid (experimental) | 0.233.0 | not tested |
+| Factory Droid (experimental) | 0.233.0, macOS (below) | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
