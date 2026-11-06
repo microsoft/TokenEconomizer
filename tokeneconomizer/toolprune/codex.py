@@ -208,6 +208,8 @@ def inspect_usage(transcript_path):
                     event = json.loads(line)
                 except Exception:
                     continue
+                if not isinstance(event, dict):
+                    continue
                 phase = str(event.get("type") or "")
                 if phase == "error" and "reconnecting" in str(
                         event.get("message") or event.get("error") or "").lower():
