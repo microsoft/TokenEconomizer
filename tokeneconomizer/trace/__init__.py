@@ -6,7 +6,7 @@ here and nowhere else:
   * `calls`    -- `load_trajectory`: any agent's log as ordered `(name, args, result, ok)` calls;
                   `call_cwds`, `tool_usage`, `strip_rtk_prefix`;
   * `catalog`  -- the tool list a session loaded, from whichever source the agent publishes;
-  * `claude`, `codex`, `copilot`, `hermes`, `opencode`, `pi` -- each agent's own session file:
+  * `claude`, `codex`, `copilot`, `grok`, `hermes`, `opencode`, `pi` -- each agent's own session file:
                   usage, metadata, prompt-turns, and the conversions that let the readers above
                   handle it.
 
@@ -28,6 +28,8 @@ from .copilot import (copilot_event_calls, copilot_mcp_servers, copilot_prompt_c
                       copilot_session_meta, copilot_session_usage, copilot_turns,
                       mcp_server_of)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
+from .grok import (grok_json_reply, grok_prompt_count, grok_result, grok_session_to_claude,
+                   grok_session_usage, grok_tool)
 from .hermes import (hermes_export, hermes_find_session, hermes_prompt_count, hermes_result,
                      hermes_row_usage, hermes_session_info, hermes_session_row,
                      hermes_session_to_claude, hermes_session_usage, hermes_tool)
@@ -50,6 +52,8 @@ __all__ = [
     "copilot_event_calls", "copilot_mcp_servers", "copilot_prompt_count", "copilot_session_meta",
     "copilot_session_usage", "copilot_turns", "mcp_server_of",
     "cursor_events_to_claude", "cursor_prompt_count",
+    "grok_json_reply", "grok_prompt_count", "grok_result", "grok_session_to_claude",
+    "grok_session_usage", "grok_tool",
     "hermes_export", "hermes_find_session", "hermes_prompt_count", "hermes_result",
     "hermes_row_usage", "hermes_session_info", "hermes_session_row", "hermes_session_to_claude",
     "hermes_session_usage", "hermes_tool",
