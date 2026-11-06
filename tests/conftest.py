@@ -57,5 +57,6 @@ def _no_model_calls(request, monkeypatch):
     monkeypatch.setattr(judge, "spawn_job", judge.run_job)
     if request.node.get_closest_marker("real_sidecalls"):
         return
-    for name in ("claude_call", "codex_call", "copilot_call", "hermes_call", "pi_call"):
+    for name in ("claude_call", "codex_call", "copilot_call", "grok_call", "hermes_call",
+                 "pi_call"):
         monkeypatch.setattr(sidecall, name, lambda *a, **k: ("", None))

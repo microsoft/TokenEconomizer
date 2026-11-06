@@ -1,13 +1,13 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), opencode (experimental), Hermes Agent (experimental) and the Antigravity CLI
-(experimental). What the plugin does and why is in the [main README](../README.md); its
+(experimental), Grok Build (experimental), opencode (experimental), Hermes Agent (experimental)
+and the Antigravity CLI (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [opencode](#opencode) ·
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
   [Hermes Agent](#hermes-agent) · [Antigravity CLI](#antigravity-cli)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
@@ -333,6 +333,50 @@ On Windows, Cursor runs these hook commands through PowerShell, which cannot run
 Tool pruning follows the global setting and is not applied to Cursor. Cursor commands run from a terminal:
 `~/.tokeneconomizer/bin/te --host cursor <command>`.
 
+## Grok Build
+
+Experimental; verified on grok 1.0.70. Grok runs Claude Code plugins and their hooks, so the plugin
+installs as the Claude Code one does:
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+grok plugin marketplace add "$PWD/TokenEconomizer"
+grok plugin install tokeneconomizer --trust
+```
+
+Without `--trust`, grok shows the source, warns that installing activates the plugin's hooks, and
+stops. Grok leaves plugins off until they are enabled: check `grok plugin list` (`grok plugin enable
+tokeneconomizer` if it is off), then start a new session. If TokenEconomizer is already installed for Claude Code, grok runs it from `~/.claude/plugins`
+too, and nothing more is needed. Either way the hook file passes no `--host`: the plugin tells grok
+from Claude Code by the fields only grok sends (`hookEventName`) and by its session folder
+(`~/.grok/sessions`), and a hook run from a Claude Code session is still Claude Code.
+
+**Check it.** From a terminal in the repository: `~/.tokeneconomizer/bin/te --host grok status`.
+Grok's tool shell and plugin slash commands were not checked, so run commands from a terminal.
+
+What grok does differently, and so what to expect:
+
+* **Micro-skills arrive with the first tool call.** Grok reads only a message for you from a
+  `SessionStart` hook, and discards a `UserPromptSubmit` hook's output; the one channel to the
+  model is a `PostToolUse` hook's `additionalContext`. The plugin saves the session's start context
+  (under `~/.tokeneconomizer/grok-start/`) and adds it to the first tool result, once. A session that
+  answers without a tool call never gets it. A resumed session is not given it again, as grok keeps
+  that note in the conversation.
+* **No tool pruning.** Micro-skills and the loop guard only.
+* **Stopping a stuck turn** is Ctrl+C; Esc does not cancel a turn in grok. Grok shows a hook's
+  message to you only from `SessionStart`, so the still-stuck line is also passed on by the model.
+* **Interrupted turns** (`StopCancelled`) are closed when your next prompt arrives, as on Claude
+  Code. At the end of a session grok fires one more, observe-only `Stop` (reason `shutdown`); the
+  plugin ignores it.
+* **Cost.** The session's tokens come from the `usage.json` grok keeps with the session; xAI models
+  are not in the price table, so they are priced on the labelled fallback curve.
+* **Model calls.** The proposer and the judge run through `grok -p --output-format json` in a
+  throwaway folder on your default model (`paid_model` names another), with the shell, edit, write,
+  web and subagent tools removed. Each such call leaves a session under `~/.grok/sessions/` that
+  the plugin does not track.
+
+**Uninstall.** `grok plugin uninstall tokeneconomizer`. Optional: `rm -rf ~/.tokeneconomizer`.
+
 ## opencode
 
 **1. Install.** One plugin file serves opencode 1.x (the `server` entry) and 2.x (the `setup`
@@ -619,6 +663,7 @@ How to run them:
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or

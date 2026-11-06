@@ -233,15 +233,16 @@ def test_running_steps_system_rows_and_finish_do_not_shift_the_pairing(tp):
 def test_render_answers_each_event_in_agys_terms():
     host = Antigravity()
     ctx = merge_outputs(host.context("SessionStart", "facts"), host.notice("heads up"))
-    start = host.render("SessionStart", ctx)
+    start = host.render({"hook_event_name": "SessionStart"}, ctx)
     (step,) = start["injectSteps"]
     assert step["systemMessage"]["systemMessage"].startswith("facts\n\n")
     assert "heads up" in step["systemMessage"]["systemMessage"]      # told through the model
-    assert host.render("PreInvocation", {"hookSpecificOutput": {
+    assert host.render({"hook_event_name": "PreInvocation"}, {"hookSpecificOutput": {
         "hookEventName": "PostToolUse", "additionalContext": "redirect"}, "systemMessage": "n"}) == {
         "injectSteps": [{"ephemeralMessage": "redirect\n\nn"}]}
-    assert host.render("Stop", ctx) == {}
-    assert host.render("PreInvocation", {}) == {} == host.render("SessionStart", {})
+    assert host.render({"hook_event_name": "Stop"}, ctx) == {}
+    assert host.render({"hook_event_name": "PreInvocation"}, {}) == {} == host.render(
+        {"hook_event_name": "SessionStart"}, {})
 
 
 @pytest.mark.parametrize("reason,normal", [("NO_TOOL_CALL", True), ("USER_CANCELED", False),
@@ -348,8 +349,8 @@ def test_the_seam_runs_each_expanded_event_in_order_and_renders_the_merge(monkey
             return [dict(payload, hook_event_name="SessionStart", n=1),
                     dict(payload, hook_event_name="SessionStart", n=2)]
 
-        def render(self, event, merged):
-            return {"event": event, "merged": merged}
+        def render(self, payload, merged, ctx):
+            return {"event": payload["hook_event_name"], "merged": merged}
 
     from tokeneconomizer.plugin import controller
     monkeypatch.setitem(hosts.HOSTS, "fake", Fake)

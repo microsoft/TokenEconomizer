@@ -1,7 +1,7 @@
 """The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
 
-    python -m tokeneconomizer.plugin.hook [--host antigravity|claude|codex|copilot|hermes|opencode|pi]
-                                          [--event NAME]
+    python -m tokeneconomizer.plugin.hook [--host antigravity|claude|codex|copilot|cursor|grok|hermes|
+                                                  opencode|pi] [--event NAME]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
@@ -39,10 +39,14 @@ def run(payload, env, host_hint=None):
         host.record_event(payload)
     if hasattr(host, "expand"):
         # One call of this agent's hook stands for several events (Antigravity's `PreInvocation`
-        # is a prompt and the tool results before it): run each, then answer in the agent's terms.
-        outs = [LiveController(ctx, p).handle() for p in host.expand(payload, env)]
-        return host.render(payload.get("hook_event_name"), hosts.merge_outputs(*outs))
-    return LiveController(ctx, payload).handle()
+        # is a prompt and the tool results before it): run each and merge their answers.
+        out = hosts.merge_outputs(*(LiveController(ctx, p).handle()
+                                    for p in host.expand(payload, env)))
+    else:
+        out = LiveController(ctx, payload).handle()
+    # A host whose answer has its own shape (agy's `injectSteps`), or whose events cannot all
+    # carry context (grok's SessionStart), turns the merged answer into its own terms.
+    return host.render(payload, out, ctx) if hasattr(host, "render") else out
 
 
 def _record_error(env):

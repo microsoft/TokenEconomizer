@@ -64,8 +64,8 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode**, **Cursor Agent**, **Hermes Agent** and the
-**Antigravity CLI**. Each italic
+with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent** and
+the **Antigravity CLI**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -176,6 +176,23 @@ hook events locally and reports session cost as unavailable. Cursor support is m
 only: on Windows, Cursor runs hook commands through PowerShell, and this plugin's launcher is a
 POSIX shell script.
 
+**Grok Build** (experimental)
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+grok plugin marketplace add "$PWD/TokenEconomizer"
+grok plugin install tokeneconomizer --trust
+```
+
+Grok runs Claude Code plugins, so this is the Claude Code plugin: grok loads `plugin/hooks/hooks.json`
+and TokenEconomizer recognises the grok session in the hook payload. (If you already installed it
+for Claude Code, grok reads `~/.claude/plugins` and runs it in your sessions; this version reads
+those as grok sessions.) Micro-skills and the loop guard only; tool pruning is not available.
+Confirm `tokeneconomizer` is enabled in `grok plugin list`, start `grok`, and check with
+`~/.tokeneconomizer/bin/te --host grok status`.
+The learned facts arrive with the session's first tool call, not at its start
+([its limits](plugin/README.md#grok-build)).
+
 **Antigravity CLI** (`agy`; experimental; micro-skills' LLM-free facts only)
 
 ```sh
@@ -243,6 +260,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | 3.24.9 and cursor-agent 2026.11.05, macOS and Linux (below) | not tested |
+| Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 | Antigravity CLI (experimental) | agy 1.5.1, macOS and Linux | not tested |
@@ -262,6 +280,9 @@ have not been tested yet.
   from `sessionStart` and `postToolUse` reached the model. Prompts are then counted from Cursor's
   own transcript and a run that ends as completed closes its turn. Session usage stays unavailable,
   and the interactive TUI has not been tested.
+- **Grok Build** support is experimental: it was verified on 1.0.70 only, against its documented
+  hook contract and live hook payloads. Learned facts reach the model with the session's first tool
+  call, and tool pruning is not available. See [its limits](plugin/README.md#grok-build).
 - **Antigravity CLI** support is experimental: it was written against agy 1.5.1's hook contract
   and transcript format, which are not a public interface, and only micro-skills' LLM-free facts
   are supported: the plugin makes no model call through `agy`. See [its limits](plugin/README.md#antigravity-cli).
@@ -284,6 +305,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Pi | `/te <command>` |
 | opencode | from a terminal: `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
+| Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
@@ -372,6 +394,7 @@ what it can leave out differs:
 | Copilot CLI | whole MCP servers | `.github/copilot/settings.local.json` |
 | Pi | nothing (Pi loads only four tools) | — |
 | Cursor Agent | nothing yet | — |
+| Grok Build | nothing yet | — |
 | opencode | nothing yet | — |
 | Hermes Agent | nothing yet | — |
 | Antigravity CLI | nothing yet | — |
