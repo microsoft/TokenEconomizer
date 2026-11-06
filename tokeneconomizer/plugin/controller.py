@@ -402,7 +402,7 @@ class LiveController:
                 tp and os.path.exists(tp)):
             return {}
         s = self._session()
-        self._close_turn(s, stopped_normally=False)
+        self._close_turn(s, stopped_normally=self.host.completed_at_end(self.p))
         s["ended"] = time.time()
         s["end_reason"] = self.p.get("reason")
         self._save(s)
