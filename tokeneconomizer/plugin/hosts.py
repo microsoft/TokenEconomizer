@@ -74,6 +74,8 @@ def response_text(resp, cap=RESULT_CAP):
         return "\n".join(x.get("text", "") if isinstance(x, dict) else str(x)
                          for x in resp)[:cap]
     if isinstance(resp, dict):
+        if "structuredPatch" in resp:
+            return ""
         parts = []
         for k in _RESPONSE_KEYS:
             v = resp.get(k)
@@ -81,9 +83,7 @@ def response_text(resp, cap=RESULT_CAP):
                 parts.append(v)
             elif isinstance(v, list):
                 parts.append("\n".join(x.get("text", "") for x in v if isinstance(x, dict)))
-        if parts:
-            return "\n".join(parts)[:cap]
-        return json.dumps(resp, sort_keys=True)[:cap]
+        return "\n".join(parts)[:cap]
     return str(resp)[:cap]
 
 
