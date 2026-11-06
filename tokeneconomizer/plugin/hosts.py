@@ -81,9 +81,9 @@ def response_text(resp, cap=RESULT_CAP):
                 parts.append(v)
             elif isinstance(v, list):
                 parts.append("\n".join(x.get("text", "") for x in v if isinstance(x, dict)))
-        if parts:
-            return "\n".join(parts)[:cap]
-        return json.dumps(resp, sort_keys=True)[:cap]
+        # No known output key: the dict describes the call (Claude Code's Edit result carries the
+        # edited file), not what it printed. A real failure arrives through PostToolUseFailure.
+        return "\n".join(parts)[:cap]
     return str(resp)[:cap]
 
 
