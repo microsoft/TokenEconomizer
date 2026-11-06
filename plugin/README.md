@@ -665,6 +665,7 @@ How to run them:
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
+| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.
