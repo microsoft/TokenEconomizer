@@ -1407,6 +1407,20 @@ def test_codex_never_overrides_a_key_the_user_set(tmp_path):
     assert kept == "[agents]  # t\nmax_threads = 4\n"
 
 
+def test_codex_apply_does_not_record_a_capability_the_user_already_set(repo, tmp_path,
+                                                                     codex_accepts):
+    st = Store(str(tmp_path / "st"))
+    path = denylist.settings_path(repo, "codex")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("[features]\ngoals = true\n")
+    assert denylist.apply(repo, ["goals"], st, host="codex") == []
+    assert denylist.applied(st) == []
+    assert open(path, encoding="utf-8").read() == "[features]\ngoals = true\n"
+    assert denylist.apply(repo, ["goals", "image_media"], st, host="codex") == ["image_media"]
+    assert denylist.applied(st) == ["image_media"]
+
+
 def test_codex_trust_is_read_from_the_users_config(tmp_path, repo):
     home = tmp_path / "codex-home"
     home.mkdir()
