@@ -1,5 +1,6 @@
 """pytest fixtures shared across the offline suite."""
 import os
+import shutil
 import sys
 
 import pytest
@@ -9,6 +10,18 @@ _REPO = os.path.dirname(_TESTS)
 for p in (_REPO, _TESTS):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+
+def git_sh():
+    """Git Bash's `sh`: on PATH, or beside the `git` that is. Git for Windows puts only
+    `<Git>\\cmd` on the PATH of PowerShell and cmd.exe; its `<Git>\\bin\\sh.exe` adds the
+    `usr\\bin` tools the launchers use (`tr`, ...), as the `bash.exe` Claude Code runs hooks with."""
+    found = shutil.which("sh")
+    git = shutil.which("git")
+    if found or not git:
+        return found
+    sh = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(git))), "bin", "sh.exe")
+    return sh if os.path.isfile(sh) else None
 
 
 def symlink_or_skip(src, dst):

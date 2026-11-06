@@ -242,7 +242,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
-| Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
+| Cursor Agent (experimental) | 3.24.9 and cursor-agent 2026.11.05, macOS and Linux (below) | not tested |
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
@@ -256,8 +256,12 @@ have not been tested yet.
   full path; `git pull` in the clone updates it.
 - **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
   2.x terminal UI.
-- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
-  from a live Agent session has not yet been verified.
+- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin. On
+  `cursor-agent` 2026.11.05, `cursor-agent --trust -p` delivered `sessionStart`, `postToolUse`,
+  `afterShellExecution` and `sessionEnd`, but not `beforeSubmitPrompt` or `stop`; context returned
+  from `sessionStart` and `postToolUse` reached the model. Prompts are then counted from Cursor's
+  own transcript and a run that ends as completed closes its turn. Session usage stays unavailable,
+  and the interactive TUI has not been tested.
 - **Grok Build** support is experimental: it was verified on 1.0.70 only, against its documented
   hook contract and live hook payloads. Learned facts reach the model with the session's first tool
   call, and tool pruning is not available. See [its limits](plugin/README.md#grok-build).
