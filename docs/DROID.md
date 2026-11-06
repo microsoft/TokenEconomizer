@@ -1,7 +1,7 @@
 # TokenEconomizer on Factory Droid
 
 Droid support is experimental. It was built and tested against Droid `0.233.0` on macOS; no
-other version has been tested. It is not part of an upstream release yet.
+other version has been tested.
 
 ## What works, and what does not
 
