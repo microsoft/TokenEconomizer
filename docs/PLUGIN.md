@@ -679,8 +679,14 @@ was not.)
 * **Verified live on 2026-11-05:** a fact written by the hook reached a live Droid model. A new
   session (`bb18c4fc`) received the 793-character block as
   `hookSpecificOutput.additionalContext`, and the model repeated it verbatim. The hook output
-  and the last hop are both observed. Still unverified: whether `droid exec` can be restricted
-  to a pure completion, which is why side calls are off unless `TE_DROID_SIDECALL=1`.
+  and the last hop are both observed.
+* **Side call.** `droid exec` cannot run with no tool at all (`--only-tools ""` reads as no
+  filter), so the call passes `--only-tools Read`. On 0.233.0, with the call's own flags,
+  `--list-tools` reports `Read` as the only tool allowed (without it, the default read-only
+  autonomy also allows `Execute`, the web tools and every MCP tool), and a live call asked to
+  run shell commands, write a file and search the web called no tool and wrote nothing. The
+  call also writes a session log of its own, so side calls stay off until `droid_sidecall` is
+  on (or `TE_DROID_SIDECALL=1`).
 
 ## 4. State and privacy
 

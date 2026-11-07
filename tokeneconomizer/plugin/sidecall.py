@@ -41,11 +41,12 @@ so no extra API key is needed and the call is billed where the session is:
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
     `hermes_call` for why `TE_SIDECALL` is not how it avoids the plugin's hooks.
-  * Factory Droid: `droid exec --output-format json --disable-builtin-skills`, in a throwaway
-    directory at Droid's default read-only autonomy, on the person's default model. OFF unless
-    `TE_DROID_SIDECALL=1`: Droid writes a session log of its own for the call, and has no
-    documented flags for a pure completion (no tools, no hooks, no log). Its usage is read from
-    the call's result or from the settings file beside that log.
+  * Factory Droid: `droid exec --output-format json --disable-builtin-skills --only-tools Read`,
+    in a throwaway directory at Droid's default read-only autonomy, on the person's default
+    model, with only the read-only `Read` tool allowed. OFF unless `droid_sidecall` is on (or
+    `TE_DROID_SIDECALL=1`): Droid writes a session log of its own for the call, and cannot be
+    left with no tool at all. Its usage is read from the call's result or from the settings file
+    beside that log.
 
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
@@ -743,16 +744,27 @@ def _droid_settings_usage(sid):
     return None
 
 
-def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
-    """A text-only completion through `droid exec`, in a throwaway directory.
+# A Droid side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. Droid's default read-only autonomy still lists `Execute`, the web tools and every
+# MCP tool as allowed (0.233.0, `droid exec --list-tools`), so the call names its tools with
+# `--only-tools`, an allowlist. It cannot be empty -- `--only-tools ""` reads as no filter, and a
+# name droid does not know is refused -- so it keeps the one read-only tool, as Grok's does.
+# Verified on 0.233.0: with the call's own flags, `--list-tools` reports `Read` as the only
+# tool allowed, MCP tools included.
+DROID_TOOLS = "Read"
 
-    Droid has no documented flags for a pure completion (no tools, no hooks, no session log),
-    so this is off unless `TE_DROID_SIDECALL=1`. `TE_SIDECALL=1` makes this plugin's own hooks
-    no-ops inside the nested session, so a side call cannot recurse; the default read-only
-    autonomy means it cannot write either. Its own usage is read from the `exec` result or from
-    the settings file beside the session it wrote, so the call is charged rather than guessed."""
+
+def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
+    """A text-only completion through `droid exec`, in a throwaway directory, with only the
+    read-only `Read` tool allowed (`--only-tools`, see `DROID_TOOLS`).
+
+    Droid cannot be left with no tool at all, and `droid exec` writes a session log of its own,
+    so this is off unless the person turns it on (`droid_enabled`, or the `droid_sidecall`
+    setting). `TE_SIDECALL=1` makes this plugin's own hooks no-ops inside the nested session, so
+    a side call cannot recurse. Its own usage is read from the `exec` result or from the
+    settings file beside the session it wrote, so the call is charged rather than guessed."""
     cmd = [*program(cli), "exec", "--output-format", "json", "--disable-builtin-skills",
-           "--append-system-prompt",
+           "--only-tools", DROID_TOOLS, "--append-system-prompt",
            "Answer with text only. Do not call any tool. Your entire reply is the answer."]
     if model:
         cmd += ["--model", model]

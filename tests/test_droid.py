@@ -1,7 +1,10 @@
 """Factory Droid: the session reader, its host adapter, usage, and history import."""
 import json
 import os
+import subprocess
 import time
+
+import pytest
 
 from tokeneconomizer import trace
 from tokeneconomizer.plugin import accounting, denylist, history, hosts
@@ -177,6 +180,33 @@ def test_the_setting_is_off_by_default_and_shown_by_config_show():
     from tokeneconomizer.plugin.config import LiveConfig
     assert LiveConfig().droid_sidecall is False
     assert _config_view(LiveConfig())["droid"] == {"state": "off", "droid_sidecall": False}
+
+
+@pytest.mark.real_sidecalls
+def test_a_droid_side_call_allows_only_the_read_tool(monkeypatch):
+    """Droid's default read-only autonomy still allows its shell, the web tools and every MCP
+    tool, so the side call names the one tool it may use instead of asking the model not to."""
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(cmd=cmd, **kw)
+        out = json.dumps({"type": "result", "result": "- use python -m pytest",
+                          "session_id": "s1",
+                          "usage": {"input_tokens": 900, "output_tokens": 40}})
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    text, eff = sidecall.droid_call("propose facts", model="claude-sonnet-5")
+    assert text == "- use python -m pytest" and eff and eff > 0
+    cmd = seen["cmd"]
+    assert cmd[:2] == ["droid", "exec"] and cmd[-1] == "propose facts"
+    assert cmd[cmd.index("--only-tools") + 1] == sidecall.DROID_TOOLS == "Read"
+    assert "--auto" not in cmd and "--skip-permissions-unsafe" not in cmd
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
+    assert seen["env"]["TE_SIDECALL"] == "1" and seen["stdin"] == subprocess.DEVNULL
+    assert seen["cwd"] != os.getcwd()                       # a throwaway directory
 
 
 def test_the_settings_usage_is_normalized_for_pricing():

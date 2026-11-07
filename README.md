@@ -176,7 +176,8 @@ Start a new Droid session (its hooks are snapshotted at startup) and run
 `/tokeneconomizer-status`. Droid keeps each session's token usage in a settings file beside its
 log, so folded sessions are priced like any other host's. Its TUI has no persistent per-tool
 setting, so tool pruning stays off; and because `droid exec` writes a session log of its own,
-micro-skills' paid proposer and the loop guard's judge stay off unless `TE_DROID_SIDECALL=1`.
+micro-skills' paid proposer and the loop guard's judge stay off until `droid_sidecall` is on
+(when on, they may use only Droid's read-only `Read` tool).
 See **[`docs/DROID.md`](docs/DROID.md)** for what works and how to import earlier sessions.
 
 **Cursor Agent** (experimental)
@@ -365,8 +366,9 @@ Change them with `config set`, shown here in Claude Code's form (other agents ty
 
 On Droid, the plugin's own calls run `droid exec`, which writes a session log of its own, so
 they stay off until `config set droid_sidecall=on` (`TE_DROID_SIDECALL=1` does the same from a
-terminal). With them off, `microskills=envfacts` still learns and the loop guard keeps its
-rule-based backstop; only the paid fact proposer and the judge wait.
+terminal). When on, they run with `--only-tools Read`, so `Read` is the only tool they may use.
+With them off, `microskills=envfacts` still learns and the loop guard keeps its rule-based
+backstop; only the paid fact proposer and the judge wait.
 
 Tool pruning counts prompts so that long sessions weigh more, and requires *m* sessions so that a
 single session never decides alone. It writes the deny list only once your sessions in the
