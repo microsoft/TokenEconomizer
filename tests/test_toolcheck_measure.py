@@ -1,6 +1,8 @@
 """`te toolprune measure` for Claude Code: what the two `claude -p` probes are started with."""
 import json
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -70,3 +72,28 @@ def test_a_codex_probe_that_prints_nothing_raises(monkeypatch, lean_stdout):
         cmd, 0, stdout=next(replies), stderr=""))
     with pytest.raises(RuntimeError):
         toolcheck.measure(["web_search"], cli="codex", host="codex")
+
+
+def _fake_probe(monkeypatch, script):
+    """Run `script` in place of `claude -p`, through the real Popen and its pipes."""
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(toolcheck, "claude_flags", lambda cli=None: [])
+    monkeypatch.setattr(toolcheck.subprocess, "Popen",
+                        lambda cmd, **kw: real_popen([sys.executable, "-c", script], **kw))
+
+
+def test_the_init_probe_gives_up_on_a_cli_that_prints_nothing(monkeypatch):
+    """The deadline has to hold when no line arrives: a probe that hung blocked it for good."""
+    _fake_probe(monkeypatch, "import time; time.sleep(5)")
+    started = time.monotonic()
+    assert toolcheck._init_tools([], cli="claude", timeout=1) == (None, None)
+    assert time.monotonic() - started < 4
+
+
+def test_the_init_probe_returns_the_tools_when_the_init_event_arrives(monkeypatch):
+    init = {"type": "system", "subtype": "init", "tools": ["Bash", "Read"],
+            "claude_code_version": "2.1"}
+    _fake_probe(monkeypatch, f"import time; print({json.dumps(init)!r}, flush=True); time.sleep(5)")
+    started = time.monotonic()
+    assert toolcheck._init_tools([], cli="claude", timeout=30) == (["Bash", "Read"], "2.1")
+    assert time.monotonic() - started < 4
