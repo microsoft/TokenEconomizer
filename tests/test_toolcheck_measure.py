@@ -75,11 +75,13 @@ def test_a_codex_probe_that_prints_nothing_raises(monkeypatch, lean_stdout):
 
 
 def _fake_probe(monkeypatch, script):
-    """Run `script` in place of `claude -p`, through the real Popen and its pipes."""
+    """Run `script` in place of `claude -p`, through the real Popen and its pipes. Only the probe
+    is swapped: `toolcheck.subprocess` is the shared module, and on Windows `_kill_tree` starts
+    `taskkill` through the same `Popen`."""
     real_popen = subprocess.Popen
     monkeypatch.setattr(toolcheck, "claude_flags", lambda cli=None: [])
-    monkeypatch.setattr(toolcheck.subprocess, "Popen",
-                        lambda cmd, **kw: real_popen([sys.executable, "-c", script], **kw))
+    monkeypatch.setattr(toolcheck.subprocess, "Popen", lambda cmd, **kw: real_popen(
+        [sys.executable, "-c", script] if cmd[0] == "claude" else cmd, **kw))
 
 
 def test_the_init_probe_gives_up_on_a_cli_that_prints_nothing(monkeypatch):
