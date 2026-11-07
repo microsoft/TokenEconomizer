@@ -7,7 +7,8 @@ so no extra API key is needed and the call is billed where the session is:
 
   * Claude Code: `claude -p --output-format json --tools "" --max-turns 1`, with none of the
     person's MCP servers (`--strict-mcp-config` and an empty `--mcp-config`, where the CLI has
-    them), on `paid_model` (default `haiku`). This is a deliberate departure from the
+    them) and none of their customizations (`--safe-mode`, where the CLI has it), on `paid_model`
+    (default `haiku`). This is a deliberate departure from the
     experiments, which ran every optimizer call on the agent's own model so overhead could not
     look cheaper than the arm it was charged to; in a user's session the cheapest capable model
     is the right default, and the ledger records the real cost either way.
@@ -209,6 +210,15 @@ def claude_flags(cli=None):
     return ["--no-session-persistence"] if "--no-session-persistence" in _claude_help(cli) else []
 
 
+def claude_safe_mode(cli=None):
+    """`--safe-mode` when this Claude Code has it: a side call needs none of the person's
+    customizations -- CLAUDE.md, skills, installed plugins and their hooks, output styles --
+    which would otherwise load into the call and change what it costs and the shape of the
+    JSON it parses. Not for the catalog probes, which measure the real session."""
+    cli = cli or claude_cli()
+    return ["--safe-mode"] if "--safe-mode" in _claude_help(cli) else []
+
+
 def claude_no_mcp(cli, cwd):
     """`--strict-mcp-config` with an empty `--mcp-config`, when this Claude Code has them: a side
     call needs none of the person's MCP servers. `--tools ""` removes only the built-in tools,
@@ -229,7 +239,8 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         # `--mcp-config` takes several values, so an option follows it, never a bare argument.
         cmd = ([cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", ""]
-               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli))
+               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli)
+               + claude_safe_mode(cli))
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
                              cwd=cwd)
