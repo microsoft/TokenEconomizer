@@ -1,7 +1,7 @@
 # The plugin: design and verified agent behaviour
 
 How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
-opencode, Cursor, Grok Build, Hermes Agent and Antigravity CLI sessions, through the hooks (on Pi, the extension events) each agent
+opencode, Cursor, Grok Build, Hermes Agent, Antigravity CLI and Factory Droid sessions, through the hooks (on Pi, the extension events) each agent
 exposes: what it does at each hook, what differs from the experiments and why, the agent
 behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
@@ -772,7 +772,8 @@ by default with the guard), of micro-skills (its proposer, when it is on), and, 
 it, of `toolprune measure` on Claude Code. Those calls send
 **digests** — command templates, edited file basenames, error lines with paths and numbers
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
-`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat`), billed where your session is. The proposer keeps the digests of the last eight
+`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat` / `droid exec`, the last only with
+`droid_sidecall` on), billed where your session is. The proposer keeps the digests of the last eight
 sessions with its state, raw commands and output capped, so that each run sees more than the
 session that just ended. Sessions imported from Claude Code's history call no model, but their
 digests join that window, so the proposer's next call can include digests of sessions from
@@ -846,6 +847,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
   on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
   `cmd /c` on Windows, and the launcher is a POSIX shell script.
+* **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
+  (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
+  calls are off until `droid_sidecall` is on; see `docs/DROID.md`.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s

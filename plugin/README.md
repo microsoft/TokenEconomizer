@@ -711,6 +711,7 @@ How to run them:
 | Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
+| Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.
