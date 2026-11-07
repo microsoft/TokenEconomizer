@@ -807,13 +807,13 @@ def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
     no-ops inside the nested session, so a side call cannot recurse; the default read-only
     autonomy means it cannot write either. Its own usage is read from the `exec` result or from
     the settings file beside the session it wrote, so the call is charged rather than guessed."""
-    cmd = [cli, "exec", "--output-format", "json", "--disable-builtin-skills",
+    cmd = [*program(cli), "exec", "--output-format", "json", "--disable-builtin-skills",
            "--append-system-prompt",
            "Answer with text only. Do not call any tool. Your entire reply is the answer."]
     if model:
         cmd += ["--model", model]
     cmd.append(prompt)
-    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                              errors="replace", timeout=timeout, env=_env(), cwd=cwd,
                              stdin=subprocess.DEVNULL)

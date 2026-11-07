@@ -1088,7 +1088,7 @@ def test_every_side_call_starts_its_cli_through_program(tmp_path, monkeypatch):
     prompt = 'Say "hi & exit\n100% of %PATH%'
     for call, cli in ((sidecall.codex_call, "codex"), (sidecall.copilot_call, "copilot"),
                       (sidecall.opencode_call, "opencode"), (sidecall.pi_call, "pi"),
-                      (sidecall.cursor_call, "cursor-agent")):
+                      (sidecall.cursor_call, "cursor-agent"), (sidecall.droid_call, "droid")):
         seen.clear()
         call(prompt)
         assert seen and all(c[:2] == ["/n/node", f"/n/{cli}.js"] for c in seen), seen
