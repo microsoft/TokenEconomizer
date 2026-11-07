@@ -19,8 +19,8 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
-    te history import [--dry-run]     Claude Code: fold this repository's sessions from before
-                                      the plugin, from Claude Code's own logs (no model calls,
+    te history import [--dry-run]     fold this repository's sessions from before the plugin,
+                                      from the agent's own logs (no model calls,
                                       no deny list written; only before any session is folded;
                                       with `history_import=on`, the first session start runs
                                       it by itself)
@@ -264,7 +264,7 @@ def cmd_status(args):
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
           f"({ledger['overhead_frac']:.1%})")
-    hist = history.describe(out["history"])
+    hist = history.describe(out["history"], ctx.host.name)
     if hist:
         print(f"  history      {hist}")
     i = out["microskills"]
@@ -583,6 +583,8 @@ def _config_view(cfg):
                     "history_max_sessions": d.pop("history_max_sessions"),
                     "history_days": d.pop("history_days"),
                     "history_dirs": d.pop("history_dirs")},
+        "droid": {"state": "on" if cfg.droid_sidecall else "off",
+                  "droid_sidecall": d.pop("droid_sidecall")},
         "other": d,
         "warnings": cfg.warnings,
     }
@@ -623,7 +625,7 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
-    if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
+    if {canonical(k) for k in updates} & {"microskills", "loopguard", "droid_sidecall"} and sidecall.resume(
             ctx.host.name, ctx.root):
         print(f"the plugin's model calls through `{sidecall.call_name(ctx.host.name)}` will be "
               f"tried again")
@@ -654,7 +656,7 @@ def _print_history(ctx, doc):
         print(f"no import of earlier sessions recorded for {ctx.repo.label}"
               + ("" if ctx.config.history_import else " (history_import is off)"))
         return
-    print(f"{ctx.repo.label}: {history.describe(doc) or doc.get('state')}")
+    print(f"{ctx.repo.label}: {history.describe(doc, ctx.host.name) or doc.get('state')}")
     skipped = doc.get("skipped") if isinstance(doc.get("skipped"), dict) else {}
     if doc.get("over_limit"):
         skipped = dict(skipped, older_than_the_newest=doc["over_limit"])
@@ -663,13 +665,13 @@ def _print_history(ctx, doc):
 
 
 def cmd_history(args):
-    """`te history [import]`: a repository's sessions from before the plugin (Claude Code)."""
+    """`te history [import]`: a repository's sessions from before the plugin."""
     ctx = _ctx(args)
     if args.action == "status" or args.status:
         _print_history(ctx, history.summary(ctx))
         return 0
     if not ctx.host.keeps_history:
-        print(f"{ctx.host.name}: no session history the plugin reads (Claude Code only)")
+        print(f"{ctx.host.name}: no session history the plugin reads")
         return 1
     if args.dry_run:
         p = history.plan(ctx)
@@ -813,11 +815,13 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("claude", "codex", "copilot", "grok", "hermes", "opencode", "pi")
+    agents = [h for h in ("claude", "codex", "copilot", "droid", "grok", "hermes", "opencode",
+                          "pi")
               if _sh.which(sidecall.claude_cli() if h == "claude" else
                            sidecall.hermes_cli() if h == "hermes" else h)]
-    print(f"agents      "
-          f"{', '.join(agents) or 'none of claude, codex, copilot, grok, hermes, opencode, pi on PATH'}")
+    none_installed = "none of claude, codex, copilot, droid, grok, hermes, opencode, pi on PATH"
+    print(f"agents      {', '.join(agents) or none_installed}")
+    ctx = _ctx(args)          # the per-agent lines below read the settings in effect
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:
@@ -851,6 +855,17 @@ def cmd_doctor(args):
         if ctrust is not None:
             print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "
                   f"untrusted folder's .github/copilot settings are ignored)")
+    if "droid" in agents:
+        sessions = os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
+            os.path.expanduser("~"), ".factory", "sessions")
+        if getattr(ctx.config, "droid_sidecall", False):
+            side = "on (the `droid_sidecall` setting)"
+        elif sidecall.droid_enabled():
+            side = "on (TE_DROID_SIDECALL=1)"
+        else:
+            side = ("off (set `droid_sidecall=on` or TE_DROID_SIDECALL=1 to try them)")
+        print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
+              f"available in the TUI")
     if "hermes" in agents:
         link = os.path.join(sidecall.hermes_home(), "plugins", "tokeneconomizer")
         print(f"hermes      plugin {'linked at ' + link if os.path.exists(link) else 'not in ' + link}"
@@ -864,7 +879,6 @@ def cmd_doctor(args):
             pkgs = []
         mine = [p for p in pkgs if "tokeneconomizer" in json.dumps(p).lower()]
         print(f"pi          package {'installed: ' + str(mine[0]) if mine else 'not in ' + settings}")
-    ctx = _ctx(args)
     print(f"repository  {ctx.repo.root}: {repos.describe(ctx.repo)}; state {ctx.repo.key}")
     home_git = os.path.join(paths.home_dir(), ".git")
     for path in repos.ignored_git_entries(args.cwd):

@@ -12,6 +12,7 @@ session as an ordered list of `(tool_name, args, result_text, success)` calls th
 | `codex.py` | `codex exec --json` streams; a session's rollout file, converted to that stream; usage |
 | `copilot.py` | Copilot CLI event logs: calls, usage, prompt-turns, MCP servers |
 | `cursor.py` | Cursor Agent hook events, normalized to a Claude-shaped trajectory; usage is unavailable |
+| `droid.py` | Factory Droid sessions: one JSONL file per session, its message records unwrapped into a Claude transcript; prompts; usage from the `<session id>.settings.json` beside it |
 | `grok.py` | Grok Build sessions: `updates.jsonl` (ACP updates) written as a Claude transcript; prompts and usage from its session files |
 | `hermes.py` | Hermes Agent sessions: a copy of a session's `state.db` rows without the conversation's words, written as a Claude transcript; usage |
 | `pi.py` | Pi's session tree: the active branch, written as a Claude transcript; usage |
