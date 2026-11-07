@@ -15,24 +15,14 @@ import sys
 
 import pytest
 
+from tests.conftest import git_sh
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugin")
 
 
-def _git_sh():
-    """Git Bash's `sh`: on PATH, or beside the `git` that is. Git for Windows puts only
-    `<Git>\\cmd` on the PATH of PowerShell and cmd.exe; its `<Git>\\bin\\sh.exe` adds the
-    `usr\\bin` tools the launchers use (`tr`, ...), as the `bash.exe` Claude Code runs hooks with."""
-    found = shutil.which("sh")
-    git = shutil.which("git")
-    if found or not git:
-        return found
-    sh = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(git))), "bin", "sh.exe")
-    return sh if os.path.isfile(sh) else None
-
-
 # Windows runs no shebang: the launchers go through Git Bash's `sh`.
-SH = [_git_sh() or "sh"] if os.name == "nt" else []
+SH = [git_sh() or "sh"] if os.name == "nt" else []
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"}
 
 
@@ -161,6 +151,44 @@ def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
                               "cwd": str(work), "source": "startup"}, _hook_env(tmp_path))
     assert code == 0 and json.loads(out) == {}
     assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
+
+
+def _script(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+    os.chmod(path, 0o755)
+
+
+def test_on_windows_the_launcher_prefers_python_outside_windowsapps(tmp_path):
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    pybin = tmp_path / "Python" / "bin"
+    for name in ("python3", "python3.exe"):
+        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
+    _script(pybin / "python3", f'exec "{sys.executable}" "$@"')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, OS="Windows_NT",
+                                       PATH=f"{winapps}:{pybin}:{os.environ.get('PATH', '')}"))
+    assert code == 0 and json.loads(out) == {}
+    assert os.path.isdir(tmp_path / "home" / "repos")
+    assert not (tmp_path / "alias_called").exists()
+
+
+def test_on_windows_the_launcher_probes_and_skips_a_broken_alias_when_it_is_the_only_python(tmp_path):
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    for name in ("python3", "python3.exe"):
+        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, OS="Windows_NT", PATH=str(winapps)))
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "alias_called").exists()
 
 
 def test_the_launcher_fails_open_without_python(tmp_path):

@@ -32,6 +32,11 @@ so no extra API key is needed and the call is billed where the session is:
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * Grok: `grok -p <prompt> --output-format json` in a throwaway directory, on the person's default
+    model, with only the read-only `read_file` tool allowed (`--tools read_file`), grok's MCP
+    dispatchers removed (`--disallowed-tools`) and the shell, edit, write, web and subagent
+    tools denied (`--deny`); no approval flag is passed. It leaves a session under
+    `~/.grok/sessions/`, which no hook tracks (they do nothing under `TE_SIDECALL`).
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
@@ -396,6 +401,42 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     return text or "", None
 
 
+# A Grok side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. An allowlist fails closed where a deny list does not: `grok -p` runs in `auto`
+# permission mode, and a deny list naming a tool by a wrong name removes nothing (grok 1.0.70 ran
+# a shell command with `--disallowed-tools run_terminal_cmd`; its shell is `run_terminal_command`)
+# -- nor does `--tools ""`, which grok reads as no filter at all. `--tools` cannot be empty, so it
+# keeps the one read-only tool; `use_tool` / `search_tool`, the MCP dispatchers grok adds to any
+# allowlist, are removed, and deny rules back the shell and writers in case a tool is renamed.
+# Verified on 1.0.70: the session's tool_definitions.json lists only `read_file`, and a prompt
+# asking for a shell command and a file write leaves the directory untouched.
+GROK_TOOLS = "read_file"
+GROK_REMOVED = "use_tool,search_tool"
+GROK_DENY_RULES = ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task")
+
+
+def grok_call(prompt, model="", cli="grok", timeout=TIMEOUT_S):
+    """A side call through `grok -p --output-format json` in an empty throwaway directory, on the
+    person's default model unless `model` names one. Grok reports input without the cached
+    reads, as the ledger does."""
+    cmd = [*program(cli), "-p", prompt, "--output-format", "json", "--no-auto-update",
+           "--tools", GROK_TOOLS, "--disallowed-tools", GROK_REMOVED,
+           *(a for rule in GROK_DENY_RULES for a in ("--deny", rule))]
+    if model:
+        cmd += ["--model", model]
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    text, usage = trace.grok_json_reply(out.stdout)
+    if not text:
+        _no_reply("grok", out)
+    eff = None
+    if usage:
+        usage["model"] = usage.get("model") or model or "grok"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 HERMES_SOURCE = "tool"
 # Hermes refuses a `--source` it does not know (`invalid_params`, 0.22.5, though its docs say any
 # value is stored), and `tool` is the one meant for this: hidden from its session pickers, and not
@@ -670,6 +711,8 @@ def runner_for(host_name, config):
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "cursor":
         return lambda prompt, _m="agent": cursor_call(prompt, model=model)
+    if host_name == "grok":
+        return lambda prompt, _m="agent": grok_call(prompt, model=model)
     if host_name == "hermes":
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)

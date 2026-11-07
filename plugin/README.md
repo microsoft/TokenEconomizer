@@ -1,12 +1,12 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
+(experimental), Grok Build (experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [opencode](#opencode) ·
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
   [Hermes Agent](#hermes-agent)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
@@ -323,12 +323,58 @@ events used by the adapter. The transcript format is private and its hooks do no
 token usage. TokenEconomizer records only the relevant hook events under its private state folder,
 uses them to learn repository facts and watch for loops, and reports Cursor session cost as
 unavailable. The loop guard's model calls use `cursor-agent` in read-only Ask mode; their token
-usage is also unavailable in the current CLI output. Cursor support is macOS and Linux only.
+usage is also unavailable in the current CLI output. Headless runs (`cursor-agent -p`, verified on
+2026.11.05) deliver no prompt or stop hook, so the adapter counts prompts from Cursor's own
+transcript and closes the turn when the run ends as completed. Cursor support is macOS and Linux only.
 On Windows, Cursor runs these hook commands through PowerShell, which cannot run the POSIX
 `te-hook` launcher.
 
 Tool pruning follows the global setting and is not applied to Cursor. Cursor commands run from a terminal:
 `~/.tokeneconomizer/bin/te --host cursor <command>`.
+
+## Grok Build
+
+Experimental; verified on grok 1.0.70. Grok runs Claude Code plugins and their hooks, so the plugin
+installs as the Claude Code one does:
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+grok plugin marketplace add "$PWD/TokenEconomizer"
+grok plugin install tokeneconomizer --trust
+```
+
+Without `--trust`, grok shows the source, warns that installing activates the plugin's hooks, and
+stops. Grok leaves plugins off until they are enabled: check `grok plugin list` (`grok plugin enable
+tokeneconomizer` if it is off), then start a new session. If TokenEconomizer is already installed for Claude Code, grok runs it from `~/.claude/plugins`
+too, and nothing more is needed. Either way the hook file passes no `--host`: the plugin tells grok
+from Claude Code by the fields only grok sends (`hookEventName`) and by its session folder
+(`~/.grok/sessions`), and a hook run from a Claude Code session is still Claude Code.
+
+**Check it.** From a terminal in the repository: `~/.tokeneconomizer/bin/te --host grok status`.
+Grok's tool shell and plugin slash commands were not checked, so run commands from a terminal.
+
+What grok does differently, and so what to expect:
+
+* **Micro-skills arrive with the first tool call.** Grok reads only a message for you from a
+  `SessionStart` hook, and discards a `UserPromptSubmit` hook's output; the one channel to the
+  model is a `PostToolUse` hook's `additionalContext`. The plugin saves the session's start context
+  (under `~/.tokeneconomizer/grok-start/`) and adds it to the first tool result, once. A session that
+  answers without a tool call never gets it. A resumed session is not given it again, as grok keeps
+  that note in the conversation.
+* **No tool pruning.** Micro-skills and the loop guard only.
+* **Stopping a stuck turn** is Ctrl+C; Esc does not cancel a turn in grok. Grok shows a hook's
+  message to you only from `SessionStart`, so the still-stuck line is also passed on by the model.
+* **Interrupted turns** (`StopCancelled`) are closed when your next prompt arrives, as on Claude
+  Code. At the end of a session grok fires one more, observe-only `Stop` (reason `shutdown`); the
+  plugin ignores it.
+* **Cost.** The session's tokens come from the `usage.json` grok keeps with the session; xAI models
+  are not in the price table, so they are priced on the labelled fallback curve.
+* **Model calls.** The proposer and the judge run through `grok -p --output-format json` in a
+  throwaway folder on your default model (`paid_model` names another), with the shell, edit, write,
+  web and subagent tools removed. Each such call leaves a session under `~/.grok/sessions/` that
+  the plugin does not track.
+
+**Uninstall.** `grok plugin uninstall tokeneconomizer`. Optional: `rm -rf ~/.tokeneconomizer`.
 
 ## opencode
 
@@ -578,6 +624,7 @@ How to run them:
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
@@ -782,6 +829,24 @@ a turn that shows signs of looping, and, when the judge finds the turn stuck, th
 writes. Tool pruning never calls a model. Turning micro-skills on adds its fact proposer, once
 every `microskills_propose_every` sessions (`microskills=envfacts` keeps only the facts found
 without a model call); `loopguard=off` turns the judge off along with the guard.
+
+What each call is sent, when it runs, and roughly how long its prompt is (about four characters to
+a token). No call is sent file contents or your prompts:
+
+| Call | When | What it reads | Prompt |
+|---|---|---|---|
+| Judge | in a turn that shows signs of looping, one call at a time, at most every 5 tool calls; after each "not stuck" answer the gap grows by 5 calls, up to 20 | the turn's last 24 actions (tool names, commands cut to 90 characters, edited file names, error signatures), its counts of edits, failing outputs and test runs, and how long this repository's turns usually are | at most about 1,500 tokens; the reply is a one-line verdict |
+| Redirect writer | right after the judge finds the turn stuck, at least `loopguard.judge_confidence` (0.7) sure | the judge's digest | at most about 1,500 tokens; the reply is 2 to 4 sentences |
+| Fact proposer | with `microskills=on` (or `distiller`), once every `microskills_propose_every` (3) sessions | digests of the last 8 sessions (for each: up to 12 command shapes, 6 checks and 6 failing commands with their error lines, all cut to 80 or 120 characters, and the edited files' names), and the facts already learned | a few thousand tokens, more when those sessions edited many files; the reply is a few facts and the patterns that test them |
+
+Each call is one request through the agent's CLI, which adds its own fixed instructions to the
+prompt; the plugin cannot leave those out, and the cost it records is the whole request's. The
+calls use the model `paid_model` names; when it is empty, `haiku` on Claude Code, and on the other
+agents the default listed under [Settings](#settings). `status` prints the repository's total as
+`plugin overhead`, with its share of all tokens. Per session, the repository's `ledger.jsonl`
+(under `~/.tokeneconomizer/repos/`) has the proposer's tokens in the session's record, under
+`overhead`, and a record of its own for each judge call (`"kind": "overhead"`, with the session's
+id).
 
 These calls run through **your own agent's CLI**: `claude -p`; `codex exec`; `copilot -p`, with
 every tool removed; and `pi -p`, with nothing loaded but the model. So they use whatever your

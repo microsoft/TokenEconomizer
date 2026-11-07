@@ -63,6 +63,8 @@ def completed_calls(line, pend):
         ev = json.loads(line)
     except Exception:
         return []
+    if not isinstance(ev, dict):
+        return []
     t = ev.get("type")
     out = []
     # ---- Codex exec --json schema ----

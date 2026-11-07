@@ -247,13 +247,27 @@ def test_a_resumed_copilot_session_gets_back_the_facts_it_started_with(env, repo
 
 
 # ---- the spiral guard --------------------------------------------------------------------
+def claude_failed(output, code=1):
+    """A failed Claude Code call as it arrives: a PostToolUseFailure `error` naming the exit
+    code, and no `tool_response`. Claude Code reports a success with no exit code, which the
+    plugin reads as 0 (#128), so a failing run is never a PostToolUse."""
+    return {"error": f"Exit code {code}\n{output}"}
+
+
+def _post(base, name, args, result, rkey="tool_response"):
+    if isinstance(result, dict) and set(result) == {"error"}:
+        return dict(base, hook_event_name="PostToolUseFailure", tool_name=name, tool_input=args,
+                    error=result["error"])
+    return dict(base, hook_event_name="PostToolUse", tool_name=name, tool_input=args,
+                **{rkey: result})
+
+
 def _turn(env, repo, sid, key, calls, host=None):
     """One prompt-turn through UserPromptSubmit -> PostToolUse* -> Stop; outputs per call."""
     idk = "turn_id" if host == "codex" else "prompt_id"
     base = {"session_id": sid, "transcript_path": "", "cwd": repo, idk: key}
     call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="go"), host)
-    outs = [call(env, dict(base, hook_event_name="PostToolUse", tool_name=n, tool_input=i,
-                           tool_response=r), host) for n, i, r in calls]
+    outs = [call(env, _post(base, n, i, r), host) for n, i, r in calls]
     call(env, dict(base, hook_event_name="Stop", stop_hook_active=False), host)
     return outs
 
@@ -273,7 +287,7 @@ def stuck_calls(n, host=None):
             fail = "FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2"
             out.append(("exec_command", {"command": "pytest -q"}, {"output": fail, "exit_code": 1})
                        if host == "codex" else
-                       ("Bash", {"command": "pytest -q"}, {"stdout": fail, "stderr": ""}))
+                       ("Bash", {"command": "pytest -q"}, claude_failed(fail)))
     return out
 
 
@@ -309,8 +323,7 @@ def _guard_turn(env, repo, sid, key, calls, host):
         base[idk] = key
     rkey = "tool_result" if host == "copilot" else "tool_response"
     call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="go"), host)
-    outs = [call(env, dict(base, hook_event_name="PostToolUse", tool_name=n, tool_input=i,
-                           **{rkey: r}), host) for n, i, r in calls]
+    outs = [call(env, _post(base, n, i, r, rkey), host) for n, i, r in calls]
     call(env, dict(base, hook_event_name="Stop", stop_hook_active=False), host)
     return outs
 
@@ -474,7 +487,7 @@ def _warm(env, repo):
 
 
 def test_only_turns_that_end_green_feed_the_envelope(env, repo):
-    fail = {"stdout": "FAILED tests/test_a.py::t - AssertionError", "stderr": ""}
+    fail = claude_failed("FAILED tests/test_a.py::t - AssertionError")
     _turn(env, repo, "s", "red", [("Edit", {"file_path": "/r/a.py"}, "ok"),
                                   ("Bash", {"command": "pytest -q"}, fail)])
     _turn(env, repo, "s", "green", [("Edit", {"file_path": "/r/a.py"}, "ok"),

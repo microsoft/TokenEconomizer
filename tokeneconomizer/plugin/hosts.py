@@ -13,7 +13,9 @@ an adapter rather than a branch in a mechanism:
     false}` from PostToolUse would halt its loop (verified on 2.1.286), but Codex's replaces the
     tool result and the model carries on, and Copilot's runs every call; the person decides.
   * Tool results. Claude Code's Bash `tool_response` is `{stdout, stderr, interrupted, ...}` with
-    no exit code (verified); Codex's command items carry one, and it is used when present.
+    no exit code (verified), and a non-zero exit comes as `PostToolUseFailure` instead, so a
+    success is read as 0 where that status covers the command (`claude_success_code`); Codex's
+    command items carry one, and it is used when present.
   * The session log. Claude Code's transcript is read as-is; Codex's rollout is rewritten into
     exec-stream lines first (`trace.codex_rollout_to_exec`).
 
@@ -72,6 +74,8 @@ def response_text(resp, cap=RESULT_CAP):
         return "\n".join(x.get("text", "") if isinstance(x, dict) else str(x)
                          for x in resp)[:cap]
     if isinstance(resp, dict):
+        if "structuredPatch" in resp:
+            return ""
         parts = []
         for k in _RESPONSE_KEYS:
             v = resp.get(k)
@@ -79,9 +83,7 @@ def response_text(resp, cap=RESULT_CAP):
                 parts.append(v)
             elif isinstance(v, list):
                 parts.append("\n".join(x.get("text", "") for x in v if isinstance(x, dict)))
-        if parts:
-            return "\n".join(parts)[:cap]
-        return json.dumps(resp, sort_keys=True)[:cap]
+        return "\n".join(parts)[:cap]
     return str(resp)[:cap]
 
 
@@ -152,6 +154,10 @@ class Host:
 
     def stopped_normally(self, p):
         return True
+
+    def completed_at_end(self, p):
+        """Whether a turn still open at SessionEnd finished normally (its Stop never came)."""
+        return False
 
     # Whether the loop guard's still-stuck notice must also go through the model, because the
     # agent does not put hook messages where the person looks.
@@ -258,6 +264,21 @@ def _exit_code(resp):
     return None
 
 
+def claude_success_code(name, args, resp=None):
+    """The exit status of a Claude Code shell call that came back as a success. Claude Code
+    reports a non-zero exit only as a failure (`PostToolUseFailure`, and `is_error` in its log)
+    and gives a success no status, so the loop guard read the output's markers instead: a
+    passing Playwright run whose exit prints libuv's "Assertion failed", or source read with
+    `cat` that mentions an `Error`, counted as failing (#128). 0 when that status covers the work
+    the command ran (`loopguard.exit_status_covers`); else None, and the markers decide."""
+    from ..loopguard.state import canon_tool
+    from ..loopguard.turn import exit_status_covers
+    if canon_tool(name) != "bash" or (isinstance(resp, dict) and resp.get("interrupted")):
+        return None
+    cmd = args.get("command") if isinstance(args, dict) else None
+    return 0 if exit_status_covers(cmd) else None
+
+
 class ClaudeCode(Host):
     name = "claude"
     interrupt = "Press Esc to interrupt it."       # 2.1.306: the running command is killed too
@@ -268,6 +289,12 @@ class ClaudeCode(Host):
 
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        if code is None and _failure_response(p) is None:
+            code = claude_success_code(name, args, p.get("tool_response"))
+        return name, args, text, code
 
     def env_session_id(self, env):
         # Claude Code exports its session id to the Bash tool's shell (seen on 2.1.304).
@@ -559,6 +586,11 @@ class Cursor(Host):
         p["hook_event_name"] = self._EVENTS.get(p.get("hook_event_name"), "")
         if p.get("session_id"):
             from .paths import state_root
+            # Cursor's own transcript (null until the second tool call of a run); the spool
+            # below stays the adapter's transcript, and carries this path for the prompt count.
+            agent = p.get("transcript_path")
+            if isinstance(agent, str) and agent.endswith(".jsonl"):
+                p["agent_transcript"] = agent
             p["transcript_path"] = os.path.join(
                 state_root(env), "cursor-sessions", os.path.basename(p["session_id"]) + ".jsonl")
         if p["hook_event_name"] == "SessionStart":
@@ -590,16 +622,18 @@ class Cursor(Host):
 
     def record_event(self, payload):
         event = payload.get("hook_event_name")
-        if event not in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
+        if event not in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
             return
         path = self.transcript(payload)
-        if not path:
+        # SessionEnd only adds the transcript path to a spool that exists: a session with no
+        # recorded events has nothing to fold, and the controller treats it as such.
+        if not path or (event == "SessionEnd" and not os.path.exists(path)):
             return
         # The adapter reads these fields only. Cursor also sends user_email and the raw
         # tool_output; neither is stored. Tool text is capped where the guard folds it.
         row = {}
         for key in ("hook_event_name", "prompt", "cwd", "tool_use_id", "generation_id",
-                    "tool_name", "tool_input", "error"):
+                    "tool_name", "tool_input", "error", "agent_transcript"):
             value = payload.get(key)
             if value not in (None, ""):
                 row[key] = value
@@ -654,6 +688,12 @@ class Cursor(Host):
 
     def stopped_normally(self, p):
         return (p or {}).get("status") == "completed"
+
+    def completed_at_end(self, p):
+        # Headless `-p` runs deliver no `stop`, so a run that ends "completed" closes its open
+        # turn here. (`final_status` and `reason` verified on cursor-agent 2026.11.05.)
+        p = p or {}
+        return (p.get("final_status") or p.get("reason")) == "completed"
 
 
 class Hermes(Host):
@@ -731,6 +771,157 @@ class Hermes(Host):
 
     def session_usage(self, transcript_path):
         return trace.hermes_session_usage(transcript_path)
+
+
+class Grok(Host):
+    """The Grok Build CLI (`grok`, xAI), verified on 1.0.70.
+
+    grok runs Claude Code plugins, hooks included, so the Claude hook file reaches it with no
+    `--host`; `detect` recognises it by what only grok sends. Every payload carries both
+    spellings of each field -- grok's camelCase (`hookEventName` = `post_tool_use`, `sessionId`,
+    `toolName`, `toolResult`, `promptId`) and Claude's aliases -- and `prepare` settles on the
+    aliases, so the controller sees Claude's shape. What differs:
+
+      * The model hears only a `PostToolUse` / `PostToolUseFailure` hook's
+        `hookSpecificOutput.additionalContext`. `SessionStart` reads only a top-level
+        `systemMessage`, which the person sees and the model does not, and an allowing
+        `UserPromptSubmit` hook's output is discarded. So the start context is set aside at
+        SessionStart and added to the session's first tool result (`render`); its reminder is a
+        message in the saved conversation, which a resumed session loads again
+        (`keeps_start_context`).
+      * `promptId` is on `UserPromptSubmit` and `Stop` but not on tool events, so the turn stays
+        open from the prompt to the Stop whatever the tool events say.
+      * At the end of a session grok fires a second, observe-only `Stop` (reason `shutdown`, no
+        `promptId`); only a `Stop` with reason `end_turn` is a turn's end. `StopCancelled`
+        (interrupt, declined permission, turn limit) and `StopFailure` (an API error) stand for
+        a turn that did not stop normally. The Claude hook file registers neither, so a turn
+        like that is closed by the next prompt, as on Claude Code.
+      * A shell result's `output` is a list of byte values; `trace.grok_result` reads the text
+        grok showed the model (`output_for_prompt`) and the `exit_code`.
+      * A hook's `systemMessage` is documented as shown only for `SessionStart`, so a notice
+        that must reach the person on a tool event also goes through the model.
+    """
+    name = "grok"
+    prompt_context = False             # an allowing UserPromptSubmit hook's output is discarded
+    relays_notices = True
+    interrupt = "Press Ctrl+C to cancel the turn (Esc does not cancel it)."
+    end_run = "Press Ctrl+C to end the run."
+    CONTEXT_CAP = 10000                # grok clips a hook's additionalContext here
+
+    _EVENTS = {"session_start": "SessionStart", "user_prompt_submit": "UserPromptSubmit",
+               "post_tool_use": "PostToolUse", "post_tool_use_failure": "PostToolUseFailure",
+               "stop": "Stop", "stop_cancelled": "StopCancelled", "stop_failure": "StopFailure",
+               "session_end": "SessionEnd", **{e: e for e in (
+                   "SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure",
+                   "Stop", "StopCancelled", "StopFailure", "SessionEnd")}}
+
+    def env_session_id(self, env):
+        return str(env.get("TE_SESSION_ID") or env.get("GROK_SESSION_ID") or "")
+
+    def turn_key(self, p):
+        return str(p.get("promptId") or p.get("prompt_id") or "")
+
+    def is_subagent(self, p):
+        return bool(p.get("subagentType") or p.get("agent_id"))
+
+    def prepare(self, payload, env):
+        p = dict(payload or {})
+        event = self._EVENTS.get(str(p.get("hookEventName") or p.get("hook_event_name") or ""), "")
+        for alias, own in (("session_id", "sessionId"), ("transcript_path", "transcriptPath"),
+                           ("tool_name", "toolName"), ("tool_input", "toolInput"),
+                           ("tool_response", "toolResult"), ("prompt_id", "promptId")):
+            if p.get(alias) in (None, ""):
+                p[alias] = p.get(own)
+        if not p.get("session_id"):
+            p["session_id"] = env.get("GROK_SESSION_ID") or ""
+        if event == "Stop":
+            if p.get("reason") != "end_turn" or not p.get("prompt_id"):
+                event = ""             # the observe-only Stop at session end
+        elif event in ("StopCancelled", "StopFailure"):
+            p["reason"] = "api_error" if event == "StopFailure" else str(
+                p.get("reason") or "cancelled")
+            event = "Stop"
+        p["hook_event_name"] = event
+        return p
+
+    def stopped_normally(self, p):
+        return (p or {}).get("reason") == "end_turn"
+
+    def tool_call(self, p):
+        name, args = trace.grok_tool(str(p.get("tool_name") or ""), p.get("tool_input"))
+        resp = _failure_response(p) or p.get("tool_response")
+        parsed = trace.grok_result(resp)
+        if parsed is None:             # a plain-text result, or a failure's error text
+            return name, args, response_text(resp), _exit_code(resp)
+        return name, args, parsed[0][:RESULT_CAP], parsed[1]
+
+    # -- the start context, set aside at SessionStart and added to the first tool result ------
+    def _spool(self, payload, env):
+        from .paths import state_root
+        return os.path.join(state_root(env), "grok-start",
+                            re.sub(r"[^\w.-]", "_", self.session_id(payload)) + ".txt")
+
+    def render(self, payload, out, ctx):
+        """`out`, the controller's answer, as grok reads it: SessionStart's context (grok ignores
+        it there) is saved, and the session's first PostToolUse / PostToolUseFailure delivers it
+        once, ahead of that call's own context, within grok's cap. A failure to save it leaves
+        the session without it, as any hook failure does."""
+        event = payload.get("hook_event_name")
+        if not self.session_id(payload) or event not in (
+                "SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
+            return out
+        path = self._spool(payload, ctx.env)
+        if event == "SessionStart":
+            hso = out.get("hookSpecificOutput")
+            text = hso.pop("additionalContext", "") if isinstance(hso, dict) else ""
+            if isinstance(hso, dict) and not set(hso) - {"hookEventName"}:
+                out.pop("hookSpecificOutput")
+            try:
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                if text:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text)
+                    os.chmod(path, 0o600)
+                else:
+                    os.remove(path)
+            except OSError:
+                pass
+            return out
+        if event == "SessionEnd" or self.is_subagent(payload):
+            if event == "SessionEnd":
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return out
+        claimed = f"{path}.{os.getpid()}"      # a rename is atomic: parallel hooks deliver once
+        try:
+            os.replace(path, claimed)
+            with open(claimed, encoding="utf-8") as fh:
+                start = fh.read()
+            os.remove(claimed)
+        except OSError:
+            return out
+        hso = out.setdefault("hookSpecificOutput", {})
+        rest = hso.get("additionalContext") or ""
+        if start.strip():
+            room = max(0, self.CONTEXT_CAP - len(rest) - (2 if rest else 0))
+            hso.update(hookEventName=event,
+                       additionalContext=start[:room] + ("\n\n" + rest if rest else ""))
+        elif not hso:
+            out.pop("hookSpecificOutput")
+        return out
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "grok_trace.jsonl")
+        n = trace.grok_session_to_claude(transcript_path, out) if transcript_path else None
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.grok_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.grok_session_usage(transcript_path)
 
 
 def copilot_home(env=None):
@@ -825,7 +1016,7 @@ def _ancestor_args(limit=4):
 
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor, "hermes": Hermes}
+         "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok}
 
 
 def default_host(env=None, recent=None):
@@ -842,6 +1033,8 @@ def default_host(env=None, recent=None):
         return "copilot"
     if env.get("CURSOR_AGENT") or env.get("CURSOR_PROJECT_DIR"):
         return "cursor"
+    if env.get("GROK_SESSION_ID"):
+        return "grok"
     return recent if recent in HOSTS else "claude"
 
 
@@ -849,10 +1042,17 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
-    if "turn_id" in (payload or {}):
-        return Codex()
     tp = str((payload or {}).get("transcript_path") or "")
     sp = tp.replace("\\", "/")              # a Windows path, with either separator
+    # grok runs Claude Code's plugin hooks, with no `--host`, so it is told from Claude Code
+    # first: it alone sends `hookEventName` and keeps its sessions under `~/.grok/sessions`. Its
+    # environment names it too, but hooks inherit the parent's environment (a Claude Code
+    # started from a grok shell), so the environment decides only where no transcript says.
+    if ("hookEventName" in (payload or {}) or "/.grok/sessions/" in sp
+            or (not tp and any((env or {}).get(k) for k in ("GROK_HOOK_EVENT", "GROK_SESSION_ID")))):
+        return Grok()
+    if "turn_id" in (payload or {}):
+        return Codex()
     if sp.rsplit("/", 1)[-1].startswith("rollout-") or "/.codex/" in sp:
         return Codex()
     if "/session-state/" in sp and tp.endswith("events.jsonl"):

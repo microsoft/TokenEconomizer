@@ -3,8 +3,8 @@
 Two Claude Code sessions in one repository run their hooks concurrently, and a session's
 background fold can overlap the next session's start. Every read-modify-write of shared state
 therefore happens under an exclusive lock on a sibling lock file, and every write lands through a
-temporary file and `os.replace`, so a reader never sees half a document. Per-session documents are
-written by one session only and need no lock.
+temporary file and `os.replace`, so a reader never sees half a document. A session document is
+written by that session's own hooks, which `hookqueue` runs one at a time, so it needs no lock here.
 
 Locking uses `fcntl.flock`, and `msvcrt.locking` on Windows. Where neither is available the lock
 degrades to a no-op rather than failing the hook: a lost update is recoverable, a crashed hook is
@@ -25,6 +25,10 @@ try:
 except ImportError:          # pragma: no cover - POSIX
     msvcrt = None
 
+_WINDOWS = os.name == "nt"
+# Seconds slept between tries on Windows: about 0.4 s in all before giving up.
+_REPLACE_BACKOFF = (0.01, 0.02, 0.05, 0.1, 0.2)
+
 
 def _try_lock(fh):
     """Take an exclusive lock on `fh` without blocking; raise OSError when it is held."""
@@ -43,6 +47,23 @@ def _unlock(fh):
         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def _retrying(call):
+    """`call()`, retried briefly on Windows, where a file another process holds or is replacing
+    raises PermissionError (a hook reading it, an indexer, antivirus). POSIX renames over an
+    open file, so there it is one call."""
+    if _WINDOWS:
+        for delay in _REPLACE_BACKOFF:
+            try:
+                return call()
+            except PermissionError:
+                time.sleep(delay)
+    return call()
+
+
+def _replace(src, dst):
+    return _retrying(lambda: os.replace(src, dst))
+
+
 class Store:
     """One directory of JSON documents and append-only JSONL logs."""
 
@@ -58,10 +79,15 @@ class Store:
         return d
 
     def read(self, name, default=None):
-        try:
+        """The document, or `default` when it is missing or is not JSON. Any other failure is
+        raised: taken for a missing document, a file another process has open would read as an
+        empty state, and the caller's next write would replace the real one with it."""
+        def load():
             with open(self.path(name), encoding="utf-8") as fh:
                 return json.load(fh)
-        except (OSError, ValueError):
+        try:
+            return _retrying(load)
+        except (FileNotFoundError, ValueError):
             return default
 
     def write(self, name, obj):
@@ -71,7 +97,7 @@ class Store:
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(obj, fh, indent=2, sort_keys=True)
-            os.replace(tmp, target)
+            _replace(tmp, target)
         finally:
             try:
                 os.unlink(tmp)

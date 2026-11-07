@@ -324,7 +324,9 @@ def test_claude_tool_results_and_outputs():
     name, args, text, code = h.tool_call({
         "tool_name": "Bash", "tool_input": {"command": "pytest"},
         "tool_response": {"stdout": "1 failed", "stderr": "Traceback", "interrupted": False}})
-    assert (name, args["command"], code) == ("Bash", "pytest", None)   # no exit code (verified)
+    # A success carries no exit code (verified); a non-zero exit comes as PostToolUseFailure, so
+    # a success exited 0 -- where that status covers the command (#128).
+    assert (name, args["command"], code) == ("Bash", "pytest", 0)
     assert "1 failed" in text and "Traceback" in text
     assert h.context("PostToolUse", "x") == {
         "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x"}}

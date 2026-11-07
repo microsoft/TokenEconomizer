@@ -22,8 +22,9 @@ import shlex
 import time
 
 from .rules import DEFAULT_THRESHOLDS, assess_abort, is_stuck, nudge_text
-from .shell_edits import fold_shell_edits, shell_edit_targets
-from .state import ERR_RE, SpiralState, canon_tool
+from .shell_edits import (_split_heredocs, fold_shell_edits, shell_edit_targets,
+                          shell_revert_targets)
+from .state import ERR_RE, TEST_RUN_RE, SpiralState, canon_tool
 
 _SLOTS = SpiralState.__slots__
 
@@ -47,8 +48,8 @@ VERIFY_RE = re.compile(
 # unittest; echo "exit=$?"` and `npm test || true` with 0, and `pytest -q; git diff` with
 # `git`'s. For such a test run the runner's own summary line decides (`runner_verdict`). Without
 # one, a run whose status was replaced (a pipe, `||`, a report of the status) is read by its
-# output's markers, as for an agent that reports no status (Claude Code); a run followed by other
-# commands keeps the status the agent reported, since their output is in the result too.
+# output's markers, as a call whose status is unknown is; a run followed by other commands keeps
+# the status the agent reported, since their output is in the result too.
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
@@ -60,20 +61,18 @@ _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nice|nohup|command|env|"
                         r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
-                        r"(?:\s+-\S+)*)\s+)*")
+                        r"(?:\s+-\S+)*|"
+                        # `dotenv -e .env.local -- npx vitest run`: dotenv-cli's options, then `--`
+                        r"dotenv(?:\s+(?!--(?:\s|$))\S+)*\s+--)\s+)*")
 # What only reports on the run before it: `echo "exit=$?"`, `true`, `exit 0`.
 _REPORT_RE = re.compile(r"^\s*(?:echo|printf|true|:|exit)(?:\s|$)")
 _RANK = {"own": 0, "hidden": 1, "mixed": 2}
 
 
-def status_of_tests(cmd):
-    """What `cmd`'s exit status says of the test runs in it: None when it runs none; "own" when
-    it is theirs (a run is last, or followed only by `&&`, or piped under `pipefail`); "hidden"
-    when a pipe, `||` or a mere report of the status replaced it; "mixed" when other commands
-    ran after, their output in the result too. A command recorded as `bash -lc '<script>'`
-    (Codex) is judged by its script."""
-    if not isinstance(cmd, str):
-        return None
+def _pieces(cmd):
+    """`cmd` as its commands and the separators between them (`[cmd, sep, cmd, ...]`), with
+    quoted text masked, and whether it sets `pipefail`. A command recorded as `bash -lc
+    '<script>'` (Codex) is split by its script."""
     try:
         parts = shlex.split(cmd)
     except ValueError:
@@ -84,7 +83,65 @@ def status_of_tests(cmd):
     pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
     while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
         del pieces[-2:]
-    pipefail = "pipefail" in cmd
+    return pieces, "pipefail" in cmd
+
+
+# Commands whose own failure does not matter to the loop guard: they read (their output is
+# content, not an outcome), move about, set up or report. A later command may take over the exit
+# status from one of them without hiding a failure of the work.
+_QUIET_HEADS = frozenset({
+    "cat", "head", "tail", "less", "more", "wc", "sort", "uniq", "cut", "tr", "nl", "column",
+    "ls", "tree", "pwd", "stat", "file", "du", "which", "type", "whereis", "grep", "egrep",
+    "fgrep", "rg", "ag", "jq", "find", "echo", "printf", "true", ":", "cd", "pushd", "popd",
+    "export", "source", ".", "set", "sed", "git"})
+_GIT_READS = frozenset({"show", "diff", "log", "status", "grep", "ls-files", "blame",
+                        "rev-parse", "branch"})
+
+
+def _quiet(stage):
+    words = _PREFIX_RE.sub("", stage.strip() + " ").split()     # `SP=/tmp/x;` alone sets up
+    if not words:
+        return True
+    head = os.path.basename(words[0])
+    if head not in _QUIET_HEADS:
+        return False
+    if head == "git":
+        return len(words) > 1 and words[1] in _GIT_READS
+    if head == "sed":                                  # `sed -i` edits
+        return not any(re.match(r"^(?:-[a-zA-Z]*i|--in-place)", w) for w in words[1:])
+    if head == "find":
+        return not {"-delete", "-exec", "-execdir", "-ok"} & set(words[1:])
+    return True
+
+
+def exit_status_covers(cmd):
+    """Does `cmd`'s exit status say whether the work it ran failed? Yes for one command, an `&&`
+    chain or a pipe under `pipefail`, and when every command whose status a later one replaces
+    (through `|`, `||`, `;` or a new line) only reads, moves about, sets up or reports
+    (`grep -rn Error src | head`, `cd web; npx vitest run`). Not when one that does work could
+    have failed unseen: `python repro.py 2>&1 | tail -20` exits with `tail`'s status. A heredoc's
+    lines are the input of the command that reads them, not commands of their own."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        return False
+    pieces, pipefail = _pieces(_split_heredocs(cmd)[0])
+    for i in range(0, len(pieces) - 1, 2):              # every command but the last
+        sep = pieces[i + 1]
+        if sep == "&&" or (pipefail and sep in ("|", "|&")):
+            continue
+        if not _quiet(pieces[i]):
+            return False
+    return True
+
+
+def status_of_tests(cmd):
+    """What `cmd`'s exit status says of the test runs in it: None when it runs none; "own" when
+    it is theirs (a run is last, or followed only by `&&`, or piped under `pipefail`); "hidden"
+    when a pipe, `||` or a mere report of the status replaced it; "mixed" when other commands
+    ran after, their output in the result too. A command recorded as `bash -lc '<script>'`
+    (Codex) is judged by its script."""
+    if not isinstance(cmd, str):
+        return None
+    pieces, pipefail = _pieces(cmd)
     found = None
     for i in range(0, len(pieces), 2):
         stage = pieces[i]
@@ -115,6 +172,7 @@ _RUN_FAILED_RE = re.compile("|".join((
     r"^Tests:.*\b[1-9]\d* failed\b",                               # jest
     r"^\s*Tests\s+[1-9]\d* failed\b",                               # vitest
     r"^\s*[1-9]\d* failing\b",                                      # mocha
+    r"^\s*[1-9]\d* failed\s*$",                                      # Playwright
     r"^(?:--- FAIL: |FAIL\t|FAIL$)",                                # go
     r"^test result: FAILED",                                        # cargo
     r"\b\d+ examples?, [1-9]\d* failures?\b",                       # rspec
@@ -128,6 +186,7 @@ _RUN_PASSED_RE = re.compile("|".join((
     r"^Tests:\s+\d+ passed",
     r"^\s*Tests\s+\d+ passed",
     r"^\s*\d+ passing\b",
+    r"^\s*\d+ passed \(\d+(?:\.\d+)?(?:ms|s|m|h)\)",              # Playwright
     r"^ok\s+\S+\s+(?:\d+(?:\.\d+)?s|\(cached\))",
     r"^test result: ok\.",
     r"\b\d+ examples?, 0 failures\b",
@@ -191,6 +250,7 @@ class TurnGuard:
         self.verifications = int(d.get("verifications", 0))
         self.judge_pending = d.get("judge_pending") or None   # {"id", "since", "segment"}
         self.nudge_ready = d.get("nudge_ready") or None       # a redirect the judge wrote
+        self.held = d.get("held") or None     # a decision no hook could say yet: [action, reason]
 
     def to_dict(self):
         return {"turn_key": self.turn_key, "st": state_to_dict(self.st),
@@ -203,7 +263,8 @@ class TurnGuard:
                 "writer_tokens": self.writer_tokens, "last_edit": self.last_edit,
                 "last_verify": self.last_verify, "last_verify_failed": self.last_verify_failed,
                 "edits": self.edits, "verifications": self.verifications,
-                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready}
+                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready,
+                "held": self.held}
 
     # ---- outcome tracking for the ended-green proxy ----------------------------------
     def _track(self, name, args, result, exit_code, shell_edits=()):
@@ -223,7 +284,7 @@ class TurnGuard:
             self.verifications += 1
             if exit_code is not None:
                 self.last_verify_failed = exit_code != 0
-            else:                                         # Claude Code reports no exit code
+            else:                         # no status, or one another command gave (a pipe)
                 self.last_verify_failed = bool(ERR_RE.search(result or ""))
 
     def resolved_proxy(self, stopped_normally=True):
@@ -312,6 +373,12 @@ class TurnGuard:
         thr = thr or DEFAULT_THRESHOLDS
         cmd = (args or {}).get("command") if canon_tool(name) == "bash" else None
         shell_edits = shell_edit_targets(cmd) if cmd is not None else []
+        if shell_edits:
+            # A file put back with `git checkout --` or `git restore` is an edit only when this
+            # turn edited it: putting back what a dev server keeps regenerating is not churn.
+            reverted = set(shell_revert_targets(cmd))
+            shell_edits = [b for b in shell_edits
+                           if b not in reverted or self.whole.edit_counts.get(b)]
         status = status_of_tests(cmd)
         if status in ("hidden", "mixed"):
             verdict = runner_verdict(result)
@@ -322,11 +389,17 @@ class TurnGuard:
         failed = None if exit_code is None else exit_code != 0
         self.st.update(name, args or {}, result or "", failed)
         self.whole.update(name, args or {}, result or "", failed)
+        if status is not None and not TEST_RUN_RE.search(cmd):
+            # `SpiralState` counts the Python runners its thresholds were tuned on; the turn's
+            # other test runs (`npx vitest`, `go test`) are verifications too, in what the
+            # redirect and the judge are told. No rule the guard decides by reads this count.
+            self.st.test_runs += 1
+            self.whole.test_runs += 1
         fold_shell_edits(self.st, shell_edits)
         fold_shell_edits(self.whole, shell_edits)
         self.cum_turns += 1
         self._track(name, args, result, exit_code, shell_edits)
-        if self.aborted:
+        if self.aborted or self.held:
             return None
 
         backstop = thr.get("backstop_turns")

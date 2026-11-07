@@ -57,7 +57,7 @@ import traceback
 
 from .. import loopguard, trace
 from . import fold
-from .hosts import _EXIT_RE, RESULT_CAP
+from .hosts import _EXIT_RE, RESULT_CAP, claude_success_code
 
 STATE = fold.HISTORY
 LOG = "history.log"
@@ -239,9 +239,10 @@ def replay_envelope(ctx, transcript_path):
 
     Each prompt-turn is folded call by call into a fresh `TurnGuard` with no envelope and no
     judge, so nothing can redirect or stop it, and the result text and exit code it gets are the
-    ones a live hook would have (a failed call's "Exit code N", else none). A turn feeds the
-    envelope, as a live one does, when it stopped normally: not interrupted by the person, and,
-    for the session's last turn, answered (a log cut off mid-turn did not stop normally).
+    ones a live hook would have (a failed call's "Exit code N", a successful shell call's 0 where
+    `claude_success_code` gives it, else none). A turn feeds the envelope, as a live one does,
+    when it stopped normally: not interrupted by the person, and, for the session's last turn,
+    answered (a log cut off mid-turn did not stop normally).
     Returns the number of turns recorded."""
     cfg = ctx.config
     if cfg.loopguard == "off":
@@ -256,8 +257,9 @@ def replay_envelope(ctx, transcript_path):
         guard = loopguard.TurnGuard()
         for name, args, result, ok, _cwd in trace.claude_calls(turn):
             result = (result or "")[:RESULT_CAP]
-            code = None
-            if not ok:
+            if ok:
+                code = claude_success_code(name, args)
+            else:
                 m = _EXIT_RE.search(result[:400])
                 code = int(m.group(1)) if m else None
             guard.fold(name, args if isinstance(args, dict) else {}, result, code,

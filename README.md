@@ -64,7 +64,7 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode**, **Cursor Agent** and **Hermes Agent**. Each italic
+with experimental support for **opencode**, **Cursor Agent**, **Grok Build** and **Hermes Agent**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -175,6 +175,23 @@ hook events locally and reports session cost as unavailable. Cursor support is m
 only: on Windows, Cursor runs hook commands through PowerShell, and this plugin's launcher is a
 POSIX shell script.
 
+**Grok Build** (experimental)
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+grok plugin marketplace add "$PWD/TokenEconomizer"
+grok plugin install tokeneconomizer --trust
+```
+
+Grok runs Claude Code plugins, so this is the Claude Code plugin: grok loads `plugin/hooks/hooks.json`
+and TokenEconomizer recognises the grok session in the hook payload. (If you already installed it
+for Claude Code, grok reads `~/.claude/plugins` and runs it in your sessions; this version reads
+those as grok sessions.) Micro-skills and the loop guard only; tool pruning is not available.
+Confirm `tokeneconomizer` is enabled in `grok plugin list`, start `grok`, and check with
+`~/.tokeneconomizer/bin/te --host grok status`.
+The learned facts arrive with the session's first tool call, not at its start
+([its limits](plugin/README.md#grok-build)).
+
 **opencode** (experimental)
 
 ```sh
@@ -226,8 +243,9 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
-| Cursor Agent (experimental) | 3.24.9, macOS and Linux (below) | not tested |
-| opencode (experimental) | 1.19.5, 2.2.0 and 2.2.5 | not tested |
+| Cursor Agent (experimental) | 3.24.9 and cursor-agent 2026.11.05, macOS and Linux (below) | not tested |
+| Grok Build (experimental) | 1.0.70 | not tested |
+| opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
@@ -237,11 +255,17 @@ have not been tested yet.
 - **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
   `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`, using your clone's
   full path; `git pull` in the clone updates it.
-- **opencode** support is experimental. One plugin file serves both generations (1.x reads its
-  `server` entry, 2.x its `setup`): verified live on 1.19.5 and 2.2.0, the 2.x entry also runs
-  against 2.2.5 in CI. It has not been tested in the 2.x terminal UI.
-- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin, but hook delivery
-  from a live Agent session has not yet been verified.
+- **opencode** support is experimental: it was tested on 1.19.5 and 2.2.0 only, and not in the
+  2.x terminal UI.
+- **Cursor Agent** support is experimental. Cursor 3.24.9 loaded the local plugin. On
+  `cursor-agent` 2026.11.05, `cursor-agent --trust -p` delivered `sessionStart`, `postToolUse`,
+  `afterShellExecution` and `sessionEnd`, but not `beforeSubmitPrompt` or `stop`; context returned
+  from `sessionStart` and `postToolUse` reached the model. Prompts are then counted from Cursor's
+  own transcript and a run that ends as completed closes its turn. Session usage stays unavailable,
+  and the interactive TUI has not been tested.
+- **Grok Build** support is experimental: it was verified on 1.0.70 only, against its documented
+  hook contract and live hook payloads. Learned facts reach the model with the session's first tool
+  call, and tool pruning is not available. See [its limits](plugin/README.md#grok-build).
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
   model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
   redirect reaching a real model are verified there; the still-stuck notice reaching a person is
@@ -261,6 +285,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Pi | `/te <command>` |
 | opencode | from a terminal: `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
+| Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
@@ -282,7 +307,9 @@ Inside an agent, a command costs one model turn; from a terminal it is free. The
 Tool pruning and the loop guard are on by default; with these defaults, the plugin calls a model
 only when a turn shows signs of looping: the judge, and the redirect it writes if it finds the
 turn stuck. Micro-skills is off by default, because its proposer adds model calls and how much it
-saves depends on the repository and the work you do there. Each mechanism has its own switch
+saves depends on the repository and the work you do there. What each of these calls reads, how
+often it runs and which model it uses are listed under
+[Model calls](plugin/README.md#model-calls-and-api-keys). Each mechanism has its own switch
 (`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
 are these settings:
 
@@ -346,6 +373,7 @@ what it can leave out differs:
 | Copilot CLI | whole MCP servers | `.github/copilot/settings.local.json` |
 | Pi | nothing (Pi loads only four tools) | — |
 | Cursor Agent | nothing yet | — |
+| Grok Build | nothing yet | — |
 | opencode | nothing yet | — |
 | Hermes Agent | nothing yet | — |
 

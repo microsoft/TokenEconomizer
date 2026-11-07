@@ -85,7 +85,8 @@ GENERIC = Vocabulary(
                           "gradlew", "dotnet", "mix", "swift", "rake"}),
     build_heads=frozenset({"make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier",
                            "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
-                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite"}),
+                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite",
+                           "pre-commit", "shellcheck"}),
     generic=True,
 )
 # `<tool> build`, `npm run lint`, ...: what a generic reading counts as building or checking.
@@ -117,6 +118,8 @@ _CONDA_RUN_RE = re.compile(r"^(?:conda|mamba)\s+run\s+(?:--no-capture-output\s+|
                            r"(?:-n|--name)\s+([\w.-]+)\s+")
 _TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
+# Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
+_TOOL_LAUNCH_RE = re.compile(r"^(uvx|uv\s+tool\s+run|pipx\s+run)\s+")
 _INTERP_VERSIONED_RE = re.compile(r"^(?:python|node)\d(?:\.\d+)?$")
 _ENV_ASSIGN_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)+")
 _ASSIGN_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -145,6 +148,10 @@ ERROR_CLASSES = (
                                r"Operation timed out|timed out after|ETIMEDOUT", re.I)),
 )
 NETWORK_ERRORS = frozenset({"connection_refused", "name_resolution", "unreachable"})
+# The command a "not found" line names: `bash: ruff: command not found`, `/bin/sh: 1: ruff: not
+# found`, `zsh: command not found: ruff`, `'ruff' is not recognized ...`.
+_NOT_FOUND_NAME_RE = re.compile(r"([^\s:'\"]+):\s+(?:command\s+)?not found\b(?!:)|"
+                                r"command not found:\s+(\S+)|'([^']+)' is not recognized", re.I)
 FORM_ERRORS = frozenset({"module_missing", "command_missing", "script_missing",
                          "usage_error", "permission_denied"})
 
@@ -212,7 +219,7 @@ def _tokens(seg):
 class Observation:
     """One classified command segment."""
     __slots__ = ("call", "intent", "form", "head", "prefix", "hosts", "probe", "outcome",
-                 "segment", "labels", "label_err", "loaded", "tests_ran", "env")
+                 "segment", "labels", "label_err", "loaded", "tests_ran", "env", "not_found")
 
     def __init__(self, call, intent, form, head, prefix, segment, hosts=(), probe=None):
         self.call, self.intent, self.form, self.head, self.prefix = call, intent, form, head, prefix
@@ -220,6 +227,9 @@ class Observation:
         self.labels, self.label_err, self.loaded = (), False, False
         self.tests_ran = False
         self.env = False          # typed with `VAR=value` before it, which its form leaves out
+        # The "command not found" line names this command, not one it started (`make` running
+        # a recipe whose `cc` is missing prints `/bin/sh: 1: cc: not found`).
+        self.not_found = False
 
     def __repr__(self):
         return f"Obs({self.intent},{self.form!r},{self.outcome})"
@@ -349,6 +359,10 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             if m and m.end() > 0:
                 prefix = (prefix + " " if prefix else "") + "npx"
                 body = body[m.end():]
+            elif vocab.generic and (m := _TOOL_LAUNCH_RE.match(body)):
+                launcher = "pipx run" if m.group(1).startswith("pipx") else "uvx"
+                prefix = (prefix + " " if prefix else "") + launcher
+                body = body[m.end():]
         toks = _tokens(body)
         while toks and (toks[0] in PREFIX_HEADS or _ASSIGN_TOKEN_RE.match(toks[0])):
             if _ASSIGN_TOKEN_RE.match(toks[0]):          # `env VAR=value cmd`
@@ -389,6 +403,9 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
             mod = rest[rest.index("-m") + 1] if rest.index("-m") + 1 < len(rest) else ""
             if mod in vocab.runner_modules:
                 return Observation(call, "run_tests", form(f"{head} -m {mod}"), head, prefix, seg)
+            # `python -m mypy` runs the checker itself, not the interpreter.
+            if vocab.generic and mod in vocab.build_heads:
+                return Observation(call, "run_build", form(f"{head} -m {mod}"), head, prefix, seg)
         script = _runner_script(rest, vocab)
         if script and (script != "manage.py" or "test" in rest):
             return Observation(call, "run_tests", form(f"{head} {script}"), head, prefix, seg)
@@ -653,8 +670,10 @@ def observe_task(transcript_path, vocab=None):
                          and (not o.hosts or any(h in out for h in o.hosts))] or \
                         [o for o in targets if o.intent == "fetch_remote"]
             chosen = named or (targets[-1:] if not success else [])
+            missing = _not_found_name(_error_line(out, err)) if err == "command_missing" else ""
             for o in chosen:
                 o.outcome = err
+                o.not_found = bool(missing) and _base(o.head) == missing
             if success:
                 for o in obs:
                     if o.outcome is None:
@@ -702,8 +721,18 @@ def _error_line(out, err):
     return (out or "")[start:end if end >= 0 else None]
 
 
+def _base(path):
+    return (path or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _not_found_name(line):
+    """The command a "not found" line says is missing, by its last path part; "" if none."""
+    m = _NOT_FOUND_NAME_RE.search(line or "")
+    return _base(next((g for g in m.groups() if g), "")) if m else ""
+
+
 def is_bare(form):
     """A form with no activation prefix and no explicit path is 'bare'."""
     head = form.split()[0] if form else ""
     return "/" not in head and " activate " not in form and " run " not in form and \
-        not form.startswith(("conda run", "poetry run", "pipenv run", "uv run", "npx "))
+        not form.startswith(("conda run", "poetry run", "pipenv run", "uv run", "npx ", "uvx "))

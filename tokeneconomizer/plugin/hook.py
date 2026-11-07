@@ -1,6 +1,6 @@
 """The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
 
-    python -m tokeneconomizer.plugin.hook [--host claude|codex|copilot|hermes|opencode|pi]
+    python -m tokeneconomizer.plugin.hook [--host claude|codex|copilot|cursor|grok|hermes|opencode|pi]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
@@ -34,7 +34,9 @@ def run(payload, env, host_hint=None):
         return {}
     if hasattr(host, "record_event"):
         host.record_event(payload)
-    return LiveController(ctx, payload).handle()
+    out = LiveController(ctx, payload).handle()
+    # A host whose events cannot all carry context (grok's SessionStart) moves it to one that can.
+    return host.render(payload, out, ctx) if hasattr(host, "render") else out
 
 
 def _record_error(env):

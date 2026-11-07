@@ -1,7 +1,7 @@
 # TokenEconomizer
 
-A plugin for Claude Code, Codex, the Copilot CLI and Pi (experimentally opencode, Cursor and Hermes
-Agent) that reads finished sessions and changes what later sessions in the same repository pay
+A plugin for Claude Code, Codex, the Copilot CLI and Pi (experimentally opencode, Cursor, Grok Build
+and Hermes Agent) that reads finished sessions and changes what later sessions in the same repository pay
 for: micro-skills, tool pruning, and a loop guard.
 See `README.md` for the overview and the method, `docs/PLUGIN.md` for the design and the verified
 agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
@@ -12,7 +12,7 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   - `toolprune/` — unused-tool evidence and the deny-list proposal; Codex capability packages
   - `loopguard/` — the per-call failure-loop guard and its per-repository envelope
   - `trace/` — each agent's session-log format (Claude Code, Codex, Copilot CLI, Pi, opencode,
-    Cursor, Hermes Agent)
+    Cursor, Grok Build, Hermes Agent)
   - `plugin/` — the runtime: hook dispatch, per-repository state, settings, the `te` CLI
   - `config.py`, `ledger.py`, `pricing.py`, `domain.py`, `stage.py` — shared by all three
 - `plugin/` — the installable plugin directory: manifests per agent, hook files, launchers

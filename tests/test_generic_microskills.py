@@ -3,6 +3,8 @@ well as tests, every edited file -- while the experiments keep the paper's readi
 import hashlib
 import json
 
+import pytest
+
 from tokeneconomizer.microskills import GENERIC, NODE_WEB, PYTHON_GIT, observe
 from tokeneconomizer.microskills import distiller as dist
 from tokeneconomizer.microskills import envfacts as ef
@@ -44,6 +46,165 @@ def test_a_build_tool_repair_becomes_a_fact(tmp_path):
     text = d.render()
     assert text.startswith(ef.GENERIC_HEADER)
     assert "`tsc …` fails here with command not found; `npx tsc …` works." in text
+
+
+def test_an_absent_linter_becomes_a_fact_and_a_working_form_does_not(tmp_path):
+    """`ruff` missing with no working form: an absent_tool fact. `tsc` missing with `npx tsc`
+    working is still a FormRepair, and `make build` never repairs `ruff`."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found"),
+            ("Bash", {"command": "make build"}, "built")]), iid=f"a{i}")
+    f = d.facts["absent_tool:ruff"]
+    assert f.family == "absent_tool" and f.state == "ACTIVE"
+    assert "`ruff …` fails here with command not found" in d.render()
+    assert not [x for x in d.facts if x.startswith("form_repair") and "ruff" in x]
+
+
+def test_an_absent_tool_retires_when_it_runs(tmp_path):
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found")]),
+            iid=f"a{i}")
+    assert d.facts["absent_tool:ruff"].state == "ACTIVE"
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "ruff check ."}, "All checks passed!")]), iid="a9")
+    assert d.facts["absent_tool:ruff"].state == "RETIRED"
+
+
+def test_a_program_missing_inside_make_is_not_learned_as_make_missing(tmp_path):
+    """`make` ran, and its recipe found no `cc`: the not-found line names `cc`, so nothing is
+    learned about `make`. A `ruff` whose own not-found line names it still is."""
+    d = ef.EnvFactsDistiller("acme/c", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/src/m{i}.c", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "make"},
+             "Exit code 2\ncc -o app main.c\n/bin/sh: 1: cc: not found\n"
+             "make: *** [Makefile:2: app] Error 127"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\n/bin/sh: 1: ruff: not found")]),
+            iid=f"m{i}")
+    assert "absent_tool:make" not in d.facts
+    assert d.facts["absent_tool:ruff"].state == "ACTIVE"
+
+
+def test_an_injected_absent_tool_counts_only_sessions_that_ran_a_check(tmp_path):
+    """A session that never needed a check says nothing about `ruff`; one that ran another
+    check (`mypy`) did without it."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "ruff check ."}, "Exit code 127\nbash: ruff: command not found")]),
+            iid=f"a{i}")
+    assert "`ruff …` fails here with command not found" in d.render()
+    d.update(_session(tmp_path, 8, [
+        ("Edit", {"file_path": "/r/pkg/y.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "ls"}, "pkg")]), iid="a8")
+    assert d.last_digest["verdicts"]["absent_tool:ruff"] == (None, False, False)
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": "mypy ."}, "Success: no issues found in 3 source files")]),
+        iid="a9")
+    assert d.last_digest["verdicts"]["absent_tool:ruff"] == ("confirm", True, True)
+
+
+def test_module_and_launcher_runs_name_the_tool_they_run():
+    """`python -m mypy`, `uvx ruff` and `pipx run black` run the tool, not the interpreter or
+    the launcher, so they pool with the bare `mypy`, `ruff`, `black`."""
+    assert _form("python -m mypy .", GENERIC) == ("run_build", "python -m mypy")
+    assert _form("python3 -m ruff check .", GENERIC) == ("run_build", "python3 -m ruff")
+    assert _form("uvx ruff check .", GENERIC) == ("run_build", "uvx ruff")
+    assert _form("uv tool run ruff check .", GENERIC) == ("run_build", "uvx ruff")
+    assert _form("pipx run black .", GENERIC) == ("run_build", "pipx run black")
+    assert _form("uvx pytest -q", GENERIC) == ("run_tests", "uvx pytest")
+    assert _form("cd pkg && python -m mypy .", GENERIC) == ("run_build", "cd pkg && python -m mypy")
+    # A module that is not a checker is still the interpreter.
+    assert _form("python -m json.tool f.json", GENERIC) == ("run_interpreter", "python")
+    assert not observe.is_bare("uvx ruff") and not observe.is_bare("pipx run black")
+    # The experiments' vocabulary reads as it did.
+    assert _form("python -m mypy .", PYTHON_GIT) == ("run_interpreter", "python")
+    assert _form("uvx ruff check .", PYTHON_GIT) is None
+    assert _form("pipx run pytest", PYTHON_GIT) is None
+
+
+REPAIRS = [("mypy .", "python -m mypy ."), ("mypy .", "python3 -m mypy ."),
+           ("ruff check .", "python -m ruff check ."), ("ruff check .", "uvx ruff check ."),
+           ("ruff check .", "uv tool run ruff check ."), ("black .", "pipx run black ."),
+           ("ruff check .", "uv run ruff check ."), ("ruff check .", ".venv/bin/ruff check .")]
+
+
+@pytest.mark.parametrize("bare,working", REPAIRS)
+def test_a_tool_that_works_another_way_is_not_learned_as_absent(tmp_path, bare, working):
+    """The bare tool is not found, but the same tool works through `python -m`, a launcher or
+    an environment: never "`X …` fails here with command not found" on its own."""
+    tool = bare.split()[0]
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(6):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": bare}, f"Exit code 127\nbash: {tool}: command not found"),
+            ("Bash", {"command": working}, "All checks passed!")]), iid=f"s{i}")
+    assert f"absent_tool:{tool}" not in d.facts
+
+
+@pytest.mark.parametrize("working", ["python -m mypy .", "uvx mypy .", "pipx run mypy ."])
+def test_the_working_form_is_named_as_the_repair(tmp_path, working):
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(6):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "mypy ."}, "Exit code 127\nbash: mypy: command not found"),
+            ("Bash", {"command": working}, "Success: no issues found in 3 source files")]),
+            iid=f"s{i}")
+    form = working.rsplit(" ", 1)[0]
+    assert f"`mypy …` fails here with command not found; `{form} …` works." in d.render()
+
+
+@pytest.mark.parametrize("working", ["python -m mypy .", "uvx mypy .", "pipx run mypy ."])
+def test_an_absent_tool_retires_when_it_runs_another_way(tmp_path, working):
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(4):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "mypy ."}, "Exit code 127\nbash: mypy: command not found")]),
+            iid=f"a{i}")
+    assert d.facts["absent_tool:mypy"].state == "ACTIVE"
+    d.render()
+    d.update(_session(tmp_path, 9, [
+        ("Edit", {"file_path": "/r/pkg/z.py", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Bash", {"command": working}, "Success: no issues found in 3 source files")]), iid="a9")
+    assert d.facts["absent_tool:mypy"].state == "RETIRED"
+
+
+@pytest.mark.parametrize("failing,other", [("python -m mypy .", "python -m ruff check ."),
+                                           ("uvx mypy .", "uvx ruff check ."),
+                                           ("pipx run mypy .", "pipx run ruff check .")])
+def test_a_shared_launcher_does_not_make_one_tool_repair_another(tmp_path, failing, other):
+    """`python -m ruff` working says nothing about a `python -m mypy` that failed: they share
+    only the launcher."""
+    d = ef.EnvFactsDistiller("acme/py", vocab=GENERIC)
+    for i in range(6):
+        d.render()
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/pkg/m{i}.py", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": failing}, "Exit code 1\n/usr/bin/python: No module named mypy"),
+            ("Bash", {"command": other}, "All checks passed!")]), iid=f"s{i}")
+    assert not [f for f in d.facts if f.startswith("form_repair")]
 
 
 def test_every_edited_file_counts_in_the_generic_reading(tmp_path):

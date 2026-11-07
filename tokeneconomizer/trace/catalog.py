@@ -127,7 +127,8 @@ def parse_tool_catalog_claude(transcript_text, max_desc=200, snapshot=None):
             ev = json.loads(line)
         except Exception:
             continue
-        if ev.get("type") == "system" and isinstance(ev.get("tools"), list):
+        if isinstance(ev, dict) and ev.get("type") == "system" and isinstance(
+                ev.get("tools"), list):
             names = ev["tools"]
             break
     return {n: (snap.get(n, "") or "")[:max_desc] for n in names}
@@ -203,6 +204,8 @@ def parse_tool_names_copilot(transcript_text):
         try:
             ev = json.loads(line)
         except Exception:
+            continue
+        if not isinstance(ev, dict):
             continue
         for pcb in ((ev.get("data") or {}).get("promptCacheBreakState") or []):
             for model in (pcb.get("models") or {}).values():
