@@ -92,15 +92,18 @@ reports the Droid version, the session directory, side-call state and recent err
 ## Side calls are off by default
 
 Micro-skills' paid proposer and the loop guard's judge normally call the agent's own CLI. On
-Droid that is `droid exec`, which writes a session log of its own under `~/.factory/sessions`.
-Droid has no documented flags for a pure completion (no tools, no hooks, no log), so the adapter
-does not make that call unless it is allowed, by `config set droid_sidecall=on` or by
-`TE_DROID_SIDECALL=1` in the session's environment. The setting is the one that also works from
+Droid that is `droid exec`, which writes a session log of its own under `~/.factory/sessions`,
+and Droid has no setting that leaves such a call with no tool at all. So the adapter does not make
+that call unless it is allowed, by `config set droid_sidecall=on` or by `TE_DROID_SIDECALL=1` in
+the session's environment. The setting is the one that also works from
 the Factory desktop app, where a session's environment cannot be chosen. With the calls off,
 `microskills=envfacts` still learns, and the loop guard keeps its rule-based backstop.
 
-When it is on, the call runs at Droid's default read-only autonomy in a throwaway directory, and
-its cost is read from the usage Droid records for it.
+When it is on, the call runs in a throwaway directory at Droid's default read-only autonomy, with
+its tools limited by a Droid setting rather than only by the prompt: `--only-tools Read` leaves
+`Read` as the one tool it may use. That is as close to no tools as Droid allows (`--only-tools ""`
+means no filter), and it matters: the default read-only autonomy alone still allows `Execute`,
+the web tools and every MCP tool. Its cost is read from the usage Droid records for the call.
 
 ## What is verified, and what is not
 
@@ -115,6 +118,10 @@ its cost is read from the usage Droid records for it.
   verbatim. The hook's JSON, Droid appending it to the model's context, and the model repeating
   it have now all been observed end to end. The block was three facts at the time; a fourth was
   added by the next fold.
+- Verified on Droid 0.233.0: with the side call's own flags, `droid exec --list-tools` reports
+  `Read` as the only tool allowed, MCP tools included, and a live side call on 2026-11-07,
+  asked to run shell commands, write a file and search the web, called no tool and wrote
+  nothing. `tests/test_droid.py` pins the flag.
 
 Droid's session and hook formats are internal. The adapter fails open: any error answers `{}` and
 writes one line to `~/.tokeneconomizer/errors.log`, so a Droid update can at worst stop the plugin

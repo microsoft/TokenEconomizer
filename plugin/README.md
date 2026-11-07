@@ -619,7 +619,8 @@ from it (an unknown model is labelled `fallback`). **What does not:** tool pruni
 TUI has no persistent per-tool setting (Factory issue #65). **Model calls** run through
 `droid exec` and are off until `config set droid_sidecall=on` (or `TE_DROID_SIDECALL=1` in a
 terminal session): that command writes a session log of its own, so enabling it is a deliberate
-choice. With it off, `microskills=envfacts` still learns.
+choice. When on, they run with `--only-tools Read`, so `Read` is the only tool they may use;
+Droid has no setting for none at all. With it off, `microskills=envfacts` still learns.
 
 **Verified live on 2026-11-05:** a fact reaching a live Droid model. A new session
 (`bb18c4fc`) received the 793-character block as `hookSpecificOutput.additionalContext`, and the
