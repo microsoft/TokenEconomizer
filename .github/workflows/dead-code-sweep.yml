@@ -1,0 +1,187 @@
+name: dead-code sweep
+
+# After a merge (and weekly, and by hand) scripts/dead_code.py deletes definitions nothing in the
+# repository names any more, and a pull request from one fixed branch offers the result. It never
+# runs on pull requests, so it never adds a check that a merge waits for.
+#
+# Two jobs, so that the repository's own code (the sweep and the whole test suite) never runs
+# with a token that can write: `sweep` has read access only and hands its patch and report on as
+# an artifact, and `publish`, which can push and open the pull request, runs only git and gh.
+#
+# A pull request opened with GITHUB_TOKEN triggers no other workflow, tests.yml included, which
+# is why `sweep` runs the tests itself before anything is pushed. Opening one at all needs the
+# repository setting "Allow GitHub Actions to create and approve pull requests" to be on.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Mondays, 06:17 UTC: off the hour, when scheduled runs queue the longest.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+# Two runs (a merge landing during the weekly one) would race for the one branch and its pull
+# request; the second waits for the first instead.
+concurrency:
+  group: dead-code-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    # A fork carries this file too; it should not open pull requests on its own schedule.
+    if: github.repository == 'microsoft/TokenEconomizer' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.fix.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - id: fix
+        run: |
+          set -euo pipefail
+          python scripts/dead_code.py --fix > "$RUNNER_TEMP/report.md"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            # Test-only definitions are never deleted, only listed, so the report still matters.
+            cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --binary > "$RUNNER_TEMP/dead-code.patch"
+            git diff --stat
+          fi
+      - if: steps.fix.outputs.changed == 'true'
+        run: python -m pip install pytest
+      # The sweep is only offered when everything still passes with the code gone. On failure
+      # nothing is pushed, and the report goes to the job summary so the failure says what the
+      # sweep had deleted.
+      - if: steps.fix.outputs.changed == 'true'
+        run: |
+          set -o pipefail
+          status=0
+          python -m pytest tests experiments/tests -q -rfE --tb=line 2>&1 | tee pytest.log \
+            || status=$?
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo
+              echo "## The tests failed with these deletions, so nothing was pushed"
+              echo
+              echo '```'
+              grep -E '^(FAILED|ERROR) ' pytest.log | head -60 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=dead-code sweep::the tests fail with the deletions; see the job summary"
+          fi
+          exit $status
+        env:
+          COLUMNS: "200"
+      - if: steps.fix.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-code-sweep
+          path: |
+            ${{ runner.temp }}/dead-code.patch
+            ${{ runner.temp }}/report.md
+          retention-days: 7
+
+  publish:
+    needs: sweep
+    # Only a sweep of main is offered against main; a hand-run on another branch stops at the
+    # report.
+    if: needs.sweep.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      BRANCH: automation/dead-code-sweep
+    steps:
+      # The same commit the patch was made against. No credentials are left in .git/config:
+      # the push step below passes the token for that one command.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dead-code-sweep
+          path: ${{ runner.temp }}/sweep
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/sweep/dead-code.patch"
+          report="$RUNNER_TEMP/sweep/report.md"
+          # The sweep only ever deletes lines from existing Python files; a patch that does
+          # anything else (touches a workflow or a launcher, renames, copies, creates or deletes
+          # a file, changes a mode) did not come from it and is not pushed. numstat alone shows
+          # only the destination path, so a rename onto a .py name would pass it.
+          bad=$(git apply --numstat "$patch" | awk '$1 != 0 || $3 !~ /\.py$/ {print $3}')
+          if [ -n "$bad" ]; then
+            echo "::error title=dead-code sweep::the patch adds lines or touches non-Python files: $bad"
+            exit 1
+          fi
+          if grep -qE '^(rename|copy) (from|to) |^(old|new|deleted|new file) mode |^(dis)?similarity index |^GIT binary patch' "$patch"; then
+            echo "::error title=dead-code sweep::the patch renames, copies, creates or deletes a file, or changes a mode"
+            exit 1
+          fi
+          git apply --index "$patch"
+          bad=$(git diff --cached --no-renames --name-status | grep -vP '^M\t.*\.py$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error title=dead-code sweep::the patch does more than edit Python files: $bad"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -c core.hooksPath=/dev/null commit -q -m "Remove unreferenced code (dead-code sweep)"
+          # Force: the branch is always one commit on top of the latest sweep, never a history.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null \
+              -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $auth" \
+              push --force "$SERVER/$REPO.git" "HEAD:refs/heads/$BRANCH"
+          # A pull request body holds at most 65536 characters.
+          head -c 60000 "$report" > body.md
+          number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                     --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$REPO" --body-file body.md
+          else
+            gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+              --title "Remove unreferenced code (dead-code sweep)" --body-file body.md
+          fi
+
+  # When a later sweep of main finds nothing to delete, an open sweep pull request is stale: its
+  # deletions were made by hand, or main names that code again. It gets no CI of its own (see
+  # above), so it is closed rather than left to be merged.
+  retire:
+    needs: sweep
+    if: needs.sweep.outputs.changed == 'false' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: automation/dead-code-sweep
+        run: |
+          set -euo pipefail
+          number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                     --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr close "$number" --repo "$REPO" \
+              --comment "The latest sweep of main finds nothing unreferenced to delete."
+          fi
