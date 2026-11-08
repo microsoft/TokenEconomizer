@@ -698,6 +698,20 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
     assert g.edits == 3 and g.last_verify > g.last_edit and not g.resolved_proxy()
 
 
+def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
+    """Claude Code on Windows names the file an edit tool changed with backslashes. The guard
+    counts that edit under the file's basename, as it counts a shell edit or a `git checkout --`
+    of the same file, and the judge's digest names the basename only."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": r"C:\w\repo\pkg\mod.py", "old_string": "a", "new_string": "b"},
+           "ok")
+    g.fold("Bash", {"command": "git checkout -- pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    assert g.whole.edit_counts == {"mod.py": 3}
+    assert g.whole.distinct_edit_files == 1
+    assert "C:" not in g.st.recent_digest()
+
+
 def test_reading_a_file_full_of_asserts_is_not_a_failure():
     """A test file read back is full of `assert` and `Error`: reading it, three times over, is
     no failure and no repeated failure, and opens no gate to the judge."""
