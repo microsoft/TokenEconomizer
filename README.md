@@ -200,6 +200,7 @@ mkdir -p ~/.config/opencode/plugins
 ln -s "$PWD/TokenEconomizer/plugin/opencode/tokeneconomizer.ts" ~/.config/opencode/plugins/
 ```
 
+The one file serves both generations: opencode 1.x reads its `server` entry, 2.x its `setup`.
 Start `opencode` and send a prompt, then check in the repository with
 `~/.tokeneconomizer/bin/te --host opencode status`. opencode has no plugin commands, so the
 plugin's commands run from a terminal.

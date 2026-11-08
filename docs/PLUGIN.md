@@ -327,6 +327,38 @@ settings would be):
 * Not yet exercised: `pi install git:github.com/…` against GitHub itself, which needs the
   root manifest pushed.
 
+**opencode 1.19.5 and 2.2.0 — verified live, 2026-10-29** (scripted local model endpoint; on
+1.19.5 also the free `opencode/big-pickle`; the 2.x entry also runs against 2.2.5 in CI):
+
+* Like Pi, opencode has no hook protocol: `plugin/opencode/tokeneconomizer.ts` speaks the
+  dispatcher's on opencode's behalf. One file serves both generations — 1.x reads its `server`
+  entry, 2.x its `setup` — mapping opencode's events onto the same `te-hook --host opencode`
+  calls: on 1.x `session.created`, `chat.message`, `experimental.chat.system.transform`,
+  `tool.execute.after`, `session.idle` and `session.deleted`; on 2.x `ctx.session.hook("prompt",
+  …)` for prompt admission, `ctx.session.hook("context", …)` for the manual's system-prompt
+  injection, `ctx.tool.hook("execute.after", …)`, and the public event stream
+  (`ctx.event.subscribe()`). A 2.x release missing one hook still loads the rest.
+* End to end on both: the plugin loaded, sessions folded with real usage and model, facts
+  learned over five sessions reached the next session through the system prompt, the loop
+  guard's judge nudged a failing edit-and-test loop and the redirect arrived in the model's
+  next tool results; on 1.19.5 the still-stuck notice printed on `opencode run` and the first
+  notice showed as a TUI toast, and a session quit with Ctrl+D was folded by the next start.
+* Session logs: on 1.x the plugin exports the session with `opencode export` at every turn's
+  end. On 2.x (no `opencode export`) it records the session from the event stream itself; on
+  2.2.5 that copy came out empty for every session (#118), so an empty copy is never kept over
+  a fuller one and the fold retries with 2.x's own `opencode session export`, run in the
+  session's project directory (2026-11-02).
+* A turn's end on 2.x arrives as `session.execution.{succeeded,failed,interrupted}` or the
+  documented `session.idle`; either alone closes the turn once.
+* opencode 2.x runs plugins in its background service, which on Windows has no console: every
+  child the hooks start carries `windowsHide` (the per-hook console windows flickered while the
+  agent worked, fixed 2026-10-31), and a `TE_*` variable set in the terminal reaches the plugin
+  only after `opencode service restart`.
+* Model side calls run `opencode run` with `--pure` (1.x) or `--standalone` (2.x, so the shared
+  service's other plugins — this one included — cannot fire inside them) and `bash`, `edit`,
+  `webfetch`, `websearch` denied; a `read`, `task` or `*` denial stalls 1.19.5 at start-up. On
+  2.x a reply that used no tool carries no usage, so its cost is estimated.
+
 **End to end, as a new user, 2026-10-14** — on each agent a fresh home followed `README.md` and
 this plugin's guide step by step (Claude Code 2.1.300, Codex 0.153.1, Copilot CLI 1.0.83, Pi
 1.2.0; every model through OpenRouter; a small Python repository where `pytest` is missing and
@@ -755,6 +787,10 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   session and side-call costs are reported as unavailable. Tool pruning is not implemented for
   Cursor. macOS and Linux only: Windows Cursor runs hooks through PowerShell, and the launcher
   is a POSIX shell script.
+* **opencode (experimental)** — verified on 1.19.5, 2.2.0 and 2.2.5 (CI), not in the 2.x
+  terminal UI. On 2.x the loop guard's notices go to the server's stderr because plugins cannot
+  toast there; opencode has no deny-list settings file, so tool pruning does not apply (as on
+  Pi), and a TUI quit is only noticed by the next session's start.
 * **Grok Build (experimental)** — micro-skills and the loop guard, on 1.0.70. No tool pruning. The
   start context reaches the model only with the session's first tool call (a session with none
   never gets it), and the ledger counts it as injected from `SessionStart`. A turn interrupted

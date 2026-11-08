@@ -400,10 +400,12 @@ where it is set. Settings made with `te config` need no restart.
 
 **How it hands a session over.** On 1.x the plugin exports the session with `opencode export` at
 the end of every turn and sends the path; on 2.x, which has no export command, it records the
-session from its events and writes the same JSON. A headless `opencode run` is folded when its
-turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no chance to
-say so: that session is folded by the next session's start, once its export has been quiet for
-10 minutes.
+session from its events and writes the same JSON (where that copy holds no prompt, the fold reads
+2.x's `opencode session export` instead). A turn ends at 2.x's `session.execution.*` events or
+the documented `session.idle`, whichever the release emits; a headless `opencode run` is folded
+when its turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no
+chance to say so: that session is folded by the next session's start, once its export has been
+quiet for 10 minutes.
 
 **Model calls.** The proposer and the loop guard's judge run through `opencode run` on your
 default opencode model (`paid_model` names another): tools that change anything are denied,
@@ -411,7 +413,8 @@ the session is deleted afterwards, and no other plugin runs (`--pure` on 1.x; `-
 2.x). On 2.x a reply that used no tool carries no usage, so its cost is estimated.
 
 **Verified live,** on opencode 1.19.5 and 2.2.0 (Python 3.12), with a scripted local model
-endpoint and, on 1.19.5, the free `opencode/big-pickle` model:
+endpoint and, on 1.19.5, the free `opencode/big-pickle` model; the 2.x entry is also exercised
+against 2.2.5 in CI:
 the plugin loads; sessions are folded with real usage and model; facts learned over five sessions
 reach the next session through the system prompt; the loop guard's judge ran, nudged a
 failing edit-and-test loop, and the redirect arrived in the model's next tool results; the
