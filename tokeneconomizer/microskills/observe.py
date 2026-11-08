@@ -95,17 +95,9 @@ BUILD_SUBS = frozenset({"build", "check", "compile", "lint", "vet", "typecheck",
 _RUN_SCRIPT_HEADS = frozenset({"npm", "yarn", "pnpm", "bun"})
 
 DEFAULT_VOCAB = PYTHON_GIT
-# Module-level aliases of the default vocabulary, kept for the offline analyses.
-INTERPRETERS = PYTHON_GIT.interpreters
-RUNNER_HEADS = PYTHON_GIT.runner_heads
-RUNNER_SCRIPTS = PYTHON_GIT.runner_scripts
-RUNNER_MODULES = PYTHON_GIT.runner_modules
-PACKAGE_TOOLS = PYTHON_GIT.package_tools
-FETCH_HEADS = PYTHON_GIT.fetch_heads
 GIT_FETCH_SUBS = frozenset({"fetch", "clone", "pull", "ls-remote"})
 GIT_PROBE_SUBS = frozenset({"remote", "branch", "tag", "fsck", "stash", "show-ref",
                             "for-each-ref"})
-ENV_PROBE_HEADS = PYTHON_GIT.env_probe_heads
 PREFIX_HEADS = ("sudo", "env", "time", "exec", "nice", "nohup", "timeout")
 _PASSTHROUGH = frozenset({"cd", "echo", "head", "tail", "cat", "sort", "uniq", "tee", "true",
                           "printf", "less", "more"})

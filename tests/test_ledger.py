@@ -1,6 +1,6 @@
-"""Ledger: overhead(), effective_exec(), and the CostLedger accumulator."""
+"""Ledger: overhead() and effective_exec()."""
 from tokeneconomizer import ledger
-from tokeneconomizer.ledger import CostLedger, OVERHEAD_KEYS
+from tokeneconomizer.ledger import OVERHEAD_KEYS
 
 
 def test_overhead_sums_only_known_keys():
@@ -28,13 +28,3 @@ def test_effective_exec_uses_breakdown():
 def test_effective_exec_falls_back_to_total():
     assert ledger.effective_exec({"tokens_total": 777}) == 777
 
-
-def test_cost_ledger_amortizes():
-    cl = CostLedger()
-    cl.add({"tokens_total": 100, "optimizer_tokens": 20})
-    cl.add({"tokens_total": 200})
-    assert cl.cum_exec == 300
-    assert cl.cum_overhead == 20
-    assert cl.cum_total == 320
-    assert cl.amortized_per_task == 160
-    assert 0 < cl.overhead_frac < 1

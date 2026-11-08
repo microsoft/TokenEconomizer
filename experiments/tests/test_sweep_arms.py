@@ -373,7 +373,6 @@ def test_the_codex_spiral_arms_have_the_shape_the_injection_arms_have():
         assert S(n).codex_spiral and not S(n).guard and not S(n).nudge
     from te_bench import codex_spiral as cs
     assert cs.CODEX_DEFAULT_PROFILE == "defensive"
-    assert cs.CODEX_SHIPPED_PROFILE == "post-green"
 
 
 def test_the_codex_family_relates_to_codex_trimech_as_the_generic_one_does_to_trimech():
