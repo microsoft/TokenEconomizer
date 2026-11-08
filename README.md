@@ -27,7 +27,8 @@
 </p>
 
 <p align="center">
-  <a href="https://trendshift.io/repositories/315380"><img src="https://trendshift.io/api/badge/trendshift/repositories/315380/daily?language=Python" alt="microsoft/TokenEconomizer | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/315380"><img src="https://trendshift.io/api/badge/trendshift/repositories/315380/daily?language=Python" alt="#1 Python repository of the day on Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/315380"><img src="https://trendshift.io/api/badge/trendshift/repositories/315380/weekly?language=Python" alt="#10 Python repository of the week on Trendshift" width="250" height="55"></a>
 </p>
 
 <p align="center">
