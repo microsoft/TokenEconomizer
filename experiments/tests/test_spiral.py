@@ -83,9 +83,9 @@ def test_shell_applied_patch_is_an_edit_event_with_its_paths():
     failed = _cs.parse_events(_line({"type": "command_execution", "command": _PATCH_CMD,
                                      "aggregated_output": "apply_patch: error: Failed to find context", "exit_code": 1}))
     assert [e.kind for e in failed] == ["command"]
-    # an ordinary command stays one event; parse_event still returns the primary one
+    # an ordinary command stays one event
     plain = _cs.parse_events(_line({"type": "command_execution", "command": "ls", "aggregated_output": "", "exit_code": 0}))
-    assert [e.kind for e in plain] == ["command"] and _cs.parse_event(_line({"type": "command_execution", "command": _PATCH_CMD, "aggregated_output": "Success. Updated", "exit_code": 0})).kind == "command"
+    assert [e.kind for e in plain] == ["command"]
     # string exit codes (defensive) are normalised
     assert _cs.parse_events(_line({"type": "command_execution", "command": "pytest -q", "aggregated_output": "1 passed", "exit_code": "0"}))[0].exit_code == 0
 

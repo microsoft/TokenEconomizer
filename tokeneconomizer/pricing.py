@@ -109,9 +109,6 @@ WEIGHTS_CLAUDE = {
 # weights_for(); effective_tokens() applies it automatically.
 WEIGHTS = WEIGHTS_CLAUDE
 
-_BREAKDOWN_KEYS = ("input_tokens", "cache_read_input_tokens",
-                   "cache_creation_input_tokens", "output_tokens")
-
 
 def resolve_model(rec):
     """The billed model id for a row: its explicit `model`, else the agent's default
