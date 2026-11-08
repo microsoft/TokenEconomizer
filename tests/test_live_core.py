@@ -894,9 +894,9 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
     assert cmd.count("--excluded-tools") == len(sidecall.COPILOT_TOOLS)
     assert seen["env"]["TE_SIDECALL"] == "1"            # its own hooks must not recurse
     cfg = live_config.LiveConfig()
-    assert sidecall.runner_for("copilot", cfg).__code__.co_names.count("copilot_call") == 1
-    assert sidecall.runner_for("claude", cfg).__code__.co_names.count("claude_call") == 1
-    assert sidecall.runner_for("pi", cfg).__code__.co_names.count("pi_call") == 1
+    assert sidecall.runner_for("copilot", cfg).__wrapped__.__code__.co_names.count("copilot_call") == 1
+    assert sidecall.runner_for("claude", cfg).__wrapped__.__code__.co_names.count("claude_call") == 1
+    assert sidecall.runner_for("pi", cfg).__wrapped__.__code__.co_names.count("pi_call") == 1
 
 
 @pytest.mark.real_sidecalls

@@ -75,6 +75,42 @@ def _env():
 _SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed) in")
 
 
+def _log(text):
+    """One entry in the plugin's errors.log, which `te doctor` shows."""
+    import time
+    from .paths import state_root
+    try:
+        root = state_root()
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
+            fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} {text}")
+    except OSError:
+        pass
+
+
+def _noted(host, call):
+    """`call`, with a side call that raises noted in errors.log before it propagates. Both
+    callers catch it -- the judge records a short `runner-error`, the proposer skips its tick --
+    so without this note a CLI that keeps failing would leave no trace of why. One line, and
+    never the command: most hosts take the prompt on argv, a `TimeoutExpired` names its whole
+    command, and `te doctor` prints this file's tail."""
+    def run(prompt, model="agent"):
+        try:
+            return call(prompt, model)
+        except subprocess.TimeoutExpired as e:
+            _log(f"sidecall {host}: no reply (timed out after {e.timeout:g}s)\n")
+            raise
+        except subprocess.CalledProcessError as e:
+            _log(f"sidecall {host}: no reply (exit {e.returncode})\n")
+            raise
+        except Exception as e:
+            what = " ".join(str(e).split())[:200]
+            _log(f"sidecall {host}: failed ({type(e).__name__}: {what})\n")
+            raise
+    run.__wrapped__ = call
+    return run
+
+
 def _no_reply(host, out):
     """Note a side call that came back empty, which nothing else would show -- as under
     Copilot's BYOK, which does not pass the provider's variables to the hooks that start it.
@@ -84,12 +120,9 @@ def _no_reply(host, out):
     stderr = getattr(out, "stderr", "") or ""
     # Hermes says why on stdout, with a non-zero exit.
     tail = " ".join((stderr + " " + (getattr(out, "stdout", "") or "")).split())[-300:]
+    _log(f"sidecall {host}: no reply (exit {getattr(out, 'returncode', '?')}) {tail}\n")
     try:
         root = state_root()
-        os.makedirs(root, exist_ok=True)
-        with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
-            fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} sidecall {host}: no reply "
-                     f"(exit {getattr(out, 'returncode', '?')}) {tail}\n")
         if _SIGNED_OUT_RE.search(stderr + (getattr(out, "stdout", "") or "")):
             path = _pause_path(host, root)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -227,6 +260,22 @@ def claude_no_mcp(cli, cwd):
     return ["--strict-mcp-config", "--mcp-config", path]
 
 
+def claude_json(stdout):
+    """The result object of a `claude -p --output-format json` run, {} when there is none. With
+    `"verbose": true` in the person's settings (or `--verbose`), Claude Code prints the whole
+    event list instead -- `system`, `assistant`, ..., `result` -- and its `result` event carries
+    the fields the object would (#131). Taking the event, rather than passing
+    `--settings '{"verbose":false}'`, needs no probe of which flags this Claude Code has."""
+    try:
+        data = json.loads(stdout or "{}")
+    except ValueError:
+        return {}
+    if isinstance(data, list):
+        data = next((ev for ev in reversed(data)
+                     if isinstance(ev, dict) and ev.get("type") == "result"), {})
+    return data if isinstance(data, dict) else {}
+
+
 def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     cli = cli or claude_cli()
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
@@ -236,16 +285,16 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
                              cwd=cwd)
-    try:
-        data = json.loads(out.stdout or "{}")
-    except ValueError:
-        data = {}
-    if not data.get("result"):
+    data = claude_json(out.stdout)
+    # An error result carries its message as `result` ("... Please run /login"): not a reply,
+    # and a signed-out one pauses the host's side calls.
+    failed = data.get("is_error") or not data.get("result")
+    if failed:
         _no_reply("claude", out)
     usage = dict(data.get("usage") or {})
     usage["model"] = next(iter(data.get("modelUsage") or {}), None) or (model or "claude")
     eff, _ = accounting.effective(usage)
-    return data.get("result") or "", eff
+    return "" if failed else data["result"], eff
 
 
 def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
@@ -707,7 +756,12 @@ def runner_for(host_name, config):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
     when micro-skills is on, the loop guard's judge when the guard is. None for a host in
-    `NO_SIDE_CALLS`."""
+    `NO_SIDE_CALLS`. A call that raises is noted in errors.log (`_noted`)."""
+    call = _host_call(host_name, config)
+    return None if call is None else _noted(host_name, call)
+
+
+def _host_call(host_name, config):
     if host_name in NO_SIDE_CALLS:
         return None
     model = config.paid_model

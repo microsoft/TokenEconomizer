@@ -428,7 +428,7 @@ def test_a_grok_side_call_is_a_headless_completion_that_removes_what_acts(monkey
     assert seen["cwd"] != os.getcwd()                       # a throwaway directory
     assert sidecall.runner_for("grok", __import__(
         "tokeneconomizer.plugin.config", fromlist=["LiveConfig"]).LiveConfig()
-        ).__code__.co_names.count("grok_call") == 1
+        ).__wrapped__.__code__.co_names.count("grok_call") == 1
     assert sidecall.call_name("grok") == "grok -p"
 
 
