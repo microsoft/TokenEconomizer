@@ -1,7 +1,7 @@
 # The plugin: design and verified agent behaviour
 
 How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
-opencode, Cursor, Grok Build and Hermes Agent sessions, through the hooks (on Pi, the extension events) each agent
+opencode, Cursor, Grok Build, Hermes Agent and Antigravity CLI sessions, through the hooks (on Pi, the extension events) each agent
 exposes: what it does at each hook, what differs from the experiments and why, the agent
 behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
@@ -799,6 +799,25 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
   runs, verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
+* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, written against
+  agy 1.5.1 and its own installed hook documentation; tool pruning is not implemented. The
+  plugin makes no model call through `agy`, which has no option that runs a prompt with every tool
+  off (`sidecall.NO_SIDE_CALLS`), so the paid proposer and the loop guard's judge never run. What
+  was captured live: hooks come from a `hooks.json` at the plugin root, run through `sh -c` in
+  that directory, with camelCase payloads that name no event (the hook file's command does,
+  `--event`) and leave out a zero (`invocationNum` 0, the first model call of a prompt). A
+  `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
+  `PostToolUse` carries no tool result and a matcher `"*"` never matches, so the results are read
+  from the conversation's `transcript_full.jsonl` at the next `PreInvocation` and at `Stop`, where
+  every result of the previous model call is already written (`trace/antigravity.py`). There is no
+  prompt event and no `SessionEnd`: a prompt is the `PreInvocation` with `invocationNum` 0, and a
+  conversation is folded by the next session start in its repository once its transcript has been
+  quiet for ten minutes. Context goes back as `injectSteps`: a persistent `systemMessage` at
+  `SessionStart`, an `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Calls a subagent
+  makes are not in the transcript and are not seen. Transcript token fields are absent from older
+  agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
+  on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
+  `cmd /c` on Windows, and the launcher is a POSIX shell script.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s

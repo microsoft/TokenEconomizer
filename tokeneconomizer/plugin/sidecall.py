@@ -37,6 +37,9 @@ so no extra API key is needed and the call is billed where the session is:
     dispatchers removed (`--disallowed-tools`) and the shell, edit, write, web and subagent
     tools denied (`--deny`); no approval flag is passed. It leaves a session under
     `~/.grok/sessions/`, which no hook tracks (they do nothing under `TE_SIDECALL`).
+  * Antigravity: none. `agy` has no option that runs a turn without tools, and a side call's
+    prompt holds text a repository controls, so its micro-skills keep to the LLM-free facts and
+    its loop guard never asks a judge (`NO_SIDE_CALLS`).
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
@@ -687,6 +690,9 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
     return text, eff
 
 
+# Hosts the plugin makes no model call for: their CLI cannot run a prompt with every tool off.
+NO_SIDE_CALLS = frozenset({"antigravity"})
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
           "hermes": "hermes chat"}
@@ -700,7 +706,10 @@ def call_name(host_name):
 def runner_for(host_name, config):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
-    when micro-skills is on, the loop guard's judge when the guard is."""
+    when micro-skills is on, the loop guard's judge when the guard is. None for a host in
+    `NO_SIDE_CALLS`."""
+    if host_name in NO_SIDE_CALLS:
+        return None
     model = config.paid_model
     if host_name == "pi":
         cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"

@@ -1,13 +1,14 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), Grok Build (experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
+(experimental), Grok Build (experimental), opencode (experimental), Hermes Agent (experimental)
+and the Antigravity CLI (experimental). What the plugin does and why is in the [main README](../README.md); its
 design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
   [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
-  [Hermes Agent](#hermes-agent)
+  [Hermes Agent](#hermes-agent) · [Antigravity CLI](#antigravity-cli)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -542,6 +543,47 @@ log a warning for the empty section of a session with no facts.
 **Uninstall.** `hermes plugins disable tokeneconomizer`, `rm ~/.hermes/plugins/tokeneconomizer`,
 `hermes gateway restart`. Optional: `rm -rf ~/.tokeneconomizer`.
 
+
+## Antigravity CLI
+
+Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1 on macOS and Linux
+(agy runs hook commands through `cmd /c` on Windows, and the launcher is a POSIX shell script).
+
+**1. Install.** Build the self-contained plugin, which copies the package into it, and install the
+directory:
+
+```bash
+python scripts/build_plugin.py --out dist/marketplace
+agy plugin install dist/marketplace/tokeneconomizer
+```
+
+`agy plugin validate dist/marketplace/tokeneconomizer` checks it. agy reads the plugin's hooks
+from `hooks.json` at the plugin root; the `hooks/hooks.json` beside it is Claude Code's, and agy's
+validator says it is never loaded.
+
+**2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host antigravity status` in the
+repository. agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
+is off by default: `te --host antigravity config set microskills=envfacts`.
+
+**How it works, and what it does not do.**
+
+- Three hooks are registered: `SessionStart` (injects the learned facts), `PreInvocation` (before
+  every model call: opens a turn at a new prompt and reads the tool results since the last call)
+  and `Stop`.
+- It never registers `PreToolUse`: a `PreToolUse` hook that prints `{}` makes agy deny the tool.
+  `PostToolUse` is unused: its payload holds no tool result, so the results are read from the
+  conversation's `transcript_full.jsonl` instead. A cursor into it is kept in
+  `~/.tokeneconomizer/antigravity-sessions/`, private to you.
+- agy has no `SessionEnd`: a conversation is folded by the next session start in that repository,
+  once its transcript has been quiet for 10 minutes.
+- Tool pruning is not available. Calls a subagent makes are not in the transcript and are not seen.
+  The transcript names no model, so session cost is priced on a labelled fallback, and older agy
+  versions leave token counts out of most of it.
+- The plugin makes no model call through `agy`: it has no option that runs a prompt with every
+  tool off, and such a call's prompt holds text a repository controls. So micro-skills' paid
+  proposer never runs, and the loop guard, which needs a judge's verdict to act, never redirects
+  a turn.
+
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
@@ -626,6 +668,7 @@ How to run them:
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
+| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.
