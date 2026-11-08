@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import adapter as live_adapter
 from .denylist import CODEX_TOGGLES, write_json as _write_json
-from .sidecall import claude_cli, claude_flags, program
+from .sidecall import claude_cli, claude_flags, claude_json, program
 
 
 def verify_copilot(repo_root, servers, cli="copilot"):
@@ -223,10 +223,7 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
     with tempfile.TemporaryDirectory(prefix="te-measure-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", env=env,
                              cwd=cwd, timeout=timeout)
-    try:
-        data = json.loads(out.stdout or "{}")
-    except ValueError:
-        data = {}
+    data = claude_json(out.stdout)
     u = data.get("usage") or {}
     total = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
                                              "cache_creation_input_tokens"))
