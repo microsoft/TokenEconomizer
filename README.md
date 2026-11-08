@@ -27,6 +27,10 @@
 </p>
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/315380"><img src="https://trendshift.io/api/badge/trendshift/repositories/315380/daily?language=Python" alt="microsoft/TokenEconomizer | Trendshift" width="250" height="55"></a>
+</p>
+
+<p align="center">
   Our measurement on SWE-Bench tasks: <b>18.4–30.9% lower mean cost</b> across five agent–model
   combinations, cheaper in <b>all 30</b> repository × combination cells, and Pass@1 up in
   <b>4 of 5</b>. <a href="#results">Results</a>
