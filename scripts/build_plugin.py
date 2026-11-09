@@ -72,6 +72,7 @@ def build_droid(out):
                     ignore=shutil.ignore_patterns(
                         "__pycache__", "*.pyc", ".pytest_cache", "lib", ".DS_Store",
                         ".claude-plugin", ".codex-plugin", ".cursor-plugin", ".github",
+                        ".antigravity-plugin", "hooks.json",
                         "codex-skills", "hermes", "opencode", "pi", "slash-commands",
                         "package.json", "*.md.bak"))
     shutil.copytree(os.path.join(REPO, "tokeneconomizer"),

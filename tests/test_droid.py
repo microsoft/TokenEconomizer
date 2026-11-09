@@ -321,5 +321,9 @@ def test_droid_plugin_packaging(tmp_path):
     command = (plugin / "commands" / "tokeneconomizer-status.md").read_text()
     assert "${DROID_PLUGIN_ROOT}" in command and "Execute tool" in command
     assert (plugin / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
+    # Antigravity's files, which sit at the plugin root beside Droid's: Droid reads neither (its
+    # hooks are `hooks/hooks.json`), and the bundle ships only what Droid loads.
+    assert not (plugin / "hooks.json").exists()
+    assert not (plugin / ".antigravity-plugin").exists()
     assert json.load(open(out / ".factory-plugin" / "marketplace.json"))["plugins"][0][
         "name"] == "tokeneconomizer"
