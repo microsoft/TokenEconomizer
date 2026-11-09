@@ -141,7 +141,7 @@ def status_of_tests(cmd):
     (Codex) is judged by its script."""
     if not isinstance(cmd, str):
         return None
-    pieces, pipefail = _pieces(cmd)
+    pieces, pipefail = _pieces(_split_heredocs(cmd)[0])
     found = None
     for i in range(0, len(pieces), 2):
         stage = pieces[i]

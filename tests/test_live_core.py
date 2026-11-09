@@ -1336,6 +1336,32 @@ def test_a_non_test_command_mentioning_a_runner_is_not_a_verification(cmd):
     assert g.verifications == 1 and not g.resolved_proxy()
 
 
+def test_a_heredoc_writing_a_script_runs_no_tests():
+    assert turn.status_of_tests("cat <<EOF > ci.sh\nnpm test\nEOF") is None
+
+
+@pytest.mark.parametrize("cmd", ["gh pr create --body-file - <<'EOF'\npytest -q\nEOF",
+                                 "gh issue comment 7 --body-file - <<EOF\nnpm test\nEOF"])
+def test_a_heredoc_line_naming_a_runner_is_not_a_verification(cmd):
+    """A heredoc's lines are the input of the command that reads them, as in
+    `exit_status_covers`: a body written with one runs no tests, so the failing run before it
+    is still the turn's last verification."""
+    assert turn.status_of_tests(cmd) is None
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
+    g.fold("Bash", {"command": cmd}, "ok", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["pytest -q <<EOF\ny\nEOF",
+                                 "cat <<EOF > ci.sh\nnpm test\nEOF\npytest -q"])
+def test_a_runner_beside_a_heredoc_is_still_judged_by_its_status(cmd):
+    """A runner that reads a heredoc, or runs after one, is the last command: its status is the
+    tests' own."""
+    assert turn.status_of_tests(cmd) == "own"
+
+
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
 
 
