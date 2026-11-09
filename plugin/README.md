@@ -795,7 +795,9 @@ first session there ends.
 | Key | Default | Values |
 |---|---|---|
 | `enabled` | `true` | `false`: the whole plugin is off; its hooks return at once and record nothing |
-| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `paid_model` | `""` | model for the plugin's own calls on every agent; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `<agent>_paid_model` | `""` | the same for one agent (`claude`, `codex`, `copilot`, `pi`, `opencode`, `cursor`, `grok`, `hermes`), over `paid_model` |
+| `claude_paid_effort`, `codex_paid_effort` | `""` | the reasoning effort of those calls: Claude Code `low` to `max`, Codex `none` to `max`; which values a model takes is the CLI's to say; empty: the CLI's default |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |
