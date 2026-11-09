@@ -332,8 +332,12 @@ class LiveController:
         from .judge import AsyncJudge, NoVerdict
         if envelope is None:
             return None
-        if self.host.name in sidecall.NO_SIDE_CALLS or sidecall.paused(self.host.name,
-                                                                         self.ctx.root):
+        if self.host.name in sidecall.NO_SIDE_CALLS:
+            return NoVerdict()
+        # A local judge (`local_model`) needs no login, so it still answers while the host's
+        # CLI is paused (signed out).
+        if (sidecall.paused(self.host.name, self.ctx.root)
+                and sidecall.local_runner("judge", self.ctx.config) is None):
             return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 

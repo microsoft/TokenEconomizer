@@ -742,6 +742,91 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 # Hosts the plugin makes no model call for: their CLI cannot run a prompt with every tool off.
 NO_SIDE_CALLS = frozenset({"antigravity"})
 
+
+# ---- an on-device model for some side calls (`local_model`, `local_roles`) -------------------
+# Apple's Foundation Models CLI, `/usr/bin/fm` on macOS 27 with Apple Intelligence on. It runs a
+# ~3B model on the Neural Engine and GPU with a 4,096-token window, needs no login or key, and
+# takes the prompt on stdin. `--schema` constrains its decoding to a JSON schema, which is what
+# makes the judge usable: in free text it often wraps or contradicts its verdict, under a schema
+# it returns the object every time. A call it cannot make returns None, and the caller falls back
+# to the agent's own CLI, so turning this on never costs a verdict.
+
+FM_CLI = "fm"
+FM_TIMEOUT_S = 60
+# The judge's verdict, as `loopguard.judge.llm_stuck_judge` parses it.
+JUDGE_SCHEMA = {
+    "title": "Verdict", "type": "object", "additionalProperties": False,
+    "x-order": ["stuck", "confidence", "reason"], "required": ["stuck", "confidence", "reason"],
+    "properties": {
+        "stuck": {"type": "boolean"},
+        "confidence": {"type": "number", "description": "0.0 to 1.0"},
+        "reason": {"type": "string", "description": "short leakage-safe justification"}}}
+ROLE_SCHEMAS = {"judge": JUDGE_SCHEMA}
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_fm_ok = {}
+
+
+def fm_available(cli=FM_CLI):
+    """Whether `fm` is on PATH and reports its on-device model available (once per process)."""
+    if cli not in _fm_ok:
+        ok = False
+        if shutil.which(cli):
+            try:
+                out = subprocess.run([cli, "available"], capture_output=True, encoding="utf-8",
+                                     errors="replace", timeout=30, env=_env(),
+                                     stdin=subprocess.DEVNULL)
+                ok = out.returncode == 0 and "unavailable" not in (out.stdout or "").lower()
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+        _fm_ok[cli] = ok
+    return _fm_ok[cli]
+
+
+def fm_call(prompt, schema=None, cli=FM_CLI, timeout=FM_TIMEOUT_S):
+    """(text, 0) from the on-device model, or (None, 0) when it gave no usable reply. Greedy
+    decoding, so the same digest gets the same verdict; `schema` (a JSON schema dict) constrains
+    the output. A prompt over the model's window fails here and falls back."""
+    with tempfile.TemporaryDirectory(prefix="te-fm-", ignore_cleanup_errors=True) as tmp:
+        cmd = [cli, "respond", "--no-stream", "--greedy"]
+        if schema:
+            path = os.path.join(tmp, "schema.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(schema, fh)
+            cmd += ["--schema", path]
+        try:
+            out = subprocess.run(cmd, input=prompt, capture_output=True, encoding="utf-8",
+                                 errors="replace", timeout=timeout, env=_env(), cwd=tmp)
+        except (OSError, subprocess.SubprocessError) as e:
+            _log(f"sidecall fm: no reply ({type(e).__name__})\n")
+            return None, 0
+    text = _ANSI_RE.sub("", out.stdout or "").strip()
+    if out.returncode != 0 or not text or text.startswith("Error:"):
+        err = _ANSI_RE.sub("", (out.stderr or out.stdout or "").strip())[:200]
+        _log(f"sidecall fm: no reply (exit {out.returncode}): {err}\n")
+        return None, 0
+    return text, 0
+
+
+def local_runner(role, config, fallback=None):
+    """The side-call runner for `role` when `local_model` routes it on-device, else None. On a
+    failed local call the runner tries `fallback` (the agent's own runner), so a turned-on local
+    model never loses a verdict; with no fallback (a host in `NO_SIDE_CALLS`) it returns ''."""
+    if getattr(config, "local_model", "off") != "fm" or role not in getattr(config, "local_roles", ()):
+        return None
+    if not fm_available():
+        return None
+    schema = ROLE_SCHEMAS.get(role)
+
+    def run(prompt, model="agent"):
+        text, eff = fm_call(prompt, schema=schema)
+        run.answered_locally = text is not None
+        if text is not None:
+            return text, eff
+        return fallback(prompt, model) if fallback is not None else ("", 0)
+    run.local = "fm"
+    run.answered_locally = False
+    return run
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
           "hermes": "hermes chat"}
@@ -752,13 +837,22 @@ def call_name(host_name):
     return _CALLS.get(host_name, f"{host_name} -p")
 
 
-def runner_for(host_name, config):
+def runner_for(host_name, config, role=None):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
     when micro-skills is on, the loop guard's judge when the guard is. None for a host in
-    `NO_SIDE_CALLS`. A call that raises is noted in errors.log (`_noted`)."""
+    `NO_SIDE_CALLS`. A call that raises is noted in errors.log (`_noted`).
+
+    `role` (`judge`, `nudge`, `proposer`) lets `local_model` run that call on-device instead
+    (`local_runner`), falling back to the host's CLI when the local call fails; on a host in
+    `NO_SIDE_CALLS` the local model is the only runner."""
     call = _host_call(host_name, config)
-    return None if call is None else _noted(host_name, call)
+    host = None if call is None else _noted(host_name, call)
+    if role is not None:
+        local = local_runner(role, config, fallback=host)
+        if local is not None:
+            return local
+    return host
 
 
 def _host_call(host_name, config):
