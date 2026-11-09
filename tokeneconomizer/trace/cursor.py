@@ -44,6 +44,8 @@ def cursor_events_to_claude(path, out_path):
             event = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(event, dict):
+            continue
         name = event.get("hook_event_name")
         if name == "UserPromptSubmit":
             prompt = event.get("prompt")
@@ -92,6 +94,8 @@ def cursor_prompt_count(path):
         try:
             event = json.loads(line)
         except ValueError:
+            continue
+        if not isinstance(event, dict):
             continue
         count += event.get("hook_event_name") == "UserPromptSubmit"
         if isinstance(event.get("agent_transcript"), str):
