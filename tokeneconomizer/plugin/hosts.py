@@ -1219,8 +1219,9 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
-    if (payload or {}).get("conversationId") and "/antigravity" in str(
-            payload.get("transcriptPath") or "").replace("\\", "/"):
+    if (payload or {}).get("conversationId") and (
+            "/antigravity" in str(payload.get("transcriptPath") or "").replace("\\", "/")
+            or (payload or {}).get("product") in ("antigravity", "antigravity-cli")):
         return Antigravity()
     tp = str((payload or {}).get("transcript_path") or "")
     sp = tp.replace("\\", "/")              # a Windows path, with either separator

@@ -438,7 +438,24 @@ def test_the_plugin_declares_the_three_events_and_never_pretooluse():
     assert {e: h[0]["timeout"] for e, h in events.items()} == {
         "SessionStart": 15, "PreInvocation": 10, "Stop": 10}
     for event, (handler,) in events.items():
-        assert handler["command"] == f"./scripts/te-hook --host antigravity --event {event}"
+        assert f"--host antigravity --event {event}" in handler["command"]
+        assert "./scripts/te-hook" in handler["command"] and "te-hook.cmd" in handler["command"]
     assert os.access(ROOT / "plugin/scripts/te-hook", os.X_OK)
+    assert (ROOT / "plugin/scripts/te-hook.cmd").is_file()
+    assert (ROOT / "plugin/scripts/te.cmd").is_file()
     # no other agent reads the root hook file: Claude Code's is `hooks/hooks.json`.
     assert "hooks" not in claude
+
+
+def test_antigravity_recognizes_modern_antigravity_tools(tp, tmp_path):
+    t = Transcript(tp)
+    t.prompt("modern tools")
+    t.call([("write_file", {"Path": "/work/repo/b.py"}),
+            ("edit_file", {"Path": "/work/repo/b.py"})],
+           [("created", {"type": "GENERIC"}), ("updated", {"type": "GENERIC"})])
+    host, work = Antigravity(), tmp_path / "w2"
+    work.mkdir()
+    path = host.mechanism_trace(str(tp), str(work))
+    traj = trace.load_trajectory(path)
+    assert ("Write", {"file_path": "/work/repo/b.py"}, "created", True) in traj
+    assert ("Edit", {"file_path": "/work/repo/b.py"}, "updated", True) in traj

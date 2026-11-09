@@ -209,9 +209,8 @@ Start `agy` and send a prompt in a repository, then check with
 `~/.tokeneconomizer/bin/te --host antigravity status`. `agy` has no plugin commands, so the
 plugin's commands run from a terminal. The plugin makes no model call through `agy`, which has no
 option that runs a prompt with every tool off, so the paid proposer and the loop guard are off
-and tool pruning is not available. macOS and Linux only:
-on Windows `agy` runs hook commands through `cmd /c`, and this plugin's launcher is a POSIX shell
-script. See [its limits](plugin/README.md#antigravity-cli).
+and tool pruning is not available. Works across Windows, macOS, and Linux (with dual .cmd/.sh launchers).
+See [its limits](plugin/README.md#antigravity-cli).
 
 **opencode** (experimental)
 
@@ -269,7 +268,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
-| Antigravity CLI (experimental) | agy 1.5.1, macOS and Linux | not tested |
+| Antigravity CLI & 2.0 (experimental) | agy 1.5.1+, Windows, macOS and Linux | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.

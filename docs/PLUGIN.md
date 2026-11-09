@@ -816,8 +816,7 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   `SessionStart`, an `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Calls a subagent
   makes are not in the transcript and are not seen. Transcript token fields are absent from older
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
-  on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
-  `cmd /c` on Windows, and the launcher is a POSIX shell script.
+  on the ledger's labelled fallback. Works across Windows, macOS, and Linux.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s
