@@ -1,13 +1,13 @@
 {
   "tokeneconomizer": {
     "SessionStart": [
-      { "type": "command", "command": "./scripts/te-hook --host antigravity --event SessionStart", "timeout": 15 }
+      { "type": "command", "command": "scripts\\te-hook.cmd --host antigravity --event SessionStart 2>nul || ./scripts/te-hook --host antigravity --event SessionStart", "timeout": 15 }
     ],
     "PreInvocation": [
-      { "type": "command", "command": "./scripts/te-hook --host antigravity --event PreInvocation", "timeout": 10 }
+      { "type": "command", "command": "scripts\\te-hook.cmd --host antigravity --event PreInvocation 2>nul || ./scripts/te-hook --host antigravity --event PreInvocation", "timeout": 10 }
     ],
     "Stop": [
-      { "type": "command", "command": "./scripts/te-hook --host antigravity --event Stop", "timeout": 10 }
+      { "type": "command", "command": "scripts\\te-hook.cmd --host antigravity --event Stop 2>nul || ./scripts/te-hook --host antigravity --event Stop", "timeout": 10 }
     ]
   }
 }
