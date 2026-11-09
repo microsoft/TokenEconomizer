@@ -20,6 +20,10 @@ from .jsonl import lines as _lines
 
 _CLAUDE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
                 "output_tokens")
+# The part of `cache_creation_input_tokens` written to the 1-hour cache, which Anthropic bills
+# at 2x input where the 5-minute cache is 1.25x. A message's usage splits its cache writes in
+# `cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
+_CLAUDE_1H = "cache_creation_1h_input_tokens"
 CONVERSATION = ("assistant", "user")
 
 
@@ -279,11 +283,25 @@ def claude_subagent_files(transcript_path):
     return sorted(glob.glob(os.path.join(stem, "subagents", "*.jsonl")))
 
 
+def _cache_write_1h(usage, counts):
+    """A message's 1-hour cache-write tokens, never more than the cache writes it reports: the
+    split is a breakdown of that total, and a notice with no usage of its own can carry one."""
+    split = usage.get("cache_creation")
+    if not isinstance(split, dict):
+        return 0
+    try:
+        n = int(split.get("ephemeral_1h_input_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(n, counts["cache_creation_input_tokens"]))
+
+
 def claude_session_usage(transcript_path, include_subagents=True):
     """Token breakdown of a Claude Code session, de-duplicated by assistant message id.
 
-    Returns the four breakdown fields `pricing.effective_tokens` reads, plus `model` (the most
-    used one), `requests` (distinct assistant messages carrying usage) and `files` read."""
+    Returns the four breakdown fields `pricing.effective_tokens` reads and the 1-hour share of
+    the cache writes (`cache_creation_1h_input_tokens`), plus `model` (the most used one),
+    `requests` (distinct assistant messages carrying usage) and `files` read."""
     files = [transcript_path] + (claude_subagent_files(transcript_path)
                                  if include_subagents else [])
     by_id, models, anon = {}, {}, 0
@@ -307,10 +325,11 @@ def claude_session_usage(transcript_path, include_subagents=True):
                 mid = f"anon-{path}-{anon}"
             # Later entries of the same message carry the final counts; keep the last.
             by_id[mid] = {k: int(usage.get(k) or 0) for k in _CLAUDE_KEYS}
+            by_id[mid][_CLAUDE_1H] = _cache_write_1h(usage, by_id[mid])
             model = msg.get("model")
             if model:
                 models[model] = models.get(model, 0) + 1
-    out = {k: sum(u[k] for u in by_id.values()) for k in _CLAUDE_KEYS}
+    out = {k: sum(u[k] for u in by_id.values()) for k in (*_CLAUDE_KEYS, _CLAUDE_1H)}
     out["requests"] = len(by_id)
     out["model"] = max(models, key=models.get) if models else None
     out["files"] = len([f for f in files if os.path.exists(f)])

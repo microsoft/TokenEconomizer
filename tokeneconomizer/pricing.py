@@ -25,6 +25,12 @@ silently mispriced.
     gpt-5.3-codex                    1.00     0.097       0.00        8.00
     gpt-5-codex (OpenAI direct)      1.00     0.10        1.00        8.00
 
+Anthropic bills a cache write by its lifetime: 1.25x for the 5-minute cache, 2x for the 1-hour
+one. A row that says how many of its cache-write tokens went to the 1-hour cache
+(`cache_creation_1h_input_tokens`, see cache_write_1h_tokens) has those priced at the table's
+`cache_write_1h`; a table without that entry, or a row without the field, prices every
+cache-write token at `cache_write` as before.
+
 Callers may override with an explicit effective_tokens(rec, weights=...).
 When the per-task breakdown is absent (older runs), effective_tokens() falls back to
 `tokens_total` at full weight so nothing crashes — call has_breakdown() to detect this.
@@ -46,14 +52,22 @@ When the per-task breakdown is absent (older runs), effective_tokens() falls bac
 # `codex` run bills sol.
 MODEL_WEIGHTS = {
     # --- per-model price snapshot (2026-07-27) ------------------------------
-    "claude-haiku-4-5":        dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-6":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-7":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-8":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-5":           dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-4-5":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-4-6":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-5":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "claude-haiku-4-5":        dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-6":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-7":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-8":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-5":           dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-4-5":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-4-6":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-5":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
     "gemini-2.5-pro":          dict(input=1.0, cache_read=0.096,  cache_write=0.0,   output=8.0),
     "gemini-3-flash-preview":  dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
     "gemini-3.1-pro-preview":  dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
@@ -101,7 +115,8 @@ AGENT_DEFAULT_MODEL = {
 WEIGHTS_CLAUDE = {
     "input": 1.0,         # input_tokens = fresh/uncached prompt tokens
     "cache_read": 0.10,   # cache_read_input_tokens
-    "cache_write": 1.25,  # cache_creation_input_tokens
+    "cache_write": 1.25,  # cache_creation_input_tokens (the 5-minute cache)
+    "cache_write_1h": 2.0,  # the part of them written to the 1-hour cache
     "output": 5.0,        # output_tokens (completion)
 }
 # Back-compat: modules that read pricing.WEIGHTS directly (figures, costmodel) were
@@ -163,11 +178,32 @@ def has_breakdown(rec):
     return isinstance(rec, dict) and rec.get("input_tokens") is not None
 
 
+def cache_write_1h_tokens(usage):
+    """How many of a usage breakdown's cache-write tokens went to the 1-hour cache.
+
+    Reads the flat `cache_creation_1h_input_tokens` a session reader records, else the
+    `cache_creation.ephemeral_1h_input_tokens` of an Anthropic `usage` object as it arrives.
+    Never more than `cache_creation_input_tokens`, of which it is a part; 0 when neither says."""
+    if not isinstance(usage, dict):
+        return 0
+    n = usage.get("cache_creation_1h_input_tokens")
+    if n is None:
+        split = usage.get("cache_creation")
+        n = split.get("ephemeral_1h_input_tokens") if isinstance(split, dict) else None
+    try:
+        n = int(n or 0)
+        total = int(usage.get("cache_creation_input_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(n, total))
+
+
 def effective_tokens(rec, weights=None):
     """Cache-aware effective cost of one task, in fresh-input-token equivalents.
 
     Uses the token breakdown (input / cache_read / cache_creation / output) when
-    present; otherwise falls back to `tokens_total` at full weight (legacy rows).
+    present, with the 1-hour share of the cache writes at its own price where the row
+    and the weight table both name it; otherwise falls back to `tokens_total` at full weight (legacy rows).
     The weight table is chosen per row (weights_for) from its agent/model unless an
     explicit `weights=` is passed. Returns 0 when neither breakdown nor total exists.
     """
@@ -177,8 +213,10 @@ def effective_tokens(rec, weights=None):
         cr = rec.get("cache_read_input_tokens") or 0
         cw = rec.get("cache_creation_input_tokens") or 0
         ot = rec.get("output_tokens") or 0
+        cw1h = cache_write_1h_tokens(rec)
         return (it * w["input"] + cr * w["cache_read"]
-                + cw * w["cache_write"] + ot * w["output"])
+                + (cw - cw1h) * w["cache_write"]
+                + cw1h * w.get("cache_write_1h", w["cache_write"]) + ot * w["output"])
     tt = rec.get("tokens_total") if isinstance(rec, dict) else None
     return tt if isinstance(tt, (int, float)) else 0
 
