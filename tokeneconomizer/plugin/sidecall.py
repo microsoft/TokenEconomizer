@@ -312,6 +312,8 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
             ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
         item = ev.get("item") or {}
         if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
             text = ev["item"].get("text") or text
@@ -722,6 +724,8 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
         try:
             ev = json.loads(line)
         except ValueError:
+            continue
+        if not isinstance(ev, dict):
             continue
         if ev.get("type") == "assistant.message":
             text = (ev.get("data") or {}).get("content") or text

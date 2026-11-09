@@ -1494,3 +1494,52 @@ def test_sidecalls_ignore_cleanup_errors(monkeypatch):
         created.clear()
         caller("prompt")
         assert created and all(getattr(td, "_ignore_cleanup_errors", False) for td in created), caller
+
+
+@pytest.mark.real_sidecalls
+def test_the_side_calls_skip_json_lines_that_are_not_objects(monkeypatch, tmp_path):
+    """Anything sharing the CLI's stdout can print a line that parses but is not an object
+    (null, a bare string, a number, an array); the reply behind it must still be read, not an
+    AttributeError that loses the whole call (issue #182)."""
+    import subprocess
+    from tokeneconomizer.plugin import probe, sidecall
+    junk = (None, [1, 2], "text", 42)
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
+    copilot_events(str(tmp_path / "cp" / "session-state" / "side1" / "events.jsonl"), [])
+
+    def fake_run(cmd, **kw):
+        if "codex" in (cmd[0] or ""):
+            out = "\n".join(json.dumps(e) for e in (*junk, {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "hi"}}))
+        else:
+            out = "\n".join(json.dumps(e) for e in (*junk, {
+                "type": "assistant.message", "data": {"content": "- use python -m pytest"}},
+                {"type": "result", "sessionId": "side1", "exitCode": 0}))
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    assert sidecall.codex_call("say hi")[0] == "hi"
+    text, eff = sidecall.copilot_call("propose facts")
+    assert text == "- use python -m pytest" and eff and eff > 0
+    sid, answer, _err = probe.run_session(str(tmp_path), {}, str(tmp_path), "")
+    assert sid == "side1" and answer == "- use python -m pytest"
+
+
+@pytest.mark.real_sidecalls
+def test_inspect_session_skips_hook_lines_that_do_not_parse(tmp_path, monkeypatch):
+    """The hook.end prefilter lets a corrupt or truncated line through; one such line must not
+    kill the whole inspection (issue #182)."""
+    from tokeneconomizer.plugin import probe
+    home = tmp_path / "cp"
+    log = home / "session-state" / "s1" / "events.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('{"type": "session.start", "data": {"context": {"cwd": "/r"}}}\n'
+                   '"hook.end sessionStart"\n'                      # parses, not an object
+                   '{broken "hook.end" "sessionStart"\n')            # does not parse at all
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    report = probe.inspect_session("s1")
+    assert report["session"] == "s1" and report["injected"] is False

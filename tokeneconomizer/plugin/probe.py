@@ -128,6 +128,8 @@ def run_session(repo, env, plugin, model, cli="copilot", timeout=600):
             ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
         if ev.get("type") == "result":
             sid = ev.get("sessionId")
         elif ev.get("type") == "assistant.message":
@@ -146,7 +148,11 @@ def inspect_session(sid):
     tests, tried_pytest = test_commands(cmds)
     for line in open(log, encoding="utf-8", errors="replace"):
         if '"hook.end"' in line and '"sessionStart"' in line:
-            out = (json.loads(line).get("data") or {}).get("output") or {}
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            out = (ev.get("data") or {}) if isinstance(ev, dict) else {}
             injected = injected or "fails here" in (out.get("additionalContext") or "")
     usage = trace.copilot_session_usage(log)
     first = tests[0] if tests else None

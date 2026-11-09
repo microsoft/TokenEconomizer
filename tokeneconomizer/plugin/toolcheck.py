@@ -78,6 +78,8 @@ def _init_tools(extra_args, cli=None, timeout=60):
                     ev = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(ev, dict):
+                    continue
                 if ev.get("type") == "system" and ev.get("subtype") == "init":
                     tools, version = ev.get("tools"), ev.get("claude_code_version")
                     break
