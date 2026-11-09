@@ -13,7 +13,8 @@ import shlex
 
 from .state import basename
 
-_HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
+# `<<<` is a here-string: its word is the input itself, so no body follows on the next lines.
+_HEREDOC_START = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 _OPS = {"&&", "||", ";", ";;", "|", "|&", "&", "\n", "(", ")"}
 _OUT = {">", ">>", ">|", "&>", "&>>"}                  # redirects that write their operand
 _SKIP_OPERAND = {"<", "<<", "<<<", "<&", ">&", "<>"}   # input, heredoc tags, fd duplication
