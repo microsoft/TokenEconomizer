@@ -46,6 +46,10 @@ person can tune by hand:
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
+  * media                       -- `audio`: add on-device transcripts of the audio files a prompt
+                                   names (an agent cannot read audio) to that prompt's context,
+                                   on hosts that take prompt context; macOS with swiftc. Off by
+                                   default (`plugin/media.py`);
   * local_model, local_roles   -- run the named side calls (`judge`, `nudge`, `proposer`;
                                    default `judge`) on an on-device model instead of the
                                    agent's CLI: `fm`, Apple's Foundation Models CLI on macOS 27.
@@ -100,6 +104,7 @@ LOCAL_ROLES = ("judge", "nudge", "proposer")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
+MEDIA = ("off", "audio")
 MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
@@ -193,6 +198,7 @@ class LiveConfig:
     repomap_python: str = ""
     repomap_timeout: int = 8
     paid_model: str = ""
+    media: str = "off"
     local_model: str = "off"
     local_roles: list = field(default_factory=lambda: ["judge"])
     local_judge_confidence: float = 0.9
@@ -209,7 +215,7 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
-                "local_model": LOCAL_MODELS,
+                "local_model": LOCAL_MODELS, "media": MEDIA,
                 "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
     _MIN = {"toolprune_quiet_minutes": 0}
@@ -314,7 +320,7 @@ class LiveConfig:
 # Environment variables, old names first so that a new name set alongside its old one wins.
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
-        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
+        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles", "TE_MEDIA": "media",
         "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",

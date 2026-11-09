@@ -799,6 +799,7 @@ first session there ends.
 | `local_model` | `off` | `fm`: run the side calls `local_roles` names on Apple's on-device Foundation Models CLI (`/usr/bin/fm`, macOS 27 with Apple Intelligence) instead of the agent's CLI; see [On-device side calls](#on-device-side-calls-macos) |
 | `local_roles` | `judge` | which side calls `local_model` takes: `judge`, `nudge` (the redirect writer), `proposer`, separated by commas |
 | `local_judge_confidence` | `0.9` | how sure a stuck verdict from the on-device judge must be to count; below it the turn is spared |
+| `media` | `off` | `audio`: add on-device transcripts of the audio files a prompt names to that prompt's context; see [Audio transcripts](#audio-transcripts-macos) |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |
@@ -926,6 +927,23 @@ steps, most of them above the guard's own `judge_confidence` (0.7).
 ~/.tokeneconomizer/bin/te config set local_model=fm
 ~/.tokeneconomizer/bin/te config set local_roles=judge,nudge     # also the redirect writer
 ```
+
+## Audio transcripts (macOS)
+
+An agent cannot read audio: Claude Code's Read refuses an `.m4a` or `.aiff` as binary before any
+hook sees the call. With `media=audio`, when a prompt names an audio file that exists (relative to
+the session's directory; `aiff`, `aif`, `wav`, `m4a`, `mp3`, `caf`, `aac`, `flac`; up to three,
+50 MB each; paths without spaces), the prompt hook transcribes it on the Mac with Apple's Speech
+framework and adds the transcript to that prompt's context, as the repository map is added. No
+model call is made and nothing leaves the machine. Transcripts are cached by the file's content.
+
+The transcriber is a small Swift program (`plugin/scripts/te-transcribe.swift`) that is compiled
+once into `~/.tokeneconomizer/bin/`: run `te media setup`, or the first prompt that names an audio
+file starts the build in the background and goes without a transcript. It needs macOS 26 or later
+and `swiftc` (Xcode or the Command Line Tools); without them `media=audio` does nothing and says
+so once. `te media` reports whether it is built. Only hosts whose prompt hook can add context get
+transcripts (Claude Code, the Copilot CLI, Pi, opencode, Hermes Agent); it was verified on Claude
+Code only.
 
 ## Troubleshooting
 

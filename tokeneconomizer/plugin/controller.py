@@ -268,6 +268,36 @@ class LiveController:
             seen["repomap"] = True
         return out
 
+    def _media(self, prompt):
+        """`media=audio`: the transcripts of the audio files this prompt names, as context. The
+        first prompt that needs the helper starts building it in the background and goes
+        without; a missing toolchain is said once."""
+        from . import media
+        try:
+            block, info = media.for_prompt(prompt, self.p.get("cwd") or self.ctx.repo.root,
+                                           env=self.ctx.env)
+        except Exception:
+            return []
+        if not info["files"]:
+            return []
+        self._log("media", **info, chars=len(block))
+        out = []
+        seen = self.store.read("notices.json") or {}
+        if info["needs_helper"] and not seen.get("media_building"):
+            seen["media_building"] = True
+            if media.supported():
+                self.ctx.spawn(["media", "setup"], "media.log")
+                out.append(self.host.notice(
+                    "TokenEconomizer: building the on-device audio transcriber (once); audio "
+                    "named from the next prompt on is transcribed into context."))
+            else:
+                out.append(self.host.notice(
+                    "TokenEconomizer: media=audio needs macOS with swiftc; doing nothing."))
+            self.store.write("notices.json", seen)
+        if block and not self.cfg.shadow:
+            out.append(self.host.context("UserPromptSubmit", block))
+        return out
+
     # ---- prompt-turns -------------------------------------------------------------------
     def _close_turn(self, s, stopped_normally):
         data = s.get("turn")
@@ -287,11 +317,14 @@ class LiveController:
         return summary
 
     def user_prompt(self):
-        if self.cfg.loopguard == "off" and not (self.cfg.repomap == "on"
-                                             and self.host.prompt_context):
+        media_on = self.cfg.media == "audio" and self.host.prompt_context
+        if self.cfg.loopguard == "off" and not media_on and not (self.cfg.repomap == "on"
+                                                                 and self.host.prompt_context):
             return {}
         s = self._session()
         outputs = []
+        if media_on:
+            outputs += self._media(self.p.get("prompt") or "")
         if self.cfg.repomap == "on" and self.host.prompt_context and not s.get("repomap_done"):
             # Once per session, on its first prompt: a map ranked toward what the prompt names.
             s["repomap_done"] = True
