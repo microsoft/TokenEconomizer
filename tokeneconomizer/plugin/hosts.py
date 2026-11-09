@@ -195,6 +195,12 @@ class Host:
     def session_usage(self, transcript_path):
         raise NotImplementedError
 
+    def log_head(self, path):
+        """What the head of a session log says about the session, for history import:
+        {"session_id", "cwd", "started", "entrypoint"} -- the Claude Code envelope's four;
+        a host whose logs are not in that format overrides this."""
+        return trace.claude_log_head(path)
+
     def prompt_count(self, transcript_path):
         """How many prompts the finished session ran; None where the log does not say."""
         return None
@@ -426,6 +432,58 @@ class Pi(Host):
         out = os.path.join(workdir, "pi_trace.jsonl")
         n = trace.pi_session_to_claude(transcript_path, out)
         return out if n is not None else None
+
+    def log_head(self, path):
+        """Pi's log is not Claude Code's envelope: its `session` line says the same four."""
+        head = trace.pi_session_header(path)
+        started = head.get("timestamp")
+        if isinstance(started, str):
+            started = trace._epoch(started)
+        else:
+            started = None
+        return {"session_id": head.get("id"), "cwd": head.get("cwd"),
+                "started": started, "entrypoint": ""}
+
+    keeps_history = True
+
+    def history(self, env, extra_dirs=()):
+        """Every session log under `~/.pi/agent/sessions` and omp's `~/.omp/agent/sessions`
+        (omp is a Pi fork whose extension this plugin rides), then the `extra_dirs`: each a
+        `sessions` folder or a folder holding one. Files are named `<timestamp>_<id>.jsonl`;
+        the id comes after the last `_`. A session filed in two of them is listed once, from
+        the first."""
+        import glob
+        home = os.path.expanduser("~")
+        dirs = [os.path.join(home, ".pi", "agent", "sessions"),
+                os.path.join(home, ".omp", "agent", "sessions")]
+        for d in extra_dirs or ():
+            d = os.path.expanduser(str(d))
+            dirs.append(os.path.join(d, "sessions") if os.path.isdir(os.path.join(d, "sessions"))
+                        else d)
+        out, seen, seen_dirs = [], set(), set()
+        for d in dirs:
+            real = os.path.realpath(d)
+            if real in seen_dirs:
+                continue
+            seen_dirs.add(real)
+            for path in sorted(glob.glob(os.path.join(d, "*", "*.jsonl"))):
+                name = os.path.basename(path)
+                if not name.endswith(".jsonl"):
+                    continue
+                sid = name[:-len(".jsonl")]
+                sid = sid.rsplit("_", 1)[-1]
+                if sid in seen:
+                    continue
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                if not os.path.isfile(path):
+                    continue
+                seen.add(sid)
+                out.append({"session_id": sid, "folder": os.path.basename(os.path.dirname(path)),
+                            "path": path, "mtime": st.st_mtime, "size": st.st_size})
+        return out
 
     def prompt_count(self, transcript_path):
         return trace.pi_prompt_count(transcript_path)
@@ -1204,6 +1262,10 @@ def default_host(env=None, recent=None):
     env = os.environ if env is None else env
     if env.get("TE_HOST") in HOSTS:
         return env["TE_HOST"]
+    if env.get("OMPCODE") == "1":
+        # omp (a Pi fork) marks its shells OMPCODE=1 as well as CLAUDECODE=1, and its
+        # sessions fold under the Pi host: check it before Claude Code's marker.
+        return "pi"
     if env.get("CLAUDECODE") == "1":
         return "claude"
     if env.get("COPILOT_CLI") == "1":
