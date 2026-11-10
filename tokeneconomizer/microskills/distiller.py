@@ -534,10 +534,12 @@ def parse_payload(raw):
 
 
 def _reparse_cmds(dg):
-    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize)."""
+    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize). The blobs no
+    longer say which output came from which command, so the whole output rides on the first
+    command: pairing them line by line would drop every output line past the command count."""
     cmds = dg.get("_cmd_blob", "").split("\n")
-    outs = dg.get("_out_blob", "").split("\n")
-    return list(zip(cmds, outs + [""] * (len(cmds) - len(outs))))
+    out = dg.get("_out_blob", "")
+    return [(c, out if i == 0 else "") for i, c in enumerate(cmds)]
 
 
 # ---- distiller -------------------------------------------------------------
