@@ -25,6 +25,7 @@ _CLAUDE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input
 # `cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
 _CLAUDE_1H = "cache_creation_1h_input_tokens"
 CONVERSATION = ("assistant", "user")
+SYNTHETIC_MODEL = "<synthetic>"     # the model of an entry Claude Code wrote, not a model's reply
 
 
 def claude_calls(lines):
@@ -301,7 +302,8 @@ def claude_session_usage(transcript_path, include_subagents=True):
 
     Returns the four breakdown fields `pricing.effective_tokens` reads and the 1-hour share of
     the cache writes (`cache_creation_1h_input_tokens`), plus `model` (the most used one),
-    `requests` (distinct assistant messages carrying usage) and `files` read."""
+    `requests` (distinct assistant messages carrying usage, less the `<synthetic>` ones Claude
+    Code writes itself) and `files` read."""
     files = [transcript_path] + (claude_subagent_files(transcript_path)
                                  if include_subagents else [])
     by_id, models, anon = {}, {}, 0
@@ -318,6 +320,10 @@ def claude_session_usage(transcript_path, include_subagents=True):
             msg = ev.get("message") or {}
             usage = msg.get("usage")
             if not isinstance(usage, dict):
+                continue
+            # Claude Code writes its own notices (an API error, "No response requested.") as
+            # assistant entries of model `<synthetic>` with zero usage: no request was made.
+            if msg.get("model") == SYNTHETIC_MODEL:
                 continue
             mid = msg.get("id")
             if not mid:

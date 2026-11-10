@@ -152,6 +152,22 @@ def test_claude_usage_counts_each_message_once_and_includes_subagents(tmp_path):
     assert trace.claude_session_usage(main, include_subagents=False)["requests"] == 2
 
 
+def test_claude_usage_leaves_out_the_notices_claude_code_writes(tmp_path):
+    # An API error or "No response requested." is an assistant entry of model `<synthetic>`, with
+    # its own id and zero usage: no request, and no model to price the session by.
+    path = _claude_lines(str(tmp_path / "sess.jsonl"), n_messages=1, model="claude-sonnet-4-5")
+    zero = dict.fromkeys(("input_tokens", "cache_read_input_tokens",
+                          "cache_creation_input_tokens", "output_tokens"), 0)
+    with open(path, "a") as fh:
+        for i, text in enumerate(("API Error: Connection error.", "No response requested.")):
+            fh.write(json.dumps({"type": "assistant", "isApiErrorMessage": i == 0, "message": {
+                "id": f"synthetic-{i}", "model": "<synthetic>", "role": "assistant",
+                "usage": zero, "content": [{"type": "text", "text": text}]}}) + "\n")
+    u = trace.claude_session_usage(path)
+    assert u["requests"] == 1 and u["model"] == "claude-sonnet-4-5"
+    assert u["cache_read_input_tokens"] == 1000
+
+
 def test_deferred_tools_are_read_from_attachments(tmp_path):
     p = str(tmp_path / "t.jsonl")
     with open(p, "w") as fh:
@@ -653,6 +669,15 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("cd /t && sed -i.bak -e 's/a/b/' -e 's/c/d/' x.py y.py && pytest -q", ["x.py", "y.py"]),
     ("sed -i '' 's/a/b/' x.py", ["x.py"]),                         # BSD sed's empty suffix
     ("perl -pi -e 's/foo/bar/' src/a.rs", ["a.rs"]),
+    # the script inside the option word, not in the next word
+    ("sed -i --expression='s/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sed --in-place --expression=s/a/b/ a.py b.py", ["a.py", "b.py"]),
+    ("sed -i -e's/a/b/' x.py", ["x.py"]),
+    ("sed -i --file=fix.sed x.py", ["x.py"]),
+    ("sed -ne 's/a/b/p' -i x.py", ["x.py"]),
+    ("perl -i -pe's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -i.orig -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -Mre=eval -i -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
     ("cat > repro.py <<'EOF'\nprint(1 > 0)\nEOF\npython repro.py", ["repro.py"]),
     ("echo 'x' | tee -a setup.cfg", ["setup.cfg"]),
     # how Sonnet 5.5 edits: an inline script that reads the file and writes it back
@@ -679,9 +704,20 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     # a quoted `|` in a sed script must not split the command (seen live: sympy-13091)
     ("sed -i -E 's/x (<|<=|>|>=) y/z/' numbers.py expr.py", ["numbers.py", "expr.py"]),
     ("sed -i 's/a/b/' x.py 2>&1 | tail -2", ["x.py"]),
+    # a here-string (`<<<`) is not a heredoc: the lines after it are still commands
+    ("grep -q ok <<< \"ok\"\nsed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("read -r v <<< done\ncat > fix.py <<'EOF'\nx = 1\nEOF", ["fix.py"]),
 ])
 def test_edits_made_through_the_shell_are_recognised(cmd, want):
     assert guard.shell_edit_targets(cmd) == want
+
+
+def test_an_edit_after_a_here_string_is_counted():
+    """`<<<` feeds one word to a command; reading it as a heredoc tag made every later line of
+    the command a heredoc body, so a `sed -i` after it was not counted as an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "grep -q ok <<< ok\nsed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    assert g.edits == 1 and g.whole.edit_counts == {"mod.py": 1}
 
 
 def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy():
@@ -696,6 +732,16 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
     g.fold("Bash", {"command": "sed -i 's/b/c/' pkg/mod.py && pytest -q"},
            "FAILED tests/test_m.py::t - AssertionError")
     assert g.edits == 3 and g.last_verify > g.last_edit and not g.resolved_proxy()
+
+
+def test_a_sed_script_given_inside_its_option_word_still_counts_the_edit():
+    """`sed -i --expression=...` and `perl -i -pe'...'` carry the script in the option word.
+    The file after it is the edited file, not the script, so the turn records an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "sed -i --expression='s/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "perl -i -pe's/b/c/' pkg/mod.py"}, "", 0)
+    assert g.edits == 2 and g.whole.edit_counts == {"mod.py": 2}
+    assert "[edits mod.py]" in g.st.recent_digest()
 
 
 def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
