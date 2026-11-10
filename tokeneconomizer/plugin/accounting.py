@@ -35,6 +35,7 @@ def summarize(records):
 
     A session imported from the agent's history (`imported: true`) ran before the plugin: it is
     counted on its own (`imported_sessions`) and left out of every other number."""
+    records = [r for r in records if isinstance(r, dict)]
     imported = [r for r in records if r.get("kind") == "session" and r.get("imported")]
     records = [r for r in records if not r.get("imported")]
     sessions = [r for r in records if r.get("kind") == "session"]

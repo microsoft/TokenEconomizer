@@ -235,7 +235,7 @@ def dir_label(repo_dir):
             if names:
                 return names[0][:-5].replace("__", "/")
         for rec in reversed(st.read_lines("ledger.jsonl")):
-            if rec.get("repo"):
+            if isinstance(rec, dict) and rec.get("repo"):
                 return rec["repo"]
     return ""
 
@@ -386,7 +386,8 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
                 refold.add(sid)
 
         incoming = set(sids)
-        s_ledger, d_ledger = src.read_lines("ledger.jsonl"), dst.read_lines("ledger.jsonl")
+        s_ledger = [r for r in src.read_lines("ledger.jsonl") if isinstance(r, dict)]
+        d_ledger = [r for r in dst.read_lines("ledger.jsonl") if isinstance(r, dict)]
         # One session record per session: 0.1.0 could fold a session it had split over two keys
         # under both, and its cost counts once -- the later fold's, which read the longer log.
         # A refolded session's record is written again by its fold.
@@ -421,7 +422,7 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
                 rec["folded"] = False
                 dst.write(os.path.join("sessions", f"{sid}.json"), rec)
         for r in src.read_lines("events.jsonl"):
-            if r.get("session_id") in incoming:
+            if isinstance(r, dict) and r.get("session_id") in incoming:
                 dst.append("events.jsonl", r)
         if whole:
             _merge_envelope(src, dst)
