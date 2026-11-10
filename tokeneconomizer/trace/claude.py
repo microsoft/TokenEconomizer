@@ -21,6 +21,7 @@ from .jsonl import lines as _lines
 _CLAUDE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
                 "output_tokens")
 CONVERSATION = ("assistant", "user")
+SYNTHETIC_MODEL = "<synthetic>"     # the model of an entry Claude Code wrote, not a model's reply
 
 
 def claude_calls(lines):
@@ -283,7 +284,8 @@ def claude_session_usage(transcript_path, include_subagents=True):
     """Token breakdown of a Claude Code session, de-duplicated by assistant message id.
 
     Returns the four breakdown fields `pricing.effective_tokens` reads, plus `model` (the most
-    used one), `requests` (distinct assistant messages carrying usage) and `files` read."""
+    used one), `requests` (distinct assistant messages carrying usage, less the `<synthetic>`
+    ones Claude Code writes itself) and `files` read."""
     files = [transcript_path] + (claude_subagent_files(transcript_path)
                                  if include_subagents else [])
     by_id, models, anon = {}, {}, 0
@@ -300,6 +302,10 @@ def claude_session_usage(transcript_path, include_subagents=True):
             msg = ev.get("message") or {}
             usage = msg.get("usage")
             if not isinstance(usage, dict):
+                continue
+            # Claude Code writes its own notices (an API error, "No response requested.") as
+            # assistant entries of model `<synthetic>` with zero usage: no request was made.
+            if msg.get("model") == SYNTHETIC_MODEL:
                 continue
             mid = msg.get("id")
             if not mid:

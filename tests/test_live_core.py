@@ -152,6 +152,22 @@ def test_claude_usage_counts_each_message_once_and_includes_subagents(tmp_path):
     assert trace.claude_session_usage(main, include_subagents=False)["requests"] == 2
 
 
+def test_claude_usage_leaves_out_the_notices_claude_code_writes(tmp_path):
+    # An API error or "No response requested." is an assistant entry of model `<synthetic>`, with
+    # its own id and zero usage: no request, and no model to price the session by.
+    path = _claude_lines(str(tmp_path / "sess.jsonl"), n_messages=1, model="claude-sonnet-4-5")
+    zero = dict.fromkeys(("input_tokens", "cache_read_input_tokens",
+                          "cache_creation_input_tokens", "output_tokens"), 0)
+    with open(path, "a") as fh:
+        for i, text in enumerate(("API Error: Connection error.", "No response requested.")):
+            fh.write(json.dumps({"type": "assistant", "isApiErrorMessage": i == 0, "message": {
+                "id": f"synthetic-{i}", "model": "<synthetic>", "role": "assistant",
+                "usage": zero, "content": [{"type": "text", "text": text}]}}) + "\n")
+    u = trace.claude_session_usage(path)
+    assert u["requests"] == 1 and u["model"] == "claude-sonnet-4-5"
+    assert u["cache_read_input_tokens"] == 1000
+
+
 def test_deferred_tools_are_read_from_attachments(tmp_path):
     p = str(tmp_path / "t.jsonl")
     with open(p, "w") as fh:
