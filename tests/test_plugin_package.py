@@ -234,6 +234,17 @@ def test_with_only_an_old_python_the_launcher_still_hands_it_the_hook(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_a_shim_that_runs_no_python_is_passed_over(tmp_path):
+    """A pyenv shim with no version set exits 127 and runs nothing: with no other Python on
+    PATH, the launcher answers no change itself."""
+    shim = tmp_path / "shims" / "python3"
+    _script(shim, 'echo "pyenv: python3: command not found" >&2\nexit 127')
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"}, {"PATH": str(shim.parent)})
+    assert code == 0 and json.loads(out) == {}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
 def test_te_python_runs_as_named_even_beside_a_newer_python(tmp_path):
     """`TE_PYTHON` is the person's own choice: the launcher runs it without a probe, and the
     bootstrap says what it needs if it is too old."""

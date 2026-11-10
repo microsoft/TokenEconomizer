@@ -39,8 +39,10 @@ else
   # TE_PYTHON is the person's own choice: it runs as named. Otherwise the first python3 on PATH
   # can be older than the bootstrap's minimum (macOS /usr/bin/python3 is 3.9, and an agent's
   # hook PATH is often not a login shell's), which would make the plugin a silent no-op with a
-  # newer Python installed: take the first one new enough. With none, run the first one found,
-  # so the bootstrap still fails open / says what it needs. The probe skips `site` (-E -S).
+  # newer Python installed: take the first one new enough. With none, run the first one too old
+  # (the probe exits 1), so the bootstrap still fails open / says what it needs; a name that
+  # runs no Python (a pyenv shim with no version set exits 127) is passed over. The probe
+  # skips `site` (-E -S).
   if [ -n "${TE_PYTHON:-}" ] && command -v "$TE_PYTHON" >/dev/null 2>&1; then
     exec "$TE_PYTHON" "$dir/te_bootstrap.py" hook "$@"
   fi
@@ -48,10 +50,11 @@ else
   old=
   for py in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
     command -v "$py" >/dev/null 2>&1 || continue
-    if "$py" -E -S -c "$probe" </dev/null >/dev/null 2>&1; then
-      exec "$py" "$dir/te_bootstrap.py" hook "$@"
-    fi
-    [ -n "$old" ] || old=$py
+    "$py" -E -S -c "$probe" </dev/null >/dev/null 2>&1
+    case $? in
+      0) exec "$py" "$dir/te_bootstrap.py" hook "$@" ;;
+      1) [ -n "$old" ] || old=$py ;;
+    esac
   done
   [ -n "$old" ] && exec "$old" "$dir/te_bootstrap.py" hook "$@"
 fi
