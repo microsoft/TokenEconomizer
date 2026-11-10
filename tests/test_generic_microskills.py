@@ -335,3 +335,27 @@ def test_the_generic_digest_keeps_line_breaks_of_list_tool_results(tmp_path):
     dg = dist.build_generic_digest("acme/web", p, "s0")
     assert dg["failed_commands"] == [
         {"cmd": "npm run lint", "error": "error: missing script: lint"}]
+
+
+def test_an_output_extractor_authored_on_a_tick_reads_every_output_line(tmp_path, monkeypatch):
+    """An extractor the proposer authors is computed over the window it was authored from, so a
+    fact of the same tick can name it. Over the window's saved blobs it must read what it reads
+    over a live session: the whole output, not the first line of output per command line."""
+    monkeypatch.setattr(dist, "PROPOSE_EVERY", 3)
+
+    def runner(prompt, model):
+        return json.dumps({
+            "extractors": [{"name": "missing_module", "kind": "out_regex",
+                            "pattern": r"Cannot find module"}],
+            "facts": [{"id": "install-first", "claim": "npm test needs npm install first",
+                       "injection": "Run `npm install` before `npm test` in a fresh checkout.",
+                       "detector": {"scope": "missing_module", "confirm": r"Cannot find module"},
+                       "cite": ["s0", "s1"]}]}), 100.0
+    d = dist.Distiller("acme/web", runner=runner, vocab=GENERIC)
+    for i in range(2):
+        d.update(_session(tmp_path, i, [
+            ("Bash", {"command": "npm test"},
+             "> web@1.0.0 test\n> jest\n\nFAIL src/app.test.js\n"
+             "Cannot find module 'left-pad' from 'src/app.js'")]), iid=f"s{i}")
+    assert [dg["features"]["missing_module"] for dg in d.window] == [True, True]
+    assert "install-first" in d.facts
