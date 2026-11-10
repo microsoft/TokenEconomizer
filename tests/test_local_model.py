@@ -41,6 +41,12 @@ def test_local_settings_come_from_the_environment(tmp_path):
     assert (c.local_model, c.local_roles) == ("fm", ["judge", "proposer"])
 
 
+@pytest.fixture(autouse=True)
+def _on_macos(monkeypatch):
+    """`fm` runs only on macOS; these tests run everywhere, as if there."""
+    monkeypatch.setattr(sidecall, "_macos", lambda: True)
+
+
 # ---- routing -------------------------------------------------------------------------------
 @pytest.fixture
 def fm_ok(monkeypatch):
@@ -59,6 +65,38 @@ def test_no_local_runner_unless_turned_on_and_the_role_listed(fm_ok):
     assert sidecall.local_runner("judge", cfg()) is None
     assert sidecall.local_runner("nudge", cfg(local_model="fm")) is None
     assert sidecall.local_runner("judge", cfg(local_model="fm")) is not None
+
+
+def test_local_routes_reads_only_the_settings_and_the_platform(monkeypatch):
+    def probe(*a, **k):
+        raise AssertionError("local_routes ran a subprocess")
+    monkeypatch.setattr(sidecall, "fm_available", probe)
+    monkeypatch.setattr(sidecall.subprocess, "run", probe)
+    assert sidecall.local_routes("judge", cfg(local_model="fm"))
+    assert not sidecall.local_routes("nudge", cfg(local_model="fm"))
+    assert not sidecall.local_routes("judge", cfg())
+    monkeypatch.setattr(sidecall, "_macos", lambda: False)
+    assert not sidecall.local_routes("judge", cfg(local_model="fm"))
+
+
+@pytest.mark.parametrize("local_model, expect", [("fm", "AsyncJudge"), ("off", "NoVerdict")])
+def test_a_paused_hosts_hook_picks_its_judge_from_the_settings_without_probing_fm(
+        monkeypatch, local_model, expect):
+    # PostToolUse runs `_judge` in a new process on every tool call: it must not run `fm`.
+    from tokeneconomizer.plugin import controller
+    monkeypatch.setattr(sidecall, "paused", lambda host, root=None: {"at": 1.0})
+    monkeypatch.setattr(sidecall, "fm_available", lambda *a, **k: pytest.fail("probed fm"))
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda *a, **k: pytest.fail("ran a process"))
+    ctx = type("Ctx", (), {"config": cfg(local_model=local_model), "root": None})()
+    host = type("Host", (), {"name": "claude"})()
+    ctl = type("C", (), {"host": host, "ctx": ctx, "sid": "S"})()
+    verdict = controller.LiveController._judge(ctl, {"judge_confidence": 0.7}, envelope={})
+    assert type(verdict).__name__ == expect
+
+
+def test_no_local_runner_off_macos(fm_ok, monkeypatch):
+    monkeypatch.setattr(sidecall, "_macos", lambda: False)
+    assert sidecall.local_runner("judge", cfg(local_model="fm")) is None
 
 
 def test_no_local_runner_without_fm(monkeypatch):
@@ -114,7 +152,7 @@ def test_fm_call_runs_greedy_with_the_schema_file_and_the_prompt_on_stdin(monkey
     monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
     text, eff = sidecall.fm_call("PROMPT", schema=sidecall.JUDGE_SCHEMA)
     assert (text, eff) == ('{"stuck": false}', 0)
-    assert seen["cmd"][:4] == ["fm", "respond", "--no-stream", "--greedy"]
+    assert seen["cmd"][:4] == ["/usr/bin/fm", "respond", "--no-stream", "--greedy"]
     assert seen["input"] == "PROMPT" and "PROMPT" not in seen["cmd"]
     assert seen["schema"]["required"] == ["stuck", "confidence", "reason"]
 
@@ -143,18 +181,23 @@ def test_fm_call_that_cannot_start_returns_none(tmp_path, monkeypatch):
 
 
 @pytest.mark.real_sidecalls
-@pytest.mark.parametrize("which, rc, out, ok", [
-    (None, 0, "System model available", False),
-    ("/usr/bin/fm", 0, "System model available", True),
-    ("/usr/bin/fm", 0, "System model unavailable: modelNotReady", False),
-    ("/usr/bin/fm", 1, "", False),
+@pytest.mark.parametrize("macos, installed, rc, out, ok", [
+    (True, False, 0, "System model available", False),
+    (False, True, 0, "System model available", False),
+    (True, True, 0, "System model available", True),
+    (True, True, 0, "System model unavailable: modelNotReady", False),
+    (True, True, 1, "", False),
 ])
-def test_fm_available(monkeypatch, which, rc, out, ok):
+def test_fm_available_runs_usr_bin_fm_on_macos_only(monkeypatch, macos, installed, rc, out, ok):
+    ran = []
     monkeypatch.setattr(sidecall, "_fm_ok", {})
-    monkeypatch.setattr(sidecall.shutil, "which", lambda name: which)
-    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(
-        cmd, rc, stdout=out, stderr=""))
+    monkeypatch.setattr(sidecall, "_macos", lambda: macos)
+    monkeypatch.setattr(sidecall.os, "access", lambda p, m: installed and p == "/usr/bin/fm")
+    monkeypatch.setattr(sidecall.shutil, "which", lambda *a, **k: pytest.fail("looked up PATH"))
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **k: ran.append(cmd) or
+                        subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=""))
     assert sidecall.fm_available() is ok
+    assert ran == ([["/usr/bin/fm", "available"]] if macos and installed else [])
 
 
 # ---- the judge reads the local verdict -----------------------------------------------------

@@ -917,12 +917,13 @@ would send the agent's CLI, on stdin, with greedy decoding; the judge's call als
 schema for its verdict (`fm respond --schema`), which constrains what the model can return. Its
 window is 4,096 tokens, enough for the judge's and the redirect writer's prompts.
 
-The ledger charges an on-device call 0 tokens. A call it cannot make (no `fm`, the model not
-ready, a prompt over its window, no reply) leaves a line in `errors.log` and goes to the agent's
-CLI as before, so turning this on never leaves the guard without its judge; while that CLI is
-paused (signed out), the on-device judge still answers. A stuck verdict from the on-device judge
-counts only at `local_judge_confidence` (0.9) or above: its confidences come in a few coarse
-steps, most of them above the guard's own `judge_confidence` (0.7).
+The ledger charges an on-device call 0 tokens. Without `/usr/bin/fm`, or with its model not ready,
+the call goes to the agent's CLI as before; a call `fm` cannot answer (a prompt over its window, no
+reply) leaves a line in `errors.log` and goes there too, so turning this on never leaves the guard
+without its judge. While that CLI is paused (signed out), the on-device judge still answers. On any
+system but macOS the setting does nothing. A stuck verdict from the on-device judge counts only at
+`local_judge_confidence` (0.9) or above: its confidences come in a few coarse steps, most of them
+above the guard's own `judge_confidence` (0.7).
 
 ```text
 ~/.tokeneconomizer/bin/te config set local_model=fm

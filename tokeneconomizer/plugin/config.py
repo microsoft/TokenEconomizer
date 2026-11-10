@@ -57,12 +57,10 @@ person can tune by hand:
                                    model unavailable, no reply -- falls back to the agent's CLI.
                                    Local calls are charged 0 tokens;
   * local_judge_confidence      -- the confidence a stuck verdict from the local judge must reach
-                                   to count (default 0.9); below it the turn is spared. The
-                                   local model's confidences cluster (0.65/0.72/0.85/0.92), so
-                                   the guard's own `judge_confidence` (0.7) would let nearly
-                                   every local "stuck" through; 0.9 is where, on 302 replayed
-                                   SWE-agent judge points, it redirected fewer successful runs
-                                   than Haiku at 0.7 while keeping the same separation;
+                                   to count (default 0.9); below it the turn is spared. The local
+                                   model's confidences come in coarse steps, so the guard's own
+                                   `judge_confidence` would let nearly every local "stuck"
+                                   through; how 0.9 was chosen: microsoft/TokenEconomizer#186;
   * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;

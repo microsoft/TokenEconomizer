@@ -58,6 +58,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from .. import trace
@@ -754,7 +755,9 @@ NO_SIDE_CALLS = frozenset({"antigravity"})
 # it returns the object every time. A call it cannot make returns None, and the caller falls back
 # to the agent's own CLI, so turning this on never costs a verdict.
 
-FM_CLI = "fm"
+# Apple's Foundation Models CLI: macOS 27 ships it here, so it is run by this path, never looked
+# up on PATH, and only on macOS.
+FM_CLI = "/usr/bin/fm"
 FM_TIMEOUT_S = 60
 # The judge's verdict, as `loopguard.judge.llm_stuck_judge` parses it.
 JUDGE_SCHEMA = {
@@ -769,11 +772,24 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _fm_ok = {}
 
 
+def _macos():
+    return sys.platform == "darwin"
+
+
+def local_routes(role, config):
+    """Whether `local_model` sends `role`'s side call on-device: the settings and the platform
+    alone, no subprocess, so a hook can ask on every tool call. Whether the model answers is
+    `fm_available`'s to say, in the judge's own job."""
+    return (_macos() and getattr(config, "local_model", "off") == "fm"
+            and role in (getattr(config, "local_roles", None) or ()))
+
+
 def fm_available(cli=FM_CLI):
-    """Whether `fm` is on PATH and reports its on-device model available (once per process)."""
+    """Whether `fm` is installed (macOS only) and reports its on-device model available (once
+    per process)."""
     if cli not in _fm_ok:
         ok = False
-        if shutil.which(cli):
+        if _macos() and os.access(cli, os.X_OK):
             try:
                 out = subprocess.run([cli, "available"], capture_output=True, encoding="utf-8",
                                      errors="replace", timeout=30, env=_env(),
@@ -814,9 +830,7 @@ def local_runner(role, config, fallback=None):
     """The side-call runner for `role` when `local_model` routes it on-device, else None. On a
     failed local call the runner tries `fallback` (the agent's own runner), so a turned-on local
     model never loses a verdict; with no fallback (a host in `NO_SIDE_CALLS`) it returns ''."""
-    if getattr(config, "local_model", "off") != "fm" or role not in getattr(config, "local_roles", ()):
-        return None
-    if not fm_available():
+    if not local_routes(role, config) or not fm_available():
         return None
     schema = ROLE_SCHEMAS.get(role)
 
