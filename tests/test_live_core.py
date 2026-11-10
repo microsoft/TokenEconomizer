@@ -1362,6 +1362,18 @@ def test_a_runner_beside_a_heredoc_is_still_judged_by_its_status(cmd):
     assert turn.status_of_tests(cmd) == "own"
 
 
+@pytest.mark.parametrize("cmd, want", [
+    ("bash -lc 'pytest -q <<EOF\ny\nEOF'", "own"),
+    ("bash -lc \"pytest -q && cat <<'EOF'\nsummary\nEOF\"", "own"),
+    ("bash -lc \"gh pr create --body-file - <<'EOF'\npytest -q\nEOF\"", None),
+])
+def test_a_heredoc_that_ends_a_codex_script_is_read_inside_the_script(cmd, want):
+    """Codex records `bash -lc '<script>'`. A heredoc that ends the script closes on `EOF'` there,
+    not on a line of its own, so its body is left out after the unwrap: the run before it still
+    counts, and a runner named in its body still does not."""
+    assert turn.status_of_tests(cmd) == want
+
+
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
 
 
