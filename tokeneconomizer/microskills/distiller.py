@@ -79,6 +79,8 @@ def load_calls(fp):
             d = json.loads(line)
         except Exception:
             continue
+        if not isinstance(d, dict):
+            continue
         m = d.get("message")
         if not isinstance(m, dict) or d.get("type", "assistant") not in CONVERSATION:
             continue
