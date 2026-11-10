@@ -198,6 +198,38 @@ def test_the_launcher_fails_open_without_python(tmp_path):
     assert code == 0 and json.loads(out) == {}
 
 
+def _old_python(path, marker):
+    # Fails the launcher's version probe (`-c ...`); anything else it is asked to run, it records.
+    _script(path, f'case "$1" in -c) exit 1 ;; esac\n: > "{marker}"\nwhile IFS= read -r _l; do :; done\necho "{{}}"')
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_the_launcher_skips_a_python3_older_than_the_bootstrap_needs(tmp_path):
+    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
+    _old_python(old, tmp_path / "old_ran")
+    _script(new, f'exec "{sys.executable}" "$@"')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, PATH=f"{old.parent}:{new.parent}:/usr/bin:/bin"))
+    assert code == 0 and json.loads(out) == {}
+    assert os.path.isdir(tmp_path / "home" / "repos")      # the new Python ran the dispatcher
+    assert not (tmp_path / "old_ran").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_with_only_an_old_python_the_launcher_still_hands_it_the_hook(tmp_path):
+    old = tmp_path / "old" / "python3"
+    _old_python(old, tmp_path / "old_ran")
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"},
+                             {"PATH": f"{old.parent}:/bin", "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "old_ran").exists()                 # so the bootstrap can fail open itself
+
+
 def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch):
     sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
     try:
