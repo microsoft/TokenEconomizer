@@ -1339,6 +1339,10 @@ def test_a_codex_package_applied_before_it_was_protected_comes_back(env, repo, t
     text = open(denylist.settings_path(repo, "codex")).read()
     assert "[agents]" not in text and "include_collaboration_mode_instructions" not in text
     assert "goals = false  # tokeneconomizer:goals" in text
+    # The session ran with it switched off, so it is no evidence that the package went unused.
+    caps = st.read("untool.json")["capabilities"]
+    assert caps["collaboration"]["loaded_sessions"] == 0
+    assert caps["image_media"]["loaded_sessions"] == 1
 
 
 def test_codex_needs_the_full_evidence_before_proposing(env, repo, tmp_path):

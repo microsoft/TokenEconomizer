@@ -284,6 +284,8 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
     stage.build_tools({"instance_id": session_id}, 0)
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
+    # The packages this session ran without, read before any is given back below.
+    stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
     # A package that has since become protected comes back, as a tool does on the other
     # agents: only the plugin's own lines, and only toward giving it back.
     protected = adapter.protected_tools()
@@ -298,7 +300,6 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
             restored = []
     if restored:
         applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
-    stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
     loaded_before = dict(stage.codex_profile.state.get("loaded_exposures") or {})
     srow = {}
     stage.after_task({"instance_id": session_id}, {}, run_dir, srow)
