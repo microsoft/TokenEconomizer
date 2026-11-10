@@ -438,7 +438,7 @@ class Pi(Host):
         head = trace.pi_session_header(path)
         started = head.get("timestamp")
         if isinstance(started, str):
-            started = trace._epoch(started)
+            started = trace.iso_epoch(started)
         else:
             started = None
         return {"session_id": head.get("id"), "cwd": head.get("cwd"),

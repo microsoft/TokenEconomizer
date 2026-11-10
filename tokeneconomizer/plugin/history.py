@@ -52,6 +52,7 @@ the turns that ended green seed the repository's envelope (`replay_envelope`).
      "over_limit", "attempt": {"id", "n"}, "started", "heartbeat", "finished", "noticed"}
 """
 import os
+import tempfile
 import time
 import traceback
 
@@ -430,25 +431,23 @@ def _import_one(ctx, doc, item, skipped, log):
         return
     doc["attempt"] = {"id": sid, "n": tries + 1}
     _save(ctx, doc)
-    import tempfile
-    converted = None
     try:
-        if ctx.host.name != "claude":
-            # A non-Claude log (Pi's, omp's) converts to the envelope first; the fold and the
-            # envelope read the SAME converted copy, never the raw log twice.
-            workdir = tempfile.mkdtemp(prefix="te-import-")
-            converted = ctx.host.mechanism_trace(item["path"], workdir)
-        rec = fold.fold_locked(ctx, sid, converted or item["path"], imported=True,
-                               span=(item.get("started"), item.get("ended")))
-        if rec is not None and not rec.get("error"):
-            doc["imported"] = int(_num(doc.get("imported"))) + 1
-            try:
-                replay_envelope(ctx, converted or item["path"])
-            except Exception:
-                _record_error(ctx.root)
-            _say(log, f"read {sid}")
-        elif rec is not None:
-            skipped["unreadable"] = skipped.get("unreadable", 0) + 1
+        # A non-Claude log (Pi's, omp's) is folded from the raw path, which the host converts
+        # itself; only the envelope replay reads the Claude-format copy, so it converts here.
+        with tempfile.TemporaryDirectory(prefix="te-import-", ignore_cleanup_errors=True) as workdir:
+            rec = fold.fold_locked(ctx, sid, item["path"], imported=True,
+                                   span=(item.get("started"), item.get("ended")))
+            if rec is not None and not rec.get("error"):
+                doc["imported"] = int(_num(doc.get("imported"))) + 1
+                try:
+                    converted = (None if ctx.host.name == "claude"
+                                 else ctx.host.mechanism_trace(item["path"], workdir))
+                    replay_envelope(ctx, converted or item["path"])
+                except Exception:
+                    _record_error(ctx.root)
+                _say(log, f"read {sid}")
+            elif rec is not None:
+                skipped["unreadable"] = skipped.get("unreadable", 0) + 1
     except Exception:
         _record_error(ctx.root)
         skipped["error"] = skipped.get("error", 0) + 1

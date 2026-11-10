@@ -92,11 +92,12 @@ def pi_session_to_claude(path, out_path):
             role = m.get("role")
             if role == "user":
                 user = {"role": "user", "content": _pi_text(m.get("content"))}
+                line = {"type": "user", "message": user}
                 if started:
-                    user["timestamp"] = started
+                    line["timestamp"] = started
                 if cwd:
-                    user["cwd"] = cwd
-                out.write(json.dumps({"type": "user", "message": user}) + "\n")
+                    line["cwd"] = cwd
+                out.write(json.dumps(line) + "\n")
             elif role == "assistant":
                 blocks = []
                 for b in m.get("content") or []:

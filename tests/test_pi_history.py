@@ -8,6 +8,7 @@ the `pi` host (omp loads the Pi extension), and its shells set `OMPCODE=1` as we
 `CLAUDECODE=1`.
 """
 import json
+import os
 
 from tokeneconomizer.plugin import hosts
 from tokeneconomizer.plugin.hosts import HOSTS, Pi, default_host
@@ -92,8 +93,30 @@ def test_the_converted_log_carries_the_timestamp_and_cwd(tmp_path):
     assert trace.pi_session_to_claude(str(p), str(out)) == 0   # no tool calls
     lines = [json.loads(l) for l in open(out, encoding="utf-8")]
     user = next(l for l in lines if l.get("type") == "user")
-    assert user["message"].get("timestamp") == "2026-11-09T08:00:00.000Z"
-    assert user["message"].get("cwd") == "/home/u/widget"
+    assert user.get("timestamp") == "2026-11-09T08:00:00.000Z"
+    assert user.get("cwd") == "/home/u/widget"
+    assert trace.claude_log_head(str(out))["started"] is not None
+    assert trace.claude_log_head(str(out))["cwd"] == "/home/u/widget"
+
+
+def test_an_imported_omp_session_folds_with_its_prompts(tmp_path):
+    from tokeneconomizer.plugin import history
+    from tokeneconomizer.plugin.context import LiveContext
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    env = {"TOKENECONOMIZER_HOME": str(tmp_path / "home"), "TE_FOLD_SYNC": "1",
+           "TE_MICROSKILLS": "envfacts", "GIT_CEILING_DIRECTORIES": str(tmp_path),
+           "PATH": os.environ.get("PATH", "")}
+    ctx = LiveContext.build(Pi(), str(repo), env)
+    p = _omp_log(tmp_path)
+    item = {"id": "01AAA-1111-2222-3333", "path": str(p), "started": 1.0, "ended": 2.0}
+    skipped = {}
+    history._import_one(ctx, {}, item, skipped, None)
+    assert skipped == {}
+    folded = ctx.store.read("folded.json")
+    assert folded["01AAA-1111-2222-3333"]["imported"]
+    rec = [r for r in ctx.store.read_lines("ledger.jsonl") if r["kind"] == "session"]
+    assert len(rec) == 1 and rec[0]["prompts"] == 1 and rec[0]["imported"]
 
 
 def test_omps_shell_detects_as_the_pi_host():
