@@ -199,8 +199,10 @@ def test_the_launcher_fails_open_without_python(tmp_path):
 
 
 def _old_python(path, marker):
-    # Fails the launcher's version probe (`-c ...`); anything else it is asked to run, it records.
-    _script(path, f'case "$1" in -c) exit 1 ;; esac\n: > "{marker}"\nwhile IFS= read -r _l; do :; done\necho "{{}}"')
+    # Fails the launcher's version probe (`-E -S -c ...`); anything else it is asked to run, it
+    # records.
+    _script(path, f'for a in "$@"; do [ "$a" = -c ] && exit 1; done\n: > "{marker}"\n'
+                  'while IFS= read -r _l; do :; done\necho "{}"')
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
@@ -225,9 +227,25 @@ def test_with_only_an_old_python_the_launcher_still_hands_it_the_hook(tmp_path):
     _old_python(old, tmp_path / "old_ran")
     code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
                              {"hook_event_name": "SessionStart"},
-                             {"PATH": f"{old.parent}:/bin", "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
+                             {"PATH": str(old.parent),
+                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
     assert code == 0 and json.loads(out) == {}
     assert (tmp_path / "old_ran").exists()                 # so the bootstrap can fail open itself
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_te_python_runs_as_named_even_beside_a_newer_python(tmp_path):
+    """`TE_PYTHON` is the person's own choice: the launcher runs it without a probe, and the
+    bootstrap says what it needs if it is too old."""
+    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
+    _old_python(old, tmp_path / "old_ran")
+    _script(new, f'exec "{sys.executable}" "$@"')
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"},
+                             {"PATH": str(new.parent), "TE_PYTHON": str(old),
+                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "old_ran").exists()
 
 
 def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch):

@@ -32,14 +32,19 @@ if [ "${OS:-}" = Windows_NT ]; then
     exec "$py" "$dir/te_bootstrap.py" cli "$@"
   done
 else
-  # The first python3 on PATH can be older than the bootstrap's minimum (macOS /usr/bin/python3
-  # is 3.9, and an agent's hook PATH is often not a login shell's), which makes the plugin a
-  # silent no-op even when a newer Python is installed. Take the first one new enough; with
-  # none, run the first one found so the bootstrap still fails open / says what it needs.
+  # TE_PYTHON is the person's own choice: it runs as named. Otherwise the first python3 on PATH
+  # can be older than the bootstrap's minimum (macOS /usr/bin/python3 is 3.9, and an agent's
+  # hook PATH is often not a login shell's), which would make the plugin a silent no-op with a
+  # newer Python installed: take the first one new enough. With none, run the first one found,
+  # so the bootstrap still fails open / says what it needs. The probe skips `site` (-E -S).
+  if [ -n "${TE_PYTHON:-}" ] && command -v "$TE_PYTHON" >/dev/null 2>&1; then
+    exec "$TE_PYTHON" "$dir/te_bootstrap.py" cli "$@"
+  fi
+  probe='import sys; sys.exit(sys.version_info < (3, 10))'
   old=
-  for py in "${TE_PYTHON:-}" python3 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
-    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
-    if "$py" -c 'import sys; sys.exit(sys.version_info < (3, 10))' </dev/null >/dev/null 2>&1; then
+  for py in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    command -v "$py" >/dev/null 2>&1 || continue
+    if "$py" -E -S -c "$probe" </dev/null >/dev/null 2>&1; then
       exec "$py" "$dir/te_bootstrap.py" cli "$@"
     fi
     [ -n "$old" ] || old=$py
