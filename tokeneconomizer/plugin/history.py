@@ -184,7 +184,7 @@ def plan(ctx, now=None):
     def skip(why):
         skipped[why] = skipped.get(why, 0) + 1
     for log in ctx.host.history(ctx.env, cfg.history_dirs):
-        head = trace.claude_log_head(log["path"])
+        head = ctx.host.log_head(log["path"])
         if not is_this_repository(ctx, log["folder"], head.get("cwd"), cache):
             continue
         sid = trace.claude_safe_session_id(log["session_id"])
@@ -202,8 +202,11 @@ def plan(ctx, now=None):
         elif os.path.exists(ctx.store.path("sessions", f"{sid}.json")):
             skip("recorded_live")
         else:
-            prompts = trace.claude_prompt_count(log["path"])
-            if prompts <= 0:
+            try:
+                prompts = ctx.host.prompt_count(log["path"])
+            except (OSError, ValueError):
+                prompts = None
+            if not prompts or prompts <= 0:
                 skip("no_prompt")
             elif _headless(head, prompts):
                 skip("headless")
@@ -219,7 +222,11 @@ def _still_eligible(ctx, item):
     """Why a planned session is no longer to be imported (a resumed plan), or None."""
     sid = trace.claude_safe_session_id(item.get("id")) if isinstance(item, dict) else None
     path = item.get("path") if isinstance(item, dict) else None
-    if sid is None or not isinstance(path, str) or os.path.basename(path) != f"{sid}.jsonl":
+    # Pi's and omp's logs are named `<timestamp>_<session id>.jsonl`, Claude Code's
+    # `<session id>.jsonl`; either basename names the session.
+    base = os.path.basename(path) if isinstance(path, str) else None
+    named = base is not None and base.rsplit("_", 1)[-1] == f"{sid}.jsonl"
+    if sid is None or not isinstance(path, str) or base != f"{sid}.jsonl" and not named:
         return "unsafe_id"
     if sid in (ctx.store.read("folded.json") or {}):
         return "already_folded"
@@ -250,6 +257,8 @@ def replay_envelope(ctx, transcript_path):
     level, overrides = cfg.loopguard_aggr, cfg.loopguard_thresholds
     thr = loopguard.base_thresholds(level, overrides)
     recorded = 0
+    # The mechanism trace already converted a non-Claude log to the envelope this reader
+    # takes; an imported session folds from the SAME converted copy rather than the raw log.
     turns = trace.claude_prompt_turns(transcript_path)
     turn = next(turns, None)
     while turn is not None:
@@ -421,13 +430,20 @@ def _import_one(ctx, doc, item, skipped, log):
         return
     doc["attempt"] = {"id": sid, "n": tries + 1}
     _save(ctx, doc)
+    import tempfile
+    converted = None
     try:
-        rec = fold.fold_locked(ctx, sid, item["path"], imported=True,
+        if ctx.host.name != "claude":
+            # A non-Claude log (Pi's, omp's) converts to the envelope first; the fold and the
+            # envelope read the SAME converted copy, never the raw log twice.
+            workdir = tempfile.mkdtemp(prefix="te-import-")
+            converted = ctx.host.mechanism_trace(item["path"], workdir)
+        rec = fold.fold_locked(ctx, sid, converted or item["path"], imported=True,
                                span=(item.get("started"), item.get("ended")))
         if rec is not None and not rec.get("error"):
             doc["imported"] = int(_num(doc.get("imported"))) + 1
             try:
-                replay_envelope(ctx, item["path"])
+                replay_envelope(ctx, converted or item["path"])
             except Exception:
                 _record_error(ctx.root)
             _say(log, f"read {sid}")
