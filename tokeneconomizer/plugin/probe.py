@@ -152,7 +152,7 @@ def inspect_session(sid):
                 ev = json.loads(line)
             except ValueError:
                 continue
-            out = (ev.get("data") or {}) if isinstance(ev, dict) else {}
+            out = ((ev.get("data") or {}).get("output") or {}) if isinstance(ev, dict) else {}
             injected = injected or "fails here" in (out.get("additionalContext") or "")
     usage = trace.copilot_session_usage(log)
     first = tests[0] if tests else None

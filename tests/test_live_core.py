@@ -1539,7 +1539,23 @@ def test_inspect_session_skips_hook_lines_that_do_not_parse(tmp_path, monkeypatc
     log.parent.mkdir(parents=True)
     log.write_text('{"type": "session.start", "data": {"context": {"cwd": "/r"}}}\n'
                    '"hook.end sessionStart"\n'                      # parses, not an object
-                   '{broken "hook.end" "sessionStart"\n')            # does not parse at all
+                   '{broken "hook.end" "sessionStart"\n'            # does not parse at all
+                   '{"type": "session.shutdown", "data": {}}\n')    # so `settle` need not wait
     monkeypatch.setenv("COPILOT_HOME", str(home))
     report = probe.inspect_session("s1")
     assert report["session"] == "s1" and report["injected"] is False
+
+
+def test_inspect_session_reads_the_context_its_session_start_hook_returned(tmp_path, monkeypatch):
+    """The context sits under the hook.end event's `data.output`; a line beside it that parses
+    but is not an object changes nothing."""
+    from tokeneconomizer.plugin import probe
+    home = tmp_path / "cp"
+    log = home / "session-state" / "s1" / "events.jsonl"
+    log.parent.mkdir(parents=True)
+    hook_end = {"type": "hook.end", "data": {"hookType": "sessionStart", "output": {
+        "additionalContext": "In this repository, pytest fails here: use unittest."}}}
+    log.write_text('"hook.end sessionStart"\n' + json.dumps(hook_end) + "\n"
+                   + json.dumps({"type": "session.shutdown", "data": {}}) + "\n")
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    assert probe.inspect_session("s1")["injected"] is True
