@@ -679,9 +679,20 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     # a quoted `|` in a sed script must not split the command (seen live: sympy-13091)
     ("sed -i -E 's/x (<|<=|>|>=) y/z/' numbers.py expr.py", ["numbers.py", "expr.py"]),
     ("sed -i 's/a/b/' x.py 2>&1 | tail -2", ["x.py"]),
+    # a here-string (`<<<`) is not a heredoc: the lines after it are still commands
+    ("grep -q ok <<< \"ok\"\nsed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("read -r v <<< done\ncat > fix.py <<'EOF'\nx = 1\nEOF", ["fix.py"]),
 ])
 def test_edits_made_through_the_shell_are_recognised(cmd, want):
     assert guard.shell_edit_targets(cmd) == want
+
+
+def test_an_edit_after_a_here_string_is_counted():
+    """`<<<` feeds one word to a command; reading it as a heredoc tag made every later line of
+    the command a heredoc body, so a `sed -i` after it was not counted as an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "grep -q ok <<< ok\nsed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    assert g.edits == 1 and g.whole.edit_counts == {"mod.py": 1}
 
 
 def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy():
