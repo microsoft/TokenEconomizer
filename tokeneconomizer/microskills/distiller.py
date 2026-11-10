@@ -261,7 +261,7 @@ def proposer_view(dg):
 
 
 def _rx(pat):
-    if not pat:
+    if not pat or not isinstance(pat, str):
         return None
     try:
         return re.compile(pat)
@@ -526,10 +526,10 @@ def parse_payload(raw):
         obj = json.loads(m.group(0))
     except Exception:
         return [], []
-    exts = [e for e in obj.get("extractors", [])
-            if isinstance(e, dict) and e.get("name") and e.get("pattern")]
-    facts = [f for f in obj.get("facts", [])
-             if isinstance(f, dict) and f.get("id") and f.get("detector")]
+    exts = [e for e in (obj.get("extractors") or [])
+            if isinstance(e, dict) and e.get("name") and isinstance(e.get("pattern"), str)]
+    facts = [f for f in (obj.get("facts") or [])
+             if isinstance(f, dict) and f.get("id") and isinstance(f.get("detector"), dict)]
     return exts, facts
 
 
