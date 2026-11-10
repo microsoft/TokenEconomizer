@@ -488,6 +488,8 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
             record.update({k: usage.get(k) for k in (
                 "model", "requests", "input_tokens", "cache_read_input_tokens",
                 "cache_creation_input_tokens", "output_tokens")})
+            if usage.get("cache_creation_1h_input_tokens"):
+                record["cache_creation_1h_input_tokens"] = usage["cache_creation_1h_input_tokens"]
             record["effective_tokens"], record["priced_by"] = eff, priced_by
         turns = sess.get("turns") or []
         record.update({
