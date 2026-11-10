@@ -332,8 +332,13 @@ class LiveController:
         from .judge import AsyncJudge, NoVerdict
         if envelope is None:
             return None
-        if self.host.name in sidecall.NO_SIDE_CALLS or sidecall.paused(self.host.name,
-                                                                         self.ctx.root):
+        if self.host.name in sidecall.NO_SIDE_CALLS:
+            return NoVerdict()
+        # A local judge (`local_model`) needs no login, so it still answers while the host's
+        # CLI is paused (signed out). Only the settings are read here, as this runs on every
+        # tool call; the job checks that the model answers, and with none spares the turn.
+        if (sidecall.paused(self.host.name, self.ctx.root)
+                and not sidecall.local_routes("judge", self.ctx.config)):
             return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 
