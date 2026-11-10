@@ -1,4 +1,4 @@
-"""`$TOKENECONOMIZER_REPO`: the repository of a session whose directory holds no git metadata."""
+"""`$TOKENECONOMIZER_REPO`: the repository of a session where git names none."""
 import os
 
 from tokeneconomizer.plugin import paths
@@ -9,7 +9,8 @@ def git_repo(root, remote):
     with open(os.path.join(root, ".git", "HEAD"), "w") as fh:
         fh.write("ref: refs/heads/main\n")
     with open(os.path.join(root, ".git", "config"), "w") as fh:
-        fh.write(f'[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = {remote}\n')
+        fh.write("[core]\n\trepositoryformatversion = 0\n"
+                 + (f'[remote "origin"]\n\turl = {remote}\n' if remote else ""))
     return root
 
 
@@ -39,12 +40,17 @@ def test_a_named_remote_keys_an_export_without_git_metadata_as_its_clones(tmp_pa
     assert plain.how == paths.BY_DIR and plain.key != r.key
 
 
-def test_an_empty_value_changes_nothing_and_a_set_one_names_the_repository(tmp_path):
+def test_an_empty_value_changes_nothing_and_a_checkouts_own_remote_wins(tmp_path):
     env = make_env(tmp_path)
     export = tmp_path / "work"
     export.mkdir()
     assert paths.repo_identity(str(export), make_env(tmp_path, TOKENECONOMIZER_REPO="")).how == paths.BY_DIR
     named = make_env(tmp_path, TOKENECONOMIZER_REPO="https://github.com/microsoft/TokenEconomizer")
+    # A checkout keeps the repository its `origin` names: a value left set in a shell must not
+    # merge every repository the person opens into one.
     elsewhere = git_repo(str(tmp_path / "elsewhere"), "https://example.org/team/elsewhere.git")
-    assert paths.repo_identity(elsewhere, named).key == paths.repo_identity(str(export), named).key
-    assert paths.repo_identity(elsewhere, env).key != paths.repo_identity(elsewhere, named).key
+    assert paths.repo_identity(elsewhere, named) == paths.repo_identity(elsewhere, env)
+    # A checkout without an `origin` (a fresh `git init` in a sandbox) takes the named one.
+    fresh = git_repo(str(tmp_path / "fresh"), None)
+    assert paths.repo_identity(fresh, env).how == paths.BY_PATH
+    assert paths.repo_identity(fresh, named).key == paths.repo_identity(str(export), named).key
