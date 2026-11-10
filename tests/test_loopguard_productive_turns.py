@@ -26,6 +26,8 @@ LIBUV = r"Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\a
     ("SP=/tmp/x; cd $SP && python3 - <<'EOF'\nimport json\nprint('error outputs: 3')\nEOF",
      True),
     ("python3 - <<'EOF'\nprint(1)\nEOF\npython -m pytest -q | tail -3", False),
+    ("python repro.py <<< y", True),
+    ("python repro.py <<< \"y\"\npython -m pytest -q | tail -3", False),
     ("", False),
 ])
 def test_an_exit_status_covers_a_command_unless_its_work_could_fail_unseen(cmd, covers):

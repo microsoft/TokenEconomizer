@@ -286,7 +286,22 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
     stage.build_tools({"instance_id": session_id}, 0)
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
+    # The packages this session ran without, read before any is given back below.
     stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
+    # A package that has since become protected comes back, as a tool does on the other
+    # agents: only the plugin's own lines, and only toward giving it back.
+    protected = adapter.protected_tools()
+    restored = []
+    # Never in a config the repository commits.
+    if (any(c in protected for c in applied) and not ctx.config.shadow
+            and not denylist._git_tracked(ctx.repo.root, denylist.CODEX_CONFIG_REL)):
+        try:
+            restored = denylist.restore(ctx.repo.root, ctx.store,
+                                        [c for c in applied if c in protected], host="codex")
+        except (RuntimeError, OSError, ValueError):     # unreadable or redirected: leave it
+            restored = []
+    if restored:
+        applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     loaded_before = dict(stage.codex_profile.state.get("loaded_exposures") or {})
     srow = {}
     stage.after_task({"instance_id": session_id}, {}, run_dir, srow)
@@ -303,7 +318,7 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
                                                                  else prompts)
     proposal = [c for c in denylist.CODEX_LIVE_CAPABILITIES
                 if c in (state.get("current_pruned") or ()) and c not in ever_used
-                and c not in applied and c not in kept
+                and c not in applied and c not in kept and c not in protected
                 and enough_evidence(int(loaded.get(c, 0)), int(loaded_prompts.get(c, 0)),
                                     ctx.config, high_risk=c in CODEX_HIGH_RISK)]
     doc = {"sessions": int(state.get("tasks_completed") or 0), "catalog_source": "capabilities",
@@ -321,7 +336,17 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts
         _hold(doc, prior, proposal, ctx.repo.root)
     ctx.store.write("untool.json", doc)
     return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
-            "restored": []}
+            "restored": restored}
+
+
+def unprotected(ctx, items):
+    """`items` less what is protected now: a list stored before a tool or package was
+    protected must not write it later."""
+    if ctx.host.name == "copilot":      # its lists name MCP servers, not tools
+        return list(items)
+    protected = LiveAdapter(ctx.host, ctx.repo.root,
+                            protect=ctx.config.toolprune_protect).protected_tools()
+    return [t for t in items if t not in protected]
 
 
 def _hold(doc, prior, proposal, root):
@@ -370,7 +395,7 @@ def apply_pending(ctx, now=None):
         root = pend.get("root") or ctx.repo.root
         done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
         done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
-        items = [t for t in pend.get("items") or [] if t not in done]
+        items = unprotected(ctx, [t for t in pend.get("items") or [] if t not in done])
         if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
             idle = now - last_activity(ctx)
             quiet_s = ctx.config.toolprune_quiet_minutes * 60
@@ -383,6 +408,9 @@ def apply_pending(ctx, now=None):
                 unt.pop("auto_apply_refused", None)
             except RuntimeError as e:      # an unreadable, committed or redirected file
                 unt["auto_apply_refused"] = str(e)
+        # A tool protected while the list waited leaves the proposal too.
+        if "proposal" in unt:
+            unt["proposal"] = unprotected(ctx, unt["proposal"] or [])
         unt.pop("auto_pending", None)
         ctx.store.write("untool.json", unt)
         return None
@@ -490,6 +518,8 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
             record.update({k: usage.get(k) for k in (
                 "model", "requests", "input_tokens", "cache_read_input_tokens",
                 "cache_creation_input_tokens", "output_tokens")})
+            if usage.get("cache_creation_1h_input_tokens"):
+                record["cache_creation_1h_input_tokens"] = usage["cache_creation_1h_input_tokens"]
             record["effective_tokens"], record["priced_by"] = eff, priced_by
         turns = sess.get("turns") or []
         record.update({

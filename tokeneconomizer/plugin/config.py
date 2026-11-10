@@ -46,6 +46,10 @@ person can tune by hand:
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
+  * <agent>_paid_model          -- the model of the plugin's own calls on that agent, over
+                                   `paid_model` (claude, codex, copilot, pi, opencode, cursor,
+                                   grok, hermes);
+  * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
   * media                       -- `audio`: add on-device transcripts of the audio files a prompt
                                    names (an agent cannot read audio) to that prompt's context,
                                    on hosts that take prompt context; macOS with swiftc. Off by
@@ -198,6 +202,16 @@ class LiveConfig:
     repomap_python: str = ""
     repomap_timeout: int = 8
     paid_model: str = ""
+    claude_paid_model: str = ""
+    codex_paid_model: str = ""
+    copilot_paid_model: str = ""
+    pi_paid_model: str = ""
+    opencode_paid_model: str = ""
+    cursor_paid_model: str = ""
+    grok_paid_model: str = ""
+    hermes_paid_model: str = ""
+    claude_paid_effort: str = ""
+    codex_paid_effort: str = ""
     media: str = "off"
     local_model: str = "off"
     local_roles: list = field(default_factory=lambda: ["judge"])
@@ -216,7 +230,12 @@ class LiveConfig:
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
                 "local_model": LOCAL_MODELS, "media": MEDIA,
-                "vocabulary": ("auto", "generic", "python-git", "node-web")}
+                "vocabulary": ("auto", "generic", "python-git", "node-web"),
+                # Each CLI's own words (Claude Code 2.1.319, Codex 0.167.0); whether a model
+                # takes one is the CLI's to say.
+                "claude_paid_effort": ("", "low", "medium", "high", "xhigh", "max"),
+                "codex_paid_effort": ("", "none", "minimal", "low", "medium", "high", "xhigh",
+                                      "max")}
     # The smallest value a number setting takes, where it is not 1.
     _MIN = {"toolprune_quiet_minutes": 0}
 
@@ -320,6 +339,9 @@ class LiveConfig:
 # Environment variables, old names first so that a new name set alongside its old one wins.
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
+        **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
+            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes")},
+        "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
         "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles", "TE_MEDIA": "media",
         "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
