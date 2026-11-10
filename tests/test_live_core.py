@@ -653,6 +653,15 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("cd /t && sed -i.bak -e 's/a/b/' -e 's/c/d/' x.py y.py && pytest -q", ["x.py", "y.py"]),
     ("sed -i '' 's/a/b/' x.py", ["x.py"]),                         # BSD sed's empty suffix
     ("perl -pi -e 's/foo/bar/' src/a.rs", ["a.rs"]),
+    # the script inside the option word, not in the next word
+    ("sed -i --expression='s/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sed --in-place --expression=s/a/b/ a.py b.py", ["a.py", "b.py"]),
+    ("sed -i -e's/a/b/' x.py", ["x.py"]),
+    ("sed -i --file=fix.sed x.py", ["x.py"]),
+    ("sed -ne 's/a/b/p' -i x.py", ["x.py"]),
+    ("perl -i -pe's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -i.orig -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -Mre=eval -i -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
     ("cat > repro.py <<'EOF'\nprint(1 > 0)\nEOF\npython repro.py", ["repro.py"]),
     ("echo 'x' | tee -a setup.cfg", ["setup.cfg"]),
     # how Sonnet 5.5 edits: an inline script that reads the file and writes it back
@@ -707,6 +716,16 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
     g.fold("Bash", {"command": "sed -i 's/b/c/' pkg/mod.py && pytest -q"},
            "FAILED tests/test_m.py::t - AssertionError")
     assert g.edits == 3 and g.last_verify > g.last_edit and not g.resolved_proxy()
+
+
+def test_a_sed_script_given_inside_its_option_word_still_counts_the_edit():
+    """`sed -i --expression=...` and `perl -i -pe'...'` carry the script in the option word.
+    The file after it is the edited file, not the script, so the turn records an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "sed -i --expression='s/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "perl -i -pe's/b/c/' pkg/mod.py"}, "", 0)
+    assert g.edits == 2 and g.whole.edit_counts == {"mod.py": 2}
+    assert "[edits mod.py]" in g.st.recent_digest()
 
 
 def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
