@@ -337,9 +337,8 @@ turn stuck. Micro-skills is off by default, because its proposer adds model call
 saves depends on the repository and the work you do there. What each of these calls reads, how
 often it runs and which model it uses are listed under
 [Model calls](plugin/README.md#model-calls-and-api-keys). On macOS 27, `local_model=fm` runs the
-judge on Apple's on-device model instead ([On-device side calls](plugin/README.md#on-device-side-calls-macos)),
-and `media=audio` puts on-device transcripts of audio files a prompt names into its context
-([Audio transcripts](plugin/README.md#audio-transcripts-macos)); both are off by default. Each mechanism has its own switch
+judge on Apple's on-device model instead ([On-device side calls](plugin/README.md#on-device-side-calls-macos));
+it is off by default. Each mechanism has its own switch
 (`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
 are these settings:
 

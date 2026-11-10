@@ -50,10 +50,6 @@ person can tune by hand:
                                    `paid_model` (claude, codex, copilot, pi, opencode, cursor,
                                    grok, hermes);
   * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
-  * media                       -- `audio`: add on-device transcripts of the audio files a prompt
-                                   names (an agent cannot read audio) to that prompt's context,
-                                   on hosts that take prompt context; macOS with swiftc. Off by
-                                   default (`plugin/media.py`);
   * local_model, local_roles   -- run the named side calls (`judge`, `nudge`, `proposer`;
                                    default `judge`) on an on-device model instead of the
                                    agent's CLI: `fm`, Apple's Foundation Models CLI on macOS 27.
@@ -108,7 +104,6 @@ LOCAL_ROLES = ("judge", "nudge", "proposer")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
-MEDIA = ("off", "audio")
 MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
@@ -212,7 +207,6 @@ class LiveConfig:
     hermes_paid_model: str = ""
     claude_paid_effort: str = ""
     codex_paid_effort: str = ""
-    media: str = "off"
     local_model: str = "off"
     local_roles: list = field(default_factory=lambda: ["judge"])
     local_judge_confidence: float = 0.9
@@ -229,7 +223,7 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
-                "local_model": LOCAL_MODELS, "media": MEDIA,
+                "local_model": LOCAL_MODELS,
                 "vocabulary": ("auto", "generic", "python-git", "node-web"),
                 # Each CLI's own words (Claude Code 2.1.319, Codex 0.167.0); whether a model
                 # takes one is the CLI's to say.
@@ -342,7 +336,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
             "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes")},
         "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
-        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles", "TE_MEDIA": "media",
+        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
         "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",

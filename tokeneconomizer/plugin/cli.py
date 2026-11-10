@@ -698,18 +698,6 @@ def cmd_history(args):
     return 0
 
 
-def cmd_media(args):
-    """`media=audio`'s on-device transcriber: build it (`setup`) or say whether it is ready."""
-    from . import media
-    if args.action == "setup":
-        ok, msg = media.build_helper()
-        print(("built " if ok else "not built: ") + msg)
-        return 0 if ok else 1
-    print(f"media helper: {'ready at ' + media.helper_path() if media.helper_ready() else 'not built'}"
-          f"{'' if media.supported() else ' (needs macOS with swiftc)'}")
-    return 0
-
-
 def cmd_judge(args):
     """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
@@ -965,9 +953,6 @@ def build_parser():
     p = add("repomap")
     p.add_argument("action", nargs="?", default="show", choices=("show", "refresh"))
     p.set_defaults(fn=cmd_repomap)
-    p = add("media")
-    p.add_argument("action", nargs="?", default="status", choices=("status", "setup"))
-    p.set_defaults(fn=cmd_media)
     p = add("probe")
     p.add_argument("--sessions", type=int, default=6)
     p.add_argument("--model", default=None)
