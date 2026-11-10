@@ -997,6 +997,49 @@ def test_claude_side_calls_stay_out_of_the_persons_history_where_the_cli_allows(
     assert sidecall.claude_flags("old") == []
 
 
+def test_every_agent_with_side_calls_has_its_own_paid_model_setting():
+    from tokeneconomizer.plugin import config as live_config, hosts, sidecall
+    cfg = live_config.LiveConfig()
+    for name in set(hosts.HOSTS) - sidecall.NO_SIDE_CALLS:
+        assert cfg.set(f"{name}_paid_model", "m"), name
+
+
+@pytest.mark.real_sidecalls
+def test_side_calls_take_a_model_per_agent_and_an_effort(monkeypatch, tmp_path):
+    """`<agent>_paid_model` wins over the shared `paid_model`; `claude_paid_effort` and
+    `codex_paid_effort` reach each CLI in its own form, and only a Claude Code that lists
+    `--effort` is given it."""
+    import subprocess
+    from tokeneconomizer.plugin import config as live_config, sidecall
+    seen, helps = [], {"new": "  --effort <level>", "old": "  -p"}
+
+    def fake_run(cmd, **kw):
+        if cmd[1:] == ["--help"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=helps.get(cmd[0], ""), stderr="")
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "OK"}), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.setattr(sidecall, "_HELP", {})
+    monkeypatch.setattr(sidecall, "claude_cli", lambda: "new")
+    cfg = live_config.load_config(str(tmp_path), env={
+        "TE_PAID_MODEL": "shared", "TE_CODEX_PAID_MODEL": "small",
+        "TE_CLAUDE_PAID_EFFORT": "max", "TE_CODEX_PAID_EFFORT": "minimal"})
+    assert not cfg.warnings
+    assert not cfg.set("claude_paid_effort", "minimal") and not cfg.set("codex_paid_effort", "x")
+    sidecall.runner_for("claude", cfg)("hi")
+    sidecall.runner_for("codex", cfg)("hi")
+    claude, codex = seen
+    assert claude[claude.index("--model") + 1] == "shared"
+    assert claude[claude.index("--effort") + 1] == "max"
+    assert codex[codex.index("-m") + 1] == "small"
+    assert codex[codex.index("-c") + 1] == 'model_reasoning_effort="minimal"'
+    sidecall.claude_call("hi", cli="old", effort="high")
+    assert "--effort" not in seen[-1]
+    sidecall.runner_for("codex", live_config.LiveConfig())("hi")
+    assert "-m" not in seen[-1] and "-c" not in seen[-1]
+
+
 @pytest.mark.real_sidecalls
 def test_a_claude_side_call_attaches_none_of_the_persons_mcp_servers(monkeypatch):
     """`--tools ""` leaves every MCP server attached: the side call drops them where the CLI can,
