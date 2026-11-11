@@ -43,9 +43,11 @@ VERIFY_RE = re.compile(
     r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
-    # script that is not a test (`ruby repro.rb`): the options it takes are spelled out.
+    # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
+    # case-sensitive, so `-W` does not also take `-wc` under the pattern's `(?i)`.
     r"rake(?:\s+\w+=\S*)*\s+(?:test|spec)(?::[\w:]+)?|rails\s+test(?::[\w:]+)?|"
-    r"ruby(?:\s+(?:-[IrC](?:\S+|\s+[^\s\-]\S*)|-W\S*|--[\w\-]+(?:=\S+)?|-[abdf-z]+))*\s+"
+    r"ruby(?-i:\s+(?:-[Ir](?:\S+|\s+[^\s\-]\S*)|-C\s*\S+|-W[0-2]?(?::\S+)?|"
+    r"--[\w\-]+(?:=\S+)?|-[abdf-zABDF-Z]+))*\s+"
     r"(?:[\w.\-~]*/)*(?:test_[\w.\-]*|[\w.\-]*_(?:test|spec))\.rb|"
     r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
 

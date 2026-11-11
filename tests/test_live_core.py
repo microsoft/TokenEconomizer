@@ -1448,6 +1448,8 @@ def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
                                  "ruby -I lib test/x_test.rb", "ruby /w/repo/test/x_test.rb",
                                  "ruby -Itest test/models/user_test.rb", "ruby spec/foo_spec.rb",
                                  "ruby -W0 --disable-gems test/test_parser.rb",
+                                 "ruby -W:no-deprecated test/a_test.rb", "ruby -wv test/a_test.rb",
+                                 "ruby -C /w -Itest test/a_test.rb",
                                  "bundle exec ruby -Itest test/a_test.rb -n test_x",
                                  "rake test", "bundle exec rake test", "rake test:models",
                                  "bin/rake test TEST=test/a_test.rb", "rake spec", "bin/rails test",
@@ -1463,7 +1465,9 @@ def test_a_ruby_test_run_counts_as_a_verification(cmd):
 
 
 @pytest.mark.parametrize("cmd", ["ruby -Ilib -e 'require \"a\"; p A.new'", "ruby -wc lib/retry.rb",
-                                 "ruby -c test/a_test.rb", "ruby repro.rb", "ruby -v",
+                                 "ruby -c test/a_test.rb", "ruby -wc test/a_test.rb",
+                                 "ruby -Wc test/a_test.rb", "ruby -cw test/a_test.rb",
+                                 "ruby -we 'load \"test/a_test.rb\"'", "ruby repro.rb", "ruby -v",
                                  "ruby -e 'load \"test/a_test.rb\"'", "ruby lib/contest.rb",
                                  "ruby -Icore lib/x.rb", "rake", "rake db:migrate",
                                  "rails server", "cat test/a_test.rb"])
