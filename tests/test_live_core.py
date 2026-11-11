@@ -661,7 +661,7 @@ def test_the_opencode_side_call_adds_only_the_flags_its_cli_lists(monkeypatch):
 
 # ---- the guard sees edits made through the shell ---------------------------------------------
 from tokeneconomizer import loopguard as guard  # noqa: E402
-from tokeneconomizer.loopguard import turn  # noqa: E402
+from tokeneconomizer.loopguard import shell_edits, turn  # noqa: E402
 
 
 @pytest.mark.parametrize("cmd,want", [
@@ -693,6 +693,11 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("apply_patch <<'P'\n*** Begin Patch\n*** Add File: a/new.py\n+x\n*** Update File: b/old.py\n"
      "*** End Patch\nP", ["new.py", "old.py"]),
     ("git checkout -- a.py b/c.py", ["a.py", "c.py"]),
+    # git's own options before the subcommand (`-C <dir>`, `-c <name>=<value>`, `--no-pager`)
+    ("git -C /w/repo apply /tmp/fix.diff", ["(patch)"]),
+    ("git -c core.autocrlf=false --no-pager apply fix.diff", ["(patch)"]),
+    ("git -C repo checkout HEAD -- pkg/mod.py", ["mod.py"]),
+    ("git --git-dir=.git --work-tree . restore pkg/mod.py", ["mod.py"]),
     # not edits: output captures, scratch, reads, and operators inside quotes
     ("python -m pytest -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt", []),
     ("grep -n 'x' a.py > hits.txt", []),
@@ -701,6 +706,8 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("python -c \"print(1>2)\"", []),
     ("git stash -q; python bin/test x; git stash pop -q", []),
     ("sed -n '1,20p' pkg/mod.py", []),
+    ("git -C repo diff -- pkg/mod.py", []),
+    ("git -C repo log -- pkg/mod.py", []),
     # a quoted `|` in a sed script must not split the command (seen live: sympy-13091)
     ("sed -i -E 's/x (<|<=|>|>=) y/z/' numbers.py expr.py", ["numbers.py", "expr.py"]),
     ("sed -i 's/a/b/' x.py 2>&1 | tail -2", ["x.py"]),
@@ -710,6 +717,20 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
 ])
 def test_edits_made_through_the_shell_are_recognised(cmd, want):
     assert guard.shell_edit_targets(cmd) == want
+
+
+def test_a_git_command_run_with_dash_c_still_counts_its_edit_and_its_revert():
+    """`git -C <dir> apply` and `git -C <dir> checkout -- <path>` name the subcommand after
+    git's own options. Reading the word after `git` as the subcommand missed both, so the
+    patch was no edit and putting back a file the turn edited was not counted either."""
+    revert = "git -C /w/repo checkout -- pkg/mod.py"
+    assert shell_edits.shell_revert_targets(revert) == ["mod.py"]
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "git -C /w/repo apply /tmp/fix.diff"}, "", 0)
+    g.fold("Bash", {"command": "sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": revert}, "", 0)
+    assert g.edits == 3
+    assert g.whole.edit_counts == {"(patch)": 1, "mod.py": 2}
 
 
 def test_an_edit_after_a_here_string_is_counted():
