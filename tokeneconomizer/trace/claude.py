@@ -88,15 +88,23 @@ def _is_prompt(ev):
                                                                 "[Request interrupted"))
 
 
+def _is_notification(ev):
+    """Is this entry Claude Code telling the model that a background task finished? It starts a
+    turn, as a prompt does, but nobody typed it (2.1.317: `origin.kind` "task-notification")."""
+    origin = ev.get("origin")
+    return isinstance(origin, dict) and origin.get("kind") == "task-notification"
+
+
 def claude_prompt_count(transcript_path):
-    """How many prompts the person gave a Claude Code session (`_is_prompt`)."""
+    """How many prompts the person gave a Claude Code session (`_is_prompt`, less the
+    background-task notifications)."""
     n = 0
     for line in _lines(transcript_path):
         try:
             ev = json.loads(line)
         except ValueError:
             continue
-        n += isinstance(ev, dict) and _is_prompt(ev)
+        n += isinstance(ev, dict) and _is_prompt(ev) and not _is_notification(ev)
     return n
 
 

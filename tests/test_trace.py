@@ -205,6 +205,25 @@ def test_a_claude_session_counts_the_prompts_the_person_gave(tmp_path):
     assert trace.claude_prompt_count(p) == 3
 
 
+def test_a_claude_background_task_notification_is_no_prompt(tmp_path):
+    """Claude Code tells the model that a background task finished in a `user` entry of its
+    own, `origin.kind` "task-notification" (2.1.317). The person typed one prompt here. The
+    notification still starts a turn of its own: the model answers it."""
+    note = {"type": "user", "promptSource": "system", "turnOrigin": "task_notification",
+            "origin": {"kind": "task-notification", "producer": "session-task"},
+            "message": {"role": "user", "content": (
+                "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+                "<summary>Background command \"pytest\" completed (exit code 0)</summary>\n"
+                "</task-notification>")}}
+    p = _jsonl(tmp_path / "c.jsonl", [
+        {"type": "user", "message": {"role": "user", "content": "run the tests in the background"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": "started"}},
+        note,
+        {"type": "assistant", "message": {"role": "assistant", "content": "they pass"}}])
+    assert trace.claude_prompt_count(p) == 1
+    assert len(list(trace.claude_prompt_turns(p))) == 2
+
+
 def test_a_codex_session_counts_one_prompt_per_turn(tmp_path):
     turn = [{"type": "turn_context", "payload": {"turn_id": "t"}},
             {"type": "event_msg", "payload": {"type": "task_started"}},
