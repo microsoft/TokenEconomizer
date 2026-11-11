@@ -41,6 +41,12 @@ VERIFY_RE = re.compile(
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
     r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
+    # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
+    # script that is not a test (`ruby repro.rb`): the options it takes are spelled out.
+    r"rake(?:\s+\w+=\S*)*\s+(?:test|spec)(?::[\w:]+)?|rails\s+test(?::[\w:]+)?|"
+    r"ruby(?:\s+(?:-[IrC](?:\S+|\s+[^\s\-]\S*)|-W\S*|--[\w\-]+(?:=\S+)?|-[abdf-z]+))*\s+"
+    r"(?:[\w.\-~]*/)*(?:test_[\w.\-]*|[\w.\-]*_(?:test|spec))\.rb|"
     r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
 
 # A command line's exit status is its LAST command's, so it may not be the test run's: `npm test
@@ -182,6 +188,9 @@ _RUN_FAILED_RE = re.compile("|".join((
     r"^(?:--- FAIL: |FAIL\t|FAIL$)",                                # go
     r"^test result: FAILED",                                        # cargo
     r"\b\d+ examples?, [1-9]\d* failures?\b",                       # rspec
+    # minitest (`8 runs, 9 assertions, 1 failures, 0 errors, 0 skips`), test-unit (`tests`)
+    r"^\d+ (?:runs|tests), \d+ assertions, (?:[1-9]\d* failures, \d+ errors|\d+ failures, "
+    r"[1-9]\d* errors)\b",
     r"Tests run: \d+, Failures: (?:[1-9]|0, Errors: [1-9])",        # JUnit (Maven, Gradle)
     r"BUILD FAIL(?:URE|ED)")), re.MULTILINE)
 _RUN_PASSED_RE = re.compile("|".join((
@@ -196,6 +205,7 @@ _RUN_PASSED_RE = re.compile("|".join((
     r"^ok\s+\S+\s+(?:\d+(?:\.\d+)?s|\(cached\))",
     r"^test result: ok\.",
     r"\b\d+ examples?, 0 failures\b",
+    r"^\d+ (?:runs|tests), \d+ assertions, 0 failures, 0 errors\b",   # minitest, test-unit
     r"BUILD SUCCESS")), re.MULTILINE)
 
 
