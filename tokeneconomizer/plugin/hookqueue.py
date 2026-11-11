@@ -143,6 +143,14 @@ def run(ctrl, event, handler):
     name = _safe(ctrl.sid)
     queue = os.path.join(base, name + ".queue")
     with Store(base).locked(name, timeout=WAITS.get(event, 3.0)) as got:
+        if got:
+            # Taking a lock writes nothing to its file, so its age would be the session's, and
+            # `_prune` would remove the lock of a session older than IDLE_S while a hook holds
+            # it: on POSIX the session's next hook would lock a new file and run beside it.
+            try:
+                os.utime(os.path.join(base, f".{name}.lock"))
+            except OSError:
+                pass
         _prune(base)
         if got:
             drain(ctrl, queue)
