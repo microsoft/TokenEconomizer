@@ -1,7 +1,7 @@
 param([switch]$Hook)
 
 $env:PYTHONUTF8 = '1'
-$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 $mode = if ($Hook) { 'hook' } else { 'cli' }
 $payload = if ($Hook) {
     if ($MyInvocation.ExpectingInput) { $input -join "`n" } else { [Console]::In.ReadToEnd() }

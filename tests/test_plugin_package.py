@@ -170,8 +170,11 @@ def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, ev
                           "cwd": str(work), "source": "new"}, ensure_ascii=False)
     out = run(command, payload)
     assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
-    assert not (tmp_path / "home" / "errors.log").exists()
+    errors = tmp_path / "home" / "errors.log"
+    assert not errors.exists(), errors.read_text(encoding="utf-8")
+    sessions = list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
+    assert sessions, (out.stdout, out.stderr)
+    assert json.loads(sessions[0].read_text(encoding="utf-8"))["cwd"] == str(work)
     for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
         text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
         script = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
