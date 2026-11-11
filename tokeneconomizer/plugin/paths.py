@@ -190,10 +190,14 @@ def origin_url(root):
 def normalize_remote(url):
     """`git@github.com:Owner/Repo.git` and `https://github.com/owner/repo` -> one spelling."""
     u = (url or "").strip()
-    u = re.sub(r"^[a-z+]+://", "", u)            # scheme
+    scheme = re.match(r"^[a-z+]+://", u)
+    u = u[scheme.end():] if scheme else u        # scheme
     u = re.sub(r"^[^@/]+@", "", u)               # user@
     u = re.sub(r"/+", "/", u.replace("\\", "/"))  # local Windows remotes, including git's escaped slashes
-    u = u.replace(":", "/", 1) if not re.match(r"^[a-zA-Z]:/", u) and re.match(r"^[^/]+:[^/\d]", u) else u
+    # `host:port/...` only after a scheme; in git's scp form (`host:owner/repo`) the path may
+    # start with a digit (`git@github.com:42wim/repo.git`).
+    sep = r"^[^/]+:[^/\d]" if scheme else r"^[^/]+:[^/]"
+    u = u.replace(":", "/", 1) if not re.match(r"^[a-zA-Z]:/", u) and re.match(sep, u) else u
     u = re.sub(r"\.git$", "", u.rstrip("/"))
     return u.lower()
 

@@ -113,6 +113,28 @@ def test_clones_and_worktrees_share_one_key_whatever_their_folder_names(tmp_path
     assert rl.key == repos.legacy_key(local, env)
 
 
+def test_an_scp_remote_whose_owner_starts_with_a_digit_shares_the_https_key(tmp_path, env):
+    ssh = git_repo(str(tmp_path / "ssh"), "git@github.com:42wim/Widget.git")
+    https = git_repo(str(tmp_path / "https"), "https://github.com/42wim/widget")
+    rs, rh = paths.repo_identity(ssh, env), paths.repo_identity(https, env)
+    assert rs.key == rh.key == f"widget-{paths.digest('github.com/42wim/widget')}"
+    assert rs.label == rh.label == "42wim/widget"
+    # After a scheme, digits after the colon are still a port.
+    assert paths.normalize_remote("ssh://git@example.com:2222/o/r.git") == "example.com:2222/o/r"
+    # State the ssh checkout learned under its earlier key is carried over to the new one.
+    old = f"widget-{paths.digest('github.com:42wim/widget')}"
+    st = state(env, old)
+    legacy_session(st, "s1", transcript(tmp_path / "s1.jsonl", ssh))
+    st.write("injection.json", {"rendered": "- a fact", "sessions": 1})
+    root = env["TOKENECONOMIZER_HOME"]
+    Store(root).write(repos.INDEX, {"layout": repos.LAYOUT, "checkouts": {
+        os.path.realpath(ssh): {"key": old, "seen": 1.0}}})
+    repos.adopt(root, rs, env)
+    new = state(env, rs.key)
+    assert new.read("injection.json")["rendered"] == "- a fact"
+    assert "s1" in new.read("folded.json")
+
+
 # ---- one session, one repository, on every agent ------------------------------------------------
 def _payloads(host, sid, cwd, n):
     base = {"session_id": sid, "cwd": cwd}
