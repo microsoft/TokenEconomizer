@@ -191,6 +191,11 @@ copilot plugin list       # tokeneconomizer@tokeneconomizer ... (enabled)
 
 Copilot loads the plugin from the clone directly, without copying it.
 
+On Windows, its hooks and slash commands use PowerShell; Git Bash is not required.
+From a PowerShell terminal in the clone, run `.\plugin\scripts\te.ps1 --host copilot status`.
+The launcher honors `TE_PYTHON`, then looks for `python3`, `python`, or `py`, preferring
+interpreters outside WindowsApps.
+
 **2. Check it.** In Copilot's interactive mode, type `/tokeneconomizer:status`. Each slash command
 is a model turn, and Copilot asks before running the plugin's script; choose **Yes**. Slash
 commands work only in interactive mode; the plugin's notices also appear under `copilot -p`.
@@ -212,7 +217,11 @@ start says so. `/tokeneconomizer:toolprune restore` turns the server back on, an
 `toolprune measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
-launcher appears after the first session). A turn that is still stuck after the loop guard's
+launcher appears after the first session). In PowerShell, use
+`& "$HOME\.tokeneconomizer\bin\te.ps1" --host copilot <command>` instead (or the same path under
+`$env:TOKENECONOMIZER_HOME` when set). Session-start and prompt hooks create or repair the launchers,
+so an open session picks up the PowerShell launcher on its next prompt after updating.
+A turn that is still stuck after the loop guard's
 redirect shows "● TokenEconomizer: …" in the conversation (and on stdout under `copilot -p`); press
 **Esc** twice to interrupt it, or Ctrl+C to end a `copilot -p` run.
 

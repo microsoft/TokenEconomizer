@@ -3,7 +3,16 @@ description: Show or change TokenEconomizer's settings - turn each mechanism on 
 argument-hint: "[show | set KEY=VALUE ... [--global] | unset KEY ... [--global]]"
 ---
 The arguments I typed after the command are: "$ARGUMENTS" (it shows every setting when there are none).
-Run this exact command with the Bash tool, then show me its output verbatim in a code block:
+Run the command for this shell, then show me its output verbatim in a code block.
+
+In Copilot CLI on Windows, use the PowerShell tool:
+
+```powershell
+$root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join-Path $HOME '.tokeneconomizer' }
+& (Join-Path $root 'bin\te.ps1') --host copilot --cwd (Get-Location).Path config $ARGUMENTS
+```
+
+Otherwise, use the Bash tool:
 
 ```
 te="${CLAUDE_PLUGIN_ROOT}/scripts/te"; [ -x "$te" ] || te="${TOKENECONOMIZER_HOME:-$HOME/.tokeneconomizer}/bin/te"; "$te" --cwd "$(pwd)" config $ARGUMENTS
