@@ -101,11 +101,11 @@ MODEL_WEIGHTS = {
 }
 
 # Billed model id for an agent when a row does NOT pin one (rec['model'] is None).
-# Claude/Copilot agents map to None -> the Claude curve (their ratios are model-uniform
-# across Opus/Sonnet/Haiku, so an exact id is unnecessary). Codex maps to codex's built-in
-# default, gpt-5.6-sol (verified from codex's session rollout). Probed against the OpenAI
-# Platform on 2026-09-09: `gpt-5.6-sol` is both listed by /v1/models AND accepted by
-# /v1/responses (HTTP 200).
+# Claude/Copilot agents map to None -> the Claude curve (a row that names its Claude model is
+# priced by it, see _CLAUDE_CACHE_READ; one that names none gets the usual ratios). Codex maps
+# to codex's built-in default, gpt-5.6-sol (verified from codex's session rollout). Probed
+# against the OpenAI Platform on 2026-09-09: `gpt-5.6-sol` is both listed by /v1/models AND
+# accepted by /v1/responses (HTTP 200).
 #
 # The trap a catalog check alone will not catch: the `-codex` ALIASES are listed by
 # /v1/models and 404 on /v1/responses ("does not exist or you do not have access to it" for
@@ -115,9 +115,10 @@ AGENT_DEFAULT_MODEL = {
     "codex": "gpt-5.6-sol",
 }
 
-# Claude-family price ratios (Opus/Sonnet/Haiku share them). Used as the default when a
-# row has no resolvable model id (legacy rows, claude/copilot agents) so those stay
-# byte-identical to historical behavior. Also the value of the back-compat WEIGHTS alias.
+# Claude-family price ratios (Opus/Sonnet/Haiku share them, except the cache-hit ratio of a
+# few models: see _CLAUDE_CACHE_READ). Used as the default when a row has no resolvable model
+# id (legacy rows, claude/copilot agents) so those stay byte-identical to historical behavior.
+# Also the value of the back-compat WEIGHTS alias.
 WEIGHTS_CLAUDE = {
     "input": 1.0,         # input_tokens = fresh/uncached prompt tokens
     "cache_read": 0.10,   # cache_read_input_tokens
