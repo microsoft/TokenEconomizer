@@ -157,7 +157,7 @@ def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, ev
     shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
                     ignore=shutil.ignore_patterns("__pycache__"))
     env = _hook_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
-                    CLAUDE_PLUGIN_ROOT=str(scripts.parent))
+                    COPILOT_PLUGIN_ROOT=str(scripts.parent))
     env["PATH"] = os.path.dirname(sys.executable)
     command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
 
@@ -193,7 +193,7 @@ def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, ev
     out = run(command, payload)
     assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
     assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
-    out = run("& (Join-Path $env:CLAUDE_PLUGIN_ROOT 'scripts\\te.ps1') status")
+    out = run("& (Join-Path $env:COPILOT_PLUGIN_ROOT 'scripts\\te.ps1') status")
     assert out.returncode == 1 and "no Python" in out.stderr
 
 
