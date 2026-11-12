@@ -546,8 +546,7 @@ log a warning for the empty section of a session with no facts.
 
 ## Antigravity CLI
 
-Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1 on macOS and Linux
-(agy runs hook commands through `cmd /c` on Windows, and the launcher is a POSIX shell script).
+Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1+ and Antigravity 2.0 on Windows, macOS and Linux.
 
 **1. Install.** Build the self-contained plugin, which copies the package into it, and install the
 directory:
