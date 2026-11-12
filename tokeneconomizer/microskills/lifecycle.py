@@ -146,6 +146,9 @@ def write_json_atomic(path, obj):
             pass
 
 
+NO_RECORD = "no record"  # truthy: the state changed and is saved
+
+
 class Forgetting:
     """The forgotten facts of a distiller (`self.facts`: id -> fact). A forgotten fact leaves
     `facts`, so it is neither rendered nor folded; its id is kept in `forgotten`, with the claim
@@ -172,14 +175,16 @@ class Forgetting:
 
     def unforget(self, fid):
         """True when `fid` is back among the facts, False when it was not forgotten; KeyError
-        when no fact has that id."""
+        when no fact has that id. `NO_RECORD` when it was forgotten without a record (a
+        hand-edited state file): the id is no longer forgotten, but nothing is restored."""
         if fid not in self.forgotten:
             if fid in self.facts:
                 return False
             raise KeyError(fid)
         rec = self.forgotten.pop(fid).get("record")
-        if rec:
-            self.facts[fid] = self.FACT_CLS.from_dict(rec)
+        if not rec:
+            return NO_RECORD
+        self.facts[fid] = self.FACT_CLS.from_dict(rec)
         return True
 
     def drop_forgotten(self):

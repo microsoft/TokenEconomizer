@@ -89,6 +89,22 @@ def test_forget_is_idempotent_and_unforget_brings_the_fact_back(
     assert code == 0 and "not forgotten" in out
 
 
+def test_unforget_without_a_record_says_nothing_came_back(
+        env, repo, tmp_path, te):  # noqa: F811
+    # Only a hand-edited state file has a forgotten entry with no record.
+    learn(env, repo, tmp_path, [f"s{i}" for i in range(6)])
+    assert te("microskills", "forget", FID)[0] == 0
+    path = env_state(env, repo)
+    state = json.load(open(path))
+    del state["forgotten"][FID]["record"]
+    json.dump(state, open(path, "w"))
+
+    code, out = te("microskills", "unforget", FID)
+    assert code == 0 and "nothing to bring back" in out and "brought back" not in out
+    saved = json.load(open(path))
+    assert FID not in saved["forgotten"] and FID not in saved["facts"]
+
+
 def test_an_unknown_id_is_an_error_and_changes_nothing(env, repo, tmp_path, te):  # noqa: F811
     learn(env, repo, tmp_path, [f"s{i}" for i in range(6)])
     before = open(env_state(env, repo)).read()

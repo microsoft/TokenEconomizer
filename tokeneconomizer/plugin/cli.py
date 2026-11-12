@@ -335,6 +335,7 @@ def _short(text, n=80):
 
 
 def _microskills_forget(args):
+    from tokeneconomizer.microskills.lifecycle import NO_RECORD
     undo = args.action == "unforget"
     if not args.ids:
         print(f"`microskills {args.action}` needs the id of at least one fact; "
@@ -355,6 +356,10 @@ def _microskills_forget(args):
         print(f"not changed: {e}; try again in a moment")
         return 1
     for fid, changed, claim in done:
+        if changed == NO_RECORD:
+            print(f"no longer forgotten, but nothing to bring back: {fid} had no saved record; "
+                  f"a later fold may learn it again")
+            continue
         what = (("brought back" if changed else "not forgotten, nothing to bring back") if undo
                 else ("forgotten" if changed else "already forgotten"))
         print(f"{what}: {fid}" + (f"  ({_short(claim)})" if claim else ""))
