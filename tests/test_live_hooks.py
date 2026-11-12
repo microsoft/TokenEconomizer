@@ -1522,6 +1522,29 @@ def test_codex_trust_is_read_from_the_users_config(tmp_path, repo):
     assert denylist.codex_project_trusted(repo, env) is False
 
 
+def test_codex_trust_of_a_linked_worktree_is_its_clones(tmp_path, repo):
+    # Codex looks a linked worktree's trust up under the clone it was made from, unless the
+    # worktree has an entry of its own.
+    wt_git = os.path.join(repo, ".git", "worktrees", "feature")
+    os.makedirs(wt_git)
+    with open(os.path.join(wt_git, "commondir"), "w") as fh:
+        fh.write("../..")
+    wt = str(tmp_path / "feature")
+    os.makedirs(wt)
+    with open(os.path.join(wt, ".git"), "w") as fh:
+        fh.write(f"gitdir: {wt_git}\n")
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    env = {"CODEX_HOME": str(home)}
+    (home / "config.toml").write_text(f"[projects.'{repo}']\ntrust_level = \"trusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is True
+    (home / "config.toml").write_text(f"[projects.'{repo}']\ntrust_level = \"trusted\"\n"
+                                      f"[projects.'{wt}']\ntrust_level = \"untrusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is False
+    (home / "config.toml").write_text(f"[projects.'{tmp_path}']\ntrust_level = \"trusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is False
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows paths are case-insensitive")
 def test_codex_trust_matches_the_lowercased_path_codex_writes_on_windows(tmp_path, repo):
     home = tmp_path / "codex-home"

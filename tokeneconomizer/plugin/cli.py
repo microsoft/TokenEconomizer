@@ -834,7 +834,7 @@ def cmd_doctor(args):
         cat = os.path.join(root, "hosts", "claude", "catalog.json")
         print(f"claude      catalog {'present' if os.path.exists(cat) else 'not probed'}")
     if "codex" in agents:
-        trusted = denylist.codex_project_trusted(args.cwd)
+        trusted = denylist.codex_project_trusted(ctx.repo.root)
         if trusted is not None:
             print(f"codex       this project is {'trusted' if trusted else 'NOT trusted'} "
                   f"(an untrusted project's .codex/config.toml is ignored)")
