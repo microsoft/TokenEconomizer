@@ -1444,6 +1444,51 @@ def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
     assert turn.status_of_tests(cmd) == status
 
 
+@pytest.mark.parametrize("cmd", ["ruby test/ledger_test.rb", "ruby -w -Ilib test/slugify_test.rb",
+                                 "ruby -I lib test/x_test.rb", "ruby /w/repo/test/x_test.rb",
+                                 "ruby -Itest test/models/user_test.rb", "ruby spec/foo_spec.rb",
+                                 "ruby -W0 --disable-gems test/test_parser.rb",
+                                 "ruby -W:no-deprecated test/a_test.rb", "ruby -wv test/a_test.rb",
+                                 "ruby -C /w -Itest test/a_test.rb",
+                                 "bundle exec ruby -Itest test/a_test.rb -n test_x",
+                                 "rake test", "bundle exec rake test", "rake test:models",
+                                 "bin/rake test TEST=test/a_test.rb", "rake spec", "bin/rails test",
+                                 "rails test test/models/user_test.rb"])
+def test_a_ruby_test_run_counts_as_a_verification(cmd):
+    """minitest and test-unit are run as `ruby` given a test file, or through rake or rails, not
+    by a runner of their own as `rspec` is."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/lib/a.rb", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["ruby -Ilib -e 'require \"a\"; p A.new'", "ruby -wc lib/retry.rb",
+                                 "ruby -c test/a_test.rb", "ruby -wc test/a_test.rb",
+                                 "ruby -Wc test/a_test.rb", "ruby -cw test/a_test.rb",
+                                 "ruby -we 'load \"test/a_test.rb\"'", "ruby repro.rb", "ruby -v",
+                                 "ruby -e 'load \"test/a_test.rb\"'", "ruby lib/contest.rb",
+                                 "ruby -Icore lib/x.rb", "rake", "rake db:migrate",
+                                 "rails server", "cat test/a_test.rb"])
+def test_ruby_that_runs_no_test_file_is_not_a_verification(cmd):
+    """A one-off `ruby -e`, a syntax check and a script are not the project's checks."""
+    assert turn.status_of_tests(cmd) is None
+
+
+def test_a_piped_minitest_run_is_judged_by_its_summary():
+    """`ruby test/x_test.rb | tail -5` exits with `tail`'s status, so minitest's summary line
+    decides whether the turn ended green."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/lib/a.rb", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "ruby test/a_test.rb 2>&1 | tail -5"},
+           "8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
+    g.fold("Bash", {"command": "ruby test/a_test.rb 2>&1 | tail -5"},
+           "8 runs, 8 assertions, 0 failures, 0 errors, 0 skips", 0)
+    assert g.verifications == 2 and g.resolved_proxy()
+
+
 @pytest.mark.parametrize("cmd,status", [("uv run ruff check", None),
                                         ("npx prettier --check .", None),
                                         ("pnpm exec jest --help", None),
@@ -1563,6 +1608,10 @@ def test_a_test_run_followed_by_other_commands_is_judged_by_its_runners_summary(
     ("ok  \tacme/x\t0.012s", False), ("test result: FAILED. 1 passed; 1 failed", True),
     ("test result: ok. 3 passed; 0 failed", False), ("5 examples, 1 failure", True),
     ("Tests run: 4, Failures: 0, Errors: 1", True), ("[INFO] BUILD SUCCESS", False),
+    ("8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", True),
+    ("8 runs, 8 assertions, 0 failures, 2 errors, 0 skips", True),
+    ("Finished in 0.01s\n5 runs, 9 assertions, 0 failures, 0 errors, 1 skips", False),
+    ("1 tests, 1 assertions, 0 failures, 0 errors, 0 pendings, 0 omissions", False),
     ("+    raise ValueError('no')", None), ("ok 1 - add", None)])
 def test_a_runners_summary_gives_its_verdict(out, failed):
     assert turn.runner_verdict(out) is failed
