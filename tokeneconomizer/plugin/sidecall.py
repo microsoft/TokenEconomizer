@@ -51,6 +51,11 @@ so no extra API key is needed and the call is billed where the session is:
     left with no tool at all. Its usage is read from the call's result or from the settings file
     beside that log.
 
+  * ZCode: `zcode -p <prompt> --mode plan --cwd <throwaway directory> --disallowed-tools <the
+    tools that act>` on the model in ZCode's own settings (`zcode -p` has no `--model`). Its `-p`
+    default mode is `yolo`, and the tool list is a deny list, which ZCode cannot invert, so the
+    call is OFF unless `zcode_sidecall` is on (or `TE_ZCODE_SIDECALL=1`), as Droid's is; it
+    writes a session of its own into ZCode's store, and reports no usage, so it is unpriced.
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
 returns no reply -- a CLI that is not signed in, say -- leaves one line in the plugin's
@@ -752,6 +757,11 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 NO_SIDE_CALLS = frozenset({"antigravity"})
 
 
+# Hosts whose side-call command has no flag that names a model, so they have no
+# `<agent>_paid_model` setting: a setting that changed nothing would only mislead.
+NO_MODEL_FLAG = frozenset({"zcode"})
+
+
 def droid_enabled(env=None):
     """Whether `TE_DROID_SIDECALL` allows Droid side calls. The `droid_sidecall` setting does
     the same from the config file, which is the only way from the desktop app. They are OFF by
@@ -862,6 +872,41 @@ def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
     return text, eff
 
 
+def zcode_enabled(env=None):
+    """Whether `TE_ZCODE_SIDECALL` allows ZCode side calls; the `zcode_sidecall` setting does the
+    same from the config file. OFF by default, as Droid's are: a ZCode call leaves a session in
+    the person's store, and its tools can only be removed by name."""
+    env = os.environ if env is None else env
+    return str(env.get("TE_ZCODE_SIDECALL") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# A ZCode side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. `zcode -p` defaults to `yolo`, so the call asks for `plan` mode, and removes by
+# name every tool of the store's tool list that acts or reaches out. `--disallowed-tools` is a deny
+# list (it cannot be inverted), so a tool a later ZCode adds, or one an MCP server adds, is not
+# removed: that is why the call is off by default. Every name here is one ZCode 0.17.1 recorded
+# in its own store; a name it does not know is not risked.
+ZCODE_REMOVED = ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Skill", "TaskOutput",
+                 "TaskStop", "SendMessage", "CronCreate", "AskUserQuestion")
+
+
+def zcode_call(prompt, model="", cli="zcode", timeout=TIMEOUT_S):
+    """A text completion through `zcode -p` in an empty throwaway directory, in plan mode, with
+    the acting tools removed (`ZCODE_REMOVED`). `model` is not passed: ZCode's `-p` takes none, so
+    the call runs on the model of the person's ZCode settings. Its reply is stdout; ZCode gives no
+    usage for it, so it is not priced. `TE_SIDECALL=1` makes this plugin's own hooks no-ops in the
+    nested session, so the call cannot recurse."""
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        cmd = [*program(cli), "-p", prompt, "--mode", "plan", "--cwd", cwd,
+               "--disallowed-tools", ",".join(ZCODE_REMOVED)]
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    text = (out.stdout or "").strip() if out.returncode == 0 else ""
+    if not text:
+        _no_reply("zcode", out)
+    return text, None
+
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "droid": "droid exec", "opencode": "opencode run",
           "cursor": "cursor-agent -p", "hermes": "hermes chat"}
@@ -912,4 +957,10 @@ def _host_call(host_name, config):
         if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
             return None
         return lambda prompt, _m="agent": droid_call(prompt, model=model)
+    if host_name == "zcode":
+        # Off unless turned on, like Droid's: see `zcode_enabled`. No runner means the free layer
+        # still learns; only the paid proposer and the judge wait.
+        if not (zcode_enabled() or getattr(config, "zcode_sidecall", False)):
+            return None
+        return lambda prompt, _m="agent": zcode_call(prompt)
     return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku", **kw)

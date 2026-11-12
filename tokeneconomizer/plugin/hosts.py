@@ -35,9 +35,11 @@ endpoint (docs/PLUGIN.md §3):
     still applies (verified on SessionStart, UserPromptSubmit and PostToolUse). So a Copilot
     notice is carried as `PROGRESS` lines that `hook.main` writes ahead of the output.
 
-`detect` picks the adapter from the payload: Codex's `turn_id`, or a transcript under `.codex/`
-named `rollout-*`; Copilot's session-state transcript, or no transcript at all inside a Copilot
-hook process; Claude Code otherwise. Each plugin hook file except Claude Code's also passes
+ZCode (Z.ai) runs the same Claude-shaped hook contract, with its own camelCase fields beside the
+snake_case ones, and keeps its sessions in a SQLite store (`ZCode` below). `detect` picks the
+adapter from the payload: ZCode's throwaway transcript (`_zcode_transcript`), Codex's `turn_id`,
+or a transcript under `.codex/` named `rollout-*`; Copilot's session-state transcript, or no
+transcript at all inside a Copilot hook process; Claude Code otherwise. Each plugin hook file except Claude Code's also passes
 `--host` explicitly, so detection is the fallback rather than the rule.
 """
 import json
@@ -1317,9 +1319,105 @@ class Droid(Host):
         return folder == os.path.abspath(root).replace("\\", "-").replace("/", "-")
 
 
+class ZCode(Host):
+    """ZCode (Z.ai), read from 0.17.1: the hook code in its bundle, its CLI help and the schema
+    and JSON keys of its store. Not yet run under a live session with this plugin's hook file.
+
+    ZCode runs the Claude-shaped hook contract: `SessionStart`, `UserPromptSubmit`,
+    `PostToolUse`, `PostToolUseFailure` and `Stop` (there is no `SessionEnd`, so a session is
+    folded by the next start in its repository once it has been quiet, as on Antigravity). Each
+    payload is ZCode's own camelCase fields (`hookEventName`, `sessionId`, `toolName`, `turnId`,
+    ...) with the snake_case aliases of them (`session_id`, `tool_name`, `tool_input`,
+    `tool_use_id`, `tool_response`), so the controller reads it as it is. What differs:
+
+      * `transcript_path` (and `transcriptPath`) name a temporary `zcode-hook-*/transcript.jsonl`
+        that holds the one prompt or answer of the event and is deleted when the hook returns. It
+        is no session log, so it is never recorded (`transcript`); the fold reads the SQLite store
+        instead (`complete`, `trace.zcode_export`), and `detect` uses the file's name to tell a
+        ZCode payload from Claude Code's and Grok's, which also sends `hookEventName`.
+      * Context goes in `hookSpecificOutput.additionalContext` (the event's own name in
+        `hookEventName`, or ZCode raises an error) and reaches the model from SessionStart,
+        UserPromptSubmit and PostToolUse as a `hook_context` entry of the conversation. A hook's
+        `systemMessage` is read only to explain a block, so no notice reaches the person; one
+        goes through the model (`relay`), as on Droid.
+      * `continue: false` is a block request on every event but Stop, so no output here sets it.
+
+    Tool pruning is not supported (ZCode has no per-tool setting a hook can write), and a
+    subagent's calls are in its own session of the store, not the parent's trace.
+    """
+    name = "zcode"
+    prompt_context = True              # UserPromptSubmit's additionalContext is collected
+    relays_notices = True
+    keeps_history = False              # the store holds old sessions; no import reads them yet
+    # A session the store cannot give is retried at each start in its repository for this long,
+    # then folded as unreadable.
+    FOLD_RETRY_S = 7 * 86400
+
+    def session_id(self, p):
+        return str(p.get("session_id") or p.get("sessionId") or "")
+
+    def transcript(self, p):
+        return ""
+
+    def cwd(self, p, env):
+        return (p.get("cwd") or env.get("ZCODE_PROJECT_DIR") or env.get("CLAUDE_PROJECT_DIR")
+                or os.getcwd())
+
+    def env_session_id(self, env):
+        return str(env.get("TE_SESSION_ID") or env.get("ZCODE_SESSION_ID") or "")
+
+    def turn_key(self, p):
+        return str(p.get("turnId") or "")
+
+    def notice(self, text):
+        return {}
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        name, args = trace.zcode_tool(name, args)
+        return name, args, text, code
+
+    def session_state(self, env):
+        return {"zcode_db": trace.zcode_db(env)}
+
+    def last_active(self, transcript_path, session):
+        """A session has no log of its own to date, but every hook saves its state."""
+        return float(session.get("updated") or session.get("started") or 0)
+
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
+        """The session as the store holds it now, copied to a file of the plugin's. The copy
+        stays as it was if the store cannot be read; with no copy either the fold waits, up to
+        `FOLD_RETRY_S`: the store may be busy, or this process, a `te fold` in a shell, may see
+        another ZCODE_STORAGE_DIR than the session's."""
+        from .paths import state_root
+        if not re.fullmatch(r"\w[\w.-]*", session_id or ""):
+            return transcript_path
+        session = session or {}
+        path = os.path.join(state_root(), "zcode-sessions", f"{session_id}.json")
+        if trace.zcode_export(session.get("zcode_db") or trace.zcode_db(), session_id, path) \
+                or os.path.exists(path):
+            return path
+        if time.time() - self.last_active(path, session) < self.FOLD_RETRY_S:
+            raise FoldLater(session_id)
+        return transcript_path
+
+    def mechanism_trace(self, transcript_path, workdir):
+        if not transcript_path:
+            return None
+        out = os.path.join(workdir, "zcode_trace.jsonl")
+        n = trace.zcode_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.zcode_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.zcode_session_usage(transcript_path)
+
+
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
          "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
-         "antigravity": Antigravity}
+         "antigravity": Antigravity, "zcode": ZCode}
 
 
 def default_host(env=None, recent=None):
@@ -1342,13 +1440,32 @@ def default_host(env=None, recent=None):
     # inside Droid is read as its own host.
     if env.get("FACTORY_SESSION_ID") or env.get("DROID_PLUGIN_ROOT"):
         return "droid"
+    # ZCode exports its session id to its shell and its hooks (with Claude's names beside it), and
+    # an agent started from a ZCode shell inherits it: last, for the same reason as Droid's.
+    if env.get("ZCODE_SESSION_ID"):
+        return "zcode"
     return recent if recent in HOSTS else "claude"
+
+
+# ZCode hands every hook a transcript it writes to `<tmpdir>/zcode-hook-<random>/transcript.jsonl`
+# and deletes afterwards, named in both `transcript_path` and `transcriptPath`. Nothing else sends
+# that name; the environment is no mark, since an agent started from a ZCode shell inherits it.
+_ZCODE_TRANSCRIPT = re.compile(r"(?:^|/)zcode-hook-[\w-]+/transcript\.jsonl$")
+
+
+def _zcode_transcript(payload):
+    tp, alias = payload.get("transcript_path"), payload.get("transcriptPath")
+    return (isinstance(tp, str) and tp == alias
+            and bool(_ZCODE_TRANSCRIPT.search(tp.replace("\\", "/"))))
 
 
 def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
+    # Before Grok's test: ZCode also sends `hookEventName`.
+    if isinstance(payload, dict) and _zcode_transcript(payload):
+        return ZCode()
     if (payload or {}).get("conversationId") and "/antigravity" in str(
             payload.get("transcriptPath") or "").replace("\\", "/"):
         return Antigravity()

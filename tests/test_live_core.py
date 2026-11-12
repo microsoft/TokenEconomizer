@@ -1022,8 +1022,10 @@ def test_claude_side_calls_stay_out_of_the_persons_history_where_the_cli_allows(
 def test_every_agent_with_side_calls_has_its_own_paid_model_setting():
     from tokeneconomizer.plugin import config as live_config, hosts, sidecall
     cfg = live_config.LiveConfig()
-    for name in set(hosts.HOSTS) - sidecall.NO_SIDE_CALLS:
+    for name in set(hosts.HOSTS) - sidecall.NO_SIDE_CALLS - sidecall.NO_MODEL_FLAG:
         assert cfg.set(f"{name}_paid_model", "m"), name
+    # ZCode's `-p` takes no model, so it has no such setting (and is not told it has).
+    assert not cfg.set("zcode_paid_model", "m")
 
 
 @pytest.mark.real_sidecalls

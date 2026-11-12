@@ -57,6 +57,8 @@ person can tune by hand:
   * droid_sidecall              -- on Droid, allow the plugin's own model calls. They run
                                    `droid exec`, which writes a session log of its own, so this
                                    is off by default: `microskills=envfacts` learns without it;
+  * zcode_sidecall              -- on ZCode, the same switch: `zcode -p` cannot run with no tool
+                                   and writes a session of its own into ZCode's store;
   * history_import              -- on Claude Code, fold a repository's sessions from before the
                                    plugin (Claude Code's own logs) once, at its first session
                                    start, when nothing is folded there yet. Off by default:
@@ -196,6 +198,7 @@ class LiveConfig:
     pi_cli: str = ""
     hermes_cli: str = ""
     droid_sidecall: bool = False
+    zcode_sidecall: bool = False
     history_import: bool = False
     history_max_sessions: int = 200
     history_days: int = 365

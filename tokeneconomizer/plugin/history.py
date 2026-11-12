@@ -512,7 +512,7 @@ def summary(ctx):
 # The agent's name as a person reads it, for the lines that name whose logs were read.
 HOST_LABEL = {"claude": "Claude Code", "codex": "Codex", "copilot": "Copilot CLI", "pi": "Pi",
               "opencode": "opencode", "cursor": "Cursor", "hermes": "Hermes Agent",
-              "droid": "Droid"}
+              "droid": "Droid", "zcode": "ZCode"}
 
 
 def describe(doc, host="claude"):
