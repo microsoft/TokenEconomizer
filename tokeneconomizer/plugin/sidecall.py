@@ -282,12 +282,13 @@ def claude_json(stdout):
     return data if isinstance(data, dict) else {}
 
 
-def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
+def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S, effort=""):
     cli = cli or claude_cli()
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         # `--mcp-config` takes several values, so an option follows it, never a bare argument.
         cmd = ([cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", ""]
-               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli))
+               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli)
+               + (["--effort", effort] if effort and "--effort" in _claude_help(cli) else []))
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
                              cwd=cwd)
@@ -303,11 +304,13 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
     return "" if failed else data["result"], eff
 
 
-def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
+def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S, effort=""):
     cmd = [*program(cli), "exec", "--json", "--disable", "hooks", "--ephemeral", "-s",
            "read-only", "--skip-git-repo-check"]
     if model:
         cmd += ["-m", model]
+    if effort:
+        cmd += ["-c", f'model_reasoning_effort="{effort}"']
     cmd.append(prompt)
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
@@ -881,7 +884,9 @@ def runner_for(host_name, config):
 def _host_call(host_name, config):
     if host_name in NO_SIDE_CALLS:
         return None
-    model = config.paid_model
+    model = getattr(config, f"{host_name}_paid_model", "") or config.paid_model
+    effort = getattr(config, f"{host_name}_paid_effort", "")
+    kw = {"effort": effort} if effort else {}
     if host_name == "pi":
         cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"
         extensions = list(config.pi_extensions)
@@ -897,7 +902,7 @@ def _host_call(host_name, config):
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
     if host_name == "codex":
-        return lambda prompt, _m="agent": codex_call(prompt, model=model)
+        return lambda prompt, _m="agent": codex_call(prompt, model=model, **kw)
     if host_name == "copilot":
         return lambda prompt, _m="agent": copilot_call(prompt, model=model)
     if host_name == "droid":
@@ -907,4 +912,4 @@ def _host_call(host_name, config):
         if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
             return None
         return lambda prompt, _m="agent": droid_call(prompt, model=model)
-    return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku")
+    return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku", **kw)

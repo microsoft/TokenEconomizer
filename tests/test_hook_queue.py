@@ -222,6 +222,31 @@ def test_idle_locks_go_and_a_queue_with_events_stays(tmp_path):
     assert sorted(n for n in os.listdir(base_dir) if n != ".pruned") == [".kept.lock", "kept.queue"]
 
 
+def test_the_prune_leaves_the_lock_of_a_session_older_than_idle(tmp_path):
+    """A session's lock file is made at its first hook, and taking the lock writes nothing to it,
+    so the file of a session running for longer than IDLE_S looked idle. The prune removed it
+    while a hook held it, and on POSIX a parallel hook of that session then locked a new file
+    and ran beside the holder."""
+    base_dir = os.path.join(str(tmp_path), "locks", "claude")
+    os.makedirs(base_dir)
+    lock = os.path.join(base_dir, ".s.lock")
+    open(lock, "w", encoding="utf-8").close()
+    old = time.time() - hookqueue.IDLE_S - 60
+    os.utime(lock, (old, old))
+    ctrl = SimpleNamespace(ctx=SimpleNamespace(root=str(tmp_path)),
+                           host=SimpleNamespace(name="claude"), sid="s", p={},
+                           cfg=SimpleNamespace(repomap="off"))
+    beside = []
+
+    def handler():
+        with Store(base_dir).locked("s", timeout=0.1) as got:
+            beside.append(got)
+        return {}
+    assert hookqueue.run(ctrl, "PostToolUse", handler) == {}
+    assert beside == [False]
+    assert os.path.getmtime(lock) > old + hookqueue.IDLE_S
+
+
 # ---- what a queued hook would have said -----------------------------------------------------
 def stuck_turn(env, repo):
     """A repository the guard has learned, the calls of a stuck turn, and at which of them the

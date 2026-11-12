@@ -20,6 +20,9 @@ def effective(usage):
         return None, "no_usage"
     rec = {k: usage.get(k) for k in ("input_tokens", "cache_read_input_tokens",
                                      "cache_creation_input_tokens", "output_tokens", "model")}
+    # The 1-hour share of the cache writes, from a session reader's flat field or from an
+    # Anthropic `usage` object as a side call returns it.
+    rec["cache_creation_1h_input_tokens"] = pricing.cache_write_1h_tokens(usage)
     try:
         return pricing.effective_tokens(rec), "model"
     except ValueError:

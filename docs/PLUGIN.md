@@ -737,6 +737,10 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   `gitdir:` file naming one that exists -- and the walk up from a session's directory stops at
   the home directory, so a versioned (or stray, empty) `~/.git` is the repository of sessions
   started in `~` and of nothing below it. `GIT_CEILING_DIRECTORIES` is honoured as git does.
+  `$TOKENECONOMIZER_REPO`, when set, is the repository's remote URL where git names none: a
+  session in a directory without git metadata (an export of a checkout in a container, a new
+  folder per run), or in a checkout without an `origin`, is keyed as a clone of that remote and
+  shares what was learned there. A checkout's own `origin` wins.
 * **One repository per session.** A hook's `cwd` is where the agent is now (Claude Code's
   follows its `cd`), so the first hook of a session pins it (`sessions/<host>/<id>.json`) and
   every later hook, and the fold it hands off, uses the repository it started in -- where the

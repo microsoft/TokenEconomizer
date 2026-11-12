@@ -71,8 +71,9 @@ _RANK = {"own": 0, "hidden": 1, "mixed": 2}
 
 def _pieces(cmd):
     """`cmd` as its commands and the separators between them (`[cmd, sep, cmd, ...]`), with
-    quoted text masked, and whether it sets `pipefail`. A command recorded as `bash -lc
-    '<script>'` (Codex) is split by its script."""
+    quoted text masked and heredoc bodies left out, and whether it sets `pipefail`. A command
+    recorded as `bash -lc '<script>'` (Codex) is split by its script: its heredocs are read
+    there, since one that ends the script closes on `EOF'`, not on a line of its own."""
     try:
         parts = shlex.split(cmd)
     except ValueError:
@@ -80,6 +81,7 @@ def _pieces(cmd):
     if (len(parts) >= 3 and os.path.basename(parts[0]) in _SHELLS
             and parts[1].startswith("-") and "c" in parts[1]):
         cmd = parts[2]
+    cmd = _split_heredocs(cmd)[0]       # a heredoc's lines are input, not commands
     pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
     while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
         del pieces[-2:]
@@ -123,7 +125,7 @@ def exit_status_covers(cmd):
     lines are the input of the command that reads them, not commands of their own."""
     if not isinstance(cmd, str) or not cmd.strip():
         return False
-    pieces, pipefail = _pieces(_split_heredocs(cmd)[0])
+    pieces, pipefail = _pieces(cmd)
     for i in range(0, len(pieces) - 1, 2):              # every command but the last
         sep = pieces[i + 1]
         if sep == "&&" or (pipefail and sep in ("|", "|&")):

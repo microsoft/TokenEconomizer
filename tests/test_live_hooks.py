@@ -739,6 +739,47 @@ def test_by_default_a_deny_list_waits_until_the_repositorys_sessions_have_been_i
     assert "removed 3 tool(s)" in start("n2")["systemMessage"]
 
 
+def test_a_protected_codex_package_in_a_committed_or_unreadable_config_stays(
+        env, repo, tmp_path, codex_accepts, monkeypatch):
+    """Giving a package back never edits a config the repository
+    commits, and a config it cannot read leaves the fold to finish."""
+    st = store_for(env, repo, "codex")
+    denylist.apply(repo, ["collaboration"], st, host="codex")
+    path = denylist.settings_path(repo, "codex")
+    before = open(path).read()
+    monkeypatch.setattr(denylist, "_git_tracked", lambda root, rel: True)   # committed since
+    env = dict(env, TE_TOOLPRUNE="propose", TE_TOOLPRUNE_PROTECT="collaboration")
+    run_session(env, repo, "cx0", codex_rollout(str(tmp_path / "rollout-0.jsonl"), repo, 0),
+                host="codex")
+    assert open(path).read() == before
+    monkeypatch.setattr(denylist, "_git_tracked", lambda root, rel: False)
+
+    def unreadable(*a, **k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(denylist, "restore", unreadable)
+    run_session(env, repo, "cx1", codex_rollout(str(tmp_path / "rollout-1.jsonl"), repo, 1),
+                host="codex")
+    assert st.read("untool.json")["sessions"] == 2                 # the fold finished
+
+
+def test_copilot_server_lists_are_not_filtered_as_tool_names(env, repo):
+    """`sql` is a protected Copilot tool and also a valid MCP server name in its lists."""
+    ctx = LiveContext.build(hosts.Copilot(), repo, env)
+    assert fold.unprotected(ctx, ["sql", "github-mcp-server"]) == ["sql", "github-mcp-server"]
+
+
+def test_a_tool_protected_after_the_list_formed_is_not_written(env, repo, tmp_path):
+    """A pending list, and the proposal `toolprune apply` reads, are
+    checked against the protection in force when they are used, not when they formed."""
+    from tokeneconomizer.plugin import cli
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    assert ctx.config.set("toolprune_protect", "Workflow,Share*")
+    assert cli._proposal(ctx, {"proposal": ["CronCreate", "Workflow"]}) == ["CronCreate"]
+    assert fold.apply_pending(ctx, now=time.time() + 3700) is None
+    assert _deny(repo) == ["CronCreate"]
+    assert ctx.store.read("untool.json")["proposal"] == []      # applied, or protected now
+
+
 def test_a_session_still_writing_its_log_keeps_the_deny_list_waiting(env, repo, tmp_path):
     """Activity is a hook call or a line in the session's own log: a session can go an hour
     without a hook (one long answer, or the loop guard off) and still have a warm cache."""
@@ -1280,6 +1321,41 @@ def test_codex_proposes_capabilities_it_never_saw_used(env, repo, tmp_path):
                                             "unused_sessions": 5, "used": False}
     assert (unt["sessions"], unt["prompts"]) == (5, 10)
     assert not os.path.exists(denylist.settings_path(repo, "codex"))      # nothing written yet
+
+
+def test_codex_never_proposes_a_protected_capability(env, repo, tmp_path):
+    """`toolprune_protect` covers Codex's capability packages too, by
+    name or pattern, as it covers single tools on the other agents, from the next fold on."""
+    env = dict(env, TE_TOOLPRUNE="propose")
+    for i in range(5):                   # thirty prompts: enough for image_media as well
+        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, prompts=6)
+        run_session(env, repo, f"cx{i}", t, host="codex")
+    unt = store_for(env, repo, "codex").read
+    assert unt("untool.json")["proposal"] == ["collaboration", "goals", "image_media"]
+    env = dict(env, TE_TOOLPRUNE_PROTECT="collab*,image_media")
+    run_session(env, repo, "cx5", codex_rollout(str(tmp_path / "rollout-5.jsonl"), repo, 5),
+                host="codex")
+    assert unt("untool.json")["proposal"] == ["goals"]
+
+
+def test_a_codex_package_applied_before_it_was_protected_comes_back(env, repo, tmp_path,
+                                                                     codex_accepts):
+    """The plugin's own line for a newly protected package is removed at
+    the next fold; the other packages it wrote stay."""
+    st = store_for(env, repo, "codex")
+    assert denylist.apply(repo, ["collaboration", "goals"], st, host="codex") == [
+        "collaboration", "goals"]
+    env = dict(env, TE_TOOLPRUNE="propose", TE_TOOLPRUNE_PROTECT="collab*")
+    run_session(env, repo, "cx0", codex_rollout(str(tmp_path / "rollout-0.jsonl"), repo, 0),
+                host="codex")
+    assert denylist.applied_for(st, repo, "codex") == ["goals"]
+    text = open(denylist.settings_path(repo, "codex")).read()
+    assert "[agents]" not in text and "include_collaboration_mode_instructions" not in text
+    assert "goals = false  # tokeneconomizer:goals" in text
+    # The session ran with it switched off, so it is no evidence that the package went unused.
+    caps = st.read("untool.json")["capabilities"]
+    assert caps["collaboration"]["loaded_sessions"] == 0
+    assert caps["image_media"]["loaded_sessions"] == 1
 
 
 def test_codex_needs_the_full_evidence_before_proposing(env, repo, tmp_path):

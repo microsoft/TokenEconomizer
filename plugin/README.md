@@ -774,7 +774,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
 | `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
 | `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it (a list is written at the latest a day after it formed); `0` writes at once |
-| `toolprune_protect` | none | tools never left out however long they go unused, by name or pattern (`mcp__headroom__*`), separated by commas; a deny rule the plugin added for one is removed at the next fold, and rules you wrote are never touched |
+| `toolprune_protect` | none | tools never left out however long they go unused, by name or pattern (`mcp__headroom__*`), separated by commas (on Codex, capability packages: `collaboration`, `goals`, `image_media`); a deny rule the plugin added for one is removed at the next fold, and rules you wrote are never touched |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
 | `loopguard_nudges` | `1` | redirects per turn before the guard only tells you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |
@@ -839,7 +839,9 @@ first session there ends.
 | Key | Default | Values |
 |---|---|---|
 | `enabled` | `true` | `false`: the whole plugin is off; its hooks return at once and record nothing |
-| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `paid_model` | `""` | model for the plugin's own calls on every agent; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `<agent>_paid_model` | `""` | the same for one agent (`claude`, `codex`, `copilot`, `pi`, `opencode`, `cursor`, `grok`, `hermes`), over `paid_model` |
+| `claude_paid_effort`, `codex_paid_effort` | `""` | the reasoning effort of those calls: Claude Code `low` to `max`, Codex `none` to `max`; which values a model takes is the CLI's to say; empty: the CLI's default |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |
