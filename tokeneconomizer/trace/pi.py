@@ -21,8 +21,11 @@ def _pi_entries(path):
 
 
 def pi_session_header(path):
-    """The `session` header line ({id, cwd, version, ...}), {} if absent."""
-    for ev in _pi_entries(path)[:1]:
+    """The `session` header line ({id, cwd, version, ...}), {} if absent.
+
+    omp (a Pi fork) starts its log with a `{"type":"title", ...}` line before the `session`
+    one, so the first few entries are scanned, not just the first."""
+    for ev in _pi_entries(path)[:8]:
         if ev.get("type") == "session":
             return ev
     return {}
@@ -78,8 +81,9 @@ def pi_session_to_claude(path, out_path):
         return None
     n = 0
     entries = _pi_entries(path)
-    head = entries[0] if entries and entries[0].get("type") == "session" else {}
+    head = pi_session_header(path)
     cwd = head.get("cwd") if isinstance(head.get("cwd"), str) else None
+    started = head.get("timestamp") if isinstance(head.get("timestamp"), str) else None
     with open(out_path, "w", encoding="utf-8") as out:
         for e in pi_active_branch(entries):
             if e.get("type") != "message":
@@ -87,8 +91,13 @@ def pi_session_to_claude(path, out_path):
             m = e.get("message") or {}
             role = m.get("role")
             if role == "user":
-                out.write(json.dumps({"type": "user", "message": {
-                    "role": "user", "content": _pi_text(m.get("content"))}}) + "\n")
+                user = {"role": "user", "content": _pi_text(m.get("content"))}
+                line = {"type": "user", "message": user}
+                if started:
+                    line["timestamp"] = started
+                if cwd:
+                    line["cwd"] = cwd
+                out.write(json.dumps(line) + "\n")
             elif role == "assistant":
                 blocks = []
                 for b in m.get("content") or []:

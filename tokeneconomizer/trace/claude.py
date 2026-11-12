@@ -169,7 +169,7 @@ def claude_history_logs(projects_dir):
     return out
 
 
-def _epoch(ts):
+def iso_epoch(ts):
     if not isinstance(ts, str) or not ts:
         return None
     try:
@@ -211,7 +211,7 @@ def claude_log_head(path):
                 if out["cwd"] is None and isinstance(ev.get("cwd"), str) and ev["cwd"]:
                     out["cwd"] = ev["cwd"]
                 if out["started"] is None:
-                    out["started"] = _epoch(ev.get("timestamp"))
+                    out["started"] = iso_epoch(ev.get("timestamp"))
                 if not out["entrypoint"] and isinstance(ev.get("entrypoint"), str):
                     out["entrypoint"] = ev["entrypoint"].strip()
                 if out["session_id"] and out["cwd"] and out["started"] and out["entrypoint"]:
