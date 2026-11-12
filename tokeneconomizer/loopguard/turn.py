@@ -55,9 +55,13 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
 # A runner asked for its help, version or test list, not to run the tests.
 _NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
-# What may precede the command itself: `FOO=1 timeout 60 npm test`, and a launcher that runs
-# it in the project's environment, `uv run pytest`, `npx jest`, `bundle exec rspec`.
-_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nice|nohup|command|env|"
+# What may precede the command itself: `FOO=1 timeout 60 npm test`, `env -u VAR`, `nice -n 10`,
+# and a launcher that runs it in the project's environment, `uv run pytest`, `npx jest`,
+# `bundle exec rspec`.
+_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nohup|command|"
+                        r"nice(?:\s+(?:-n\s*|--adjustment=)?[-+]?\d+)?|"
+                        # env's options; `-u`, `-C` and their long forms take a value
+                        r"env(?:\s+(?:(?:-[uC]|--unset|--chdir)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"

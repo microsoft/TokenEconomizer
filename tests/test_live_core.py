@@ -1420,6 +1420,30 @@ def test_a_runner_started_by_a_launcher_counts_as_a_verification(cmd):
     assert g.verifications == 1 and not g.resolved_proxy()
 
 
+@pytest.mark.parametrize("cmd", ["env -u CURSOR_AGENT python -m pytest tests",
+                                 "env -i PATH=/usr/bin go test ./...", "env --unset=CI npm test",
+                                 "env -C web npx vitest run", "nice -n 10 pytest -q",
+                                 "nice -n10 cargo test", "nice -5 go test ./...",
+                                 "FOO=1 env -u X timeout 60 npm test"])
+def test_a_runner_behind_env_or_nice_options_counts_as_a_verification(cmd):
+    """`env -u VAR` and `nice -n 10` take options before the command they run. Only the bare
+    word was passed over, so the run was no verification and a failing one after the last edit
+    left the turn green."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd,status", [("env -u CI python -m pytest --collect-only", None),
+                                        ("env -u CI echo pytest", None),
+                                        ("nice -n 10 make", None), ("env pytest", "own"),
+                                        ("nice pytest -q", "own")])
+def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
+    assert turn.status_of_tests(cmd) == status
+
+
 @pytest.mark.parametrize("cmd,status", [("uv run ruff check", None),
                                         ("npx prettier --check .", None),
                                         ("pnpm exec jest --help", None),
