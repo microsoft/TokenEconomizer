@@ -177,14 +177,30 @@ def _py_writes(text):
     return out
 
 
+# git's own options that take the next word as their value (`git -C repo apply x.diff`).
+_GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                   "--attr-source"}
+
+
+def _git_args(tokens):
+    """The words of a git command from its subcommand on, past git's own options such as
+    `-C <dir>`, `-c <name>=<value>` or `--no-pager`; [] for any other command."""
+    if tokens[0].rsplit("/", 1)[-1] != "git":
+        return []
+    i = 1
+    while i < len(tokens) and tokens[i].startswith("-"):
+        i += 2 if tokens[i] in _GIT_VALUE_OPTS else 1
+    return tokens[i:]
+
+
 def _restored(tokens):
     """The paths a `git checkout -- <path>` or `git restore <path>` puts back; [] for any other
     command."""
-    if tokens[0].rsplit("/", 1)[-1] != "git" or len(tokens) < 3 or \
-            tokens[1] not in ("checkout", "restore"):
+    args = _git_args(tokens)
+    if len(args) < 2 or args[0] not in ("checkout", "restore"):
         return []
-    rest = (tokens[tokens.index("--") + 1:] if "--" in tokens
-            else tokens[2:] if tokens[1] == "restore" else [])
+    rest = (args[args.index("--") + 1:] if "--" in args
+            else args[1:] if args[0] == "restore" else [])
     return [t for t in rest if not t.startswith("-")]
 
 
@@ -232,7 +248,7 @@ def shell_edit_targets(cmd):
             found += [t for t in tokens[1:] if not t.startswith("-") and _SOURCE_FILE.search(t)]
         elif head == "apply_patch":
             found += _PATCH_FILE.findall("\n".join(bodies + [" ".join(tokens[1:])])) or ["(patch)"]
-        elif head == "patch" or (head == "git" and len(tokens) > 1 and tokens[1] == "apply"):
+        elif head == "patch" or _git_args(tokens)[:1] == ["apply"]:
             found.append("(patch)")
         else:
             found += _restored(tokens)
