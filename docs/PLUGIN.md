@@ -1,7 +1,7 @@
 # The plugin: design and verified agent behaviour
 
 How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
-opencode, Cursor, Grok Build, Hermes Agent and Antigravity CLI sessions, through the hooks (on Pi, the extension events) each agent
+opencode, Cursor, Grok Build, Hermes Agent, Antigravity CLI and Factory Droid sessions, through the hooks (on Pi, the extension events) each agent
 exposes: what it does at each hook, what differs from the experiments and why, the agent
 behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
@@ -686,6 +686,40 @@ was not.)
 * **Side call, verified on 1.0.70.** With the side call's flags, the run's recorded tool list held
   only `read_file`, and a prompt asking it to create a file left none.
 
+**Factory Droid 0.233.0 -- adapter built 2026-11-05, partially verified:**
+
+* The hook contract is Claude-shaped (`session_id`, `transcript_path`, `cwd`,
+  `hook_event_name`) with Droid's own tool names (`Execute`, `Script`, `Create`, `Edit`,
+  `ApplyPatch`, ...). Factory's documentation names the same events this plugin registers --
+  `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd` -- and says a
+  `SessionStart` hook's `hookSpecificOutput.additionalContext` is appended to the new session's
+  context. Droid documents no `systemMessage` and no `PostToolUseFailure`.
+* **Offline, tested here:** the session reader and the tool-name mapping; prompt counting
+  (Droid's own `user_only` and `llm_only` messages and injected reminders are not prompts);
+  folding a session and the history import; the `SessionStart` hook's own JSON, including an
+  injected fact; usage and pricing; and the loop guard's redirect and notice paths on Droid
+  payloads. `tests/test_droid.py` and `tests/test_live_hooks.py` cover each.
+* **Session cost.** Droid's transcript carries no usage, but `<session id>.settings.json`
+  beside it carries `tokenUsage` (`inputTokens`, `outputTokens`, `cacheCreationTokens`,
+  `cacheReadTokens`, `thinkingTokens`, `factoryCredits`). Only `tokenUsage` is read;
+  `inclusiveTokenUsage` also counts child sessions, which are folded on their own.
+* **Tool results** are `tool_result` blocks with `is_error`, the same shape as Claude Code's
+  log; the live `PostToolUse` `tool_response` shape varies by tool, so shell status is read from
+  the text as on Claude Code (Droid reports no exit code field that the adapter relies on).
+* **Tool pruning** is not available: the TUI has no persistent per-tool setting, and Factory
+  issue #65 asks for one (`droid exec --only-tools` is exec-only).
+* **Verified live on 2026-11-05:** a fact written by the hook reached a live Droid model. A new
+  session (`bb18c4fc`) received the 793-character block as
+  `hookSpecificOutput.additionalContext`, and the model repeated it verbatim. The hook output
+  and the last hop are both observed.
+* **Side call.** `droid exec` cannot run with no tool at all (`--only-tools ""` reads as no
+  filter), so the call passes `--only-tools Read`. On 0.233.0, with the call's own flags,
+  `--list-tools` reports `Read` as the only tool allowed (without it, the default read-only
+  autonomy also allows `Execute`, the web tools and every MCP tool), and a live call asked to
+  run shell commands, write a file and search the web called no tool and wrote nothing. The
+  call also writes a session log of its own, so side calls stay off until `droid_sidecall` is
+  on (or `TE_DROID_SIDECALL=1`).
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
@@ -748,7 +782,8 @@ by default with the guard), of micro-skills (its proposer, when it is on), and, 
 it, of `toolprune measure` on Claude Code. Those calls send
 **digests** — command templates, edited file basenames, error lines with paths and numbers
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
-`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat`), billed where your session is. The proposer keeps the digests of the last eight
+`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat` / `droid exec`, the last only with
+`droid_sidecall` on), billed where your session is. The proposer keeps the digests of the last eight
 sessions with its state, raw commands and output capped, so that each run sees more than the
 session that just ended. Sessions imported from Claude Code's history call no model, but their
 digests join that window, so the proposer's next call can include digests of sessions from
@@ -822,6 +857,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
   on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
   `cmd /c` on Windows, and the launcher is a POSIX shell script.
+* **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
+  (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
+  calls are off until `droid_sidecall` is on; see `docs/DROID.md`.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s

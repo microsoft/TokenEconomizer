@@ -44,6 +44,12 @@ so no extra API key is needed and the call is billed where the session is:
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
     `hermes_call` for why `TE_SIDECALL` is not how it avoids the plugin's hooks.
+  * Factory Droid: `droid exec --output-format json --disable-builtin-skills --only-tools Read`,
+    in a throwaway directory at Droid's default read-only autonomy, on the person's default
+    model, with only the read-only `Read` tool allowed. OFF unless `droid_sidecall` is on (or
+    `TE_DROID_SIDECALL=1`): Droid writes a session log of its own for the call, and cannot be
+    left with no tool at all. Its usage is read from the call's result or from the settings file
+    beside that log.
 
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
@@ -745,9 +751,120 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 # Hosts the plugin makes no model call for: their CLI cannot run a prompt with every tool off.
 NO_SIDE_CALLS = frozenset({"antigravity"})
 
+
+def droid_enabled(env=None):
+    """Whether `TE_DROID_SIDECALL` allows Droid side calls. The `droid_sidecall` setting does
+    the same from the config file, which is the only way from the desktop app. They are OFF by
+    default: `droid exec` writes a session log of its own under `~/.factory/sessions`, so a
+    person enables them knowingly."""
+    env = os.environ if env is None else env
+    return str(env.get("TE_DROID_SIDECALL") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _droid_sessions_root():
+    return os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
+        os.path.expanduser("~"), ".factory", "sessions")
+
+
+def _droid_usage(d):
+    """A Droid usage object (camelCase from its settings, snake_case from `exec`) as the
+    breakdown `accounting.effective` reads."""
+    if not isinstance(d, dict):
+        return None
+
+    def key(camel, snake):
+        return d.get(snake, d.get(camel))
+    usage = {"input_tokens": key("inputTokens", "input_tokens"),
+             "cache_read_input_tokens": key("cacheReadTokens", "cache_read_input_tokens"),
+             "cache_creation_input_tokens": key("cacheCreationTokens",
+                                                "cache_creation_input_tokens"),
+             "output_tokens": key("outputTokens", "output_tokens"),
+             "model": d.get("model")}
+    return usage if usage["input_tokens"] is not None else None
+
+
+def _droid_settings_usage(sid):
+    """The usage Droid wrote beside a side call's own session log, or None."""
+    if not sid:
+        return None
+    root = _droid_sessions_root()
+    try:
+        folders = os.listdir(root)
+    except OSError:
+        return None
+    for folder in folders:
+        path = os.path.join(root, folder, f"{sid}.settings.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        return _droid_usage(dict(data.get("tokenUsage") or {}, model=data.get("model")))
+    return None
+
+
+# A Droid side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. Droid's default read-only autonomy still lists `Execute`, the web tools and every
+# MCP tool as allowed (0.233.0, `droid exec --list-tools`), so the call names its tools with
+# `--only-tools`, an allowlist. It cannot be empty -- `--only-tools ""` reads as no filter, and a
+# name droid does not know is refused -- so it keeps the one read-only tool, as Grok's does.
+# Verified on 0.233.0: with the call's own flags, `--list-tools` reports `Read` as the only
+# tool allowed, MCP tools included.
+DROID_TOOLS = "Read"
+
+
+def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
+    """A text-only completion through `droid exec`, in a throwaway directory, with only the
+    read-only `Read` tool allowed (`--only-tools`, see `DROID_TOOLS`).
+
+    Droid cannot be left with no tool at all, and `droid exec` writes a session log of its own,
+    so this is off unless the person turns it on (`droid_enabled`, or the `droid_sidecall`
+    setting). `TE_SIDECALL=1` makes this plugin's own hooks no-ops inside the nested session, so
+    a side call cannot recurse. Its own usage is read from the `exec` result or from the
+    settings file beside the session it wrote, so the call is charged rather than guessed."""
+    cmd = [*program(cli), "exec", "--output-format", "json", "--disable-builtin-skills",
+           "--only-tools", DROID_TOOLS, "--append-system-prompt",
+           "Answer with text only. Do not call any tool. Your entire reply is the answer."]
+    if model:
+        cmd += ["--model", model]
+    cmd.append(prompt)
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=timeout, env=_env(), cwd=cwd,
+                             stdin=subprocess.DEVNULL)
+    text, sid, usage = "", "", None
+    for line in (out.stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        sid = ev.get("session_id") or sid
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        usage = _droid_usage(ev.get("usage")) or _droid_usage(data.get("usage")) or usage
+        for key in ("result", "text", "message"):
+            if isinstance(ev.get(key), str) and ev[key].strip():
+                text = ev[key]
+        for key in ("content", "result", "text"):
+            if isinstance(data.get(key), str) and data[key].strip():
+                text = data[key]
+    if not text and (out.stdout or "").strip():
+        # `--output-format json` that answers plain text (an older build): take it as-is.
+        text = out.stdout.strip()
+    if not text:
+        _no_reply("droid", out)
+    eff = None
+    usage = usage or _droid_settings_usage(sid)
+    if usage:
+        usage.setdefault("model", model or None)
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
-_CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
-          "hermes": "hermes chat"}
+_CALLS = {"codex": "codex exec", "droid": "droid exec", "opencode": "opencode run",
+          "cursor": "cursor-agent -p", "hermes": "hermes chat"}
 
 
 def call_name(host_name):
@@ -788,4 +905,11 @@ def _host_call(host_name, config):
         return lambda prompt, _m="agent": codex_call(prompt, model=model, **kw)
     if host_name == "copilot":
         return lambda prompt, _m="agent": copilot_call(prompt, model=model)
+    if host_name == "droid":
+        # Off unless the person turned it on, by the setting or the variable: see
+        # `droid_enabled`. No runner means the free layer still learns; only the paid proposer
+        # and the judge wait.
+        if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
+            return None
+        return lambda prompt, _m="agent": droid_call(prompt, model=model)
     return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku", **kw)

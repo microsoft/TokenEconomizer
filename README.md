@@ -69,8 +69,8 @@ mechanisms:
   itself.
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
-with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent** and
-the **Antigravity CLI**. Each italic
+with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent**,
+the **Antigravity CLI** and **Factory Droid**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -167,6 +167,24 @@ pi install git:github.com/microsoft/TokenEconomizer
 
 Start `pi` and run `/te status`.
 
+**Factory Droid** (experimental; micro-skills, the loop guard and session cost, not tool pruning)
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+cd TokenEconomizer
+python scripts/build_plugin.py --droid
+droid plugin marketplace add "$PWD/dist/tokeneconomizer-droid"
+droid plugin install tokeneconomizer@tokeneconomizer-droid --scope user
+```
+
+Start a new Droid session (its hooks are snapshotted at startup) and run
+`/tokeneconomizer-status`. Droid keeps each session's token usage in a settings file beside its
+log, so folded sessions are priced like any other host's. Its TUI has no persistent per-tool
+setting, so tool pruning stays off; and because `droid exec` writes a session log of its own,
+micro-skills' paid proposer and the loop guard's judge stay off until `droid_sidecall` is on
+(when on, they may use only Droid's read-only `Read` tool).
+See **[`docs/DROID.md`](docs/DROID.md)** for what works and how to import earlier sessions.
+
 **Cursor Agent** (experimental)
 
 ```sh
@@ -249,6 +267,7 @@ To update:
 | Agent | Update |
 |---|---|
 | Claude Code, Copilot CLI, opencode | `git pull` in the clone |
+| Factory Droid | `git pull` in the clone, then the `build_plugin.py --droid` and install lines again |
 | Hermes Agent | `git pull` in the clone, then `hermes gateway restart` |
 | Antigravity CLI | build the bundle again and `agy plugin install` it |
 | Codex | `git pull` in the clone, then the `codex plugin add` line again |
@@ -270,6 +289,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 | Antigravity CLI (experimental) | agy 1.5.1, macOS and Linux | not tested |
+| Factory Droid (experimental) | 0.233.0, macOS (below) | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
@@ -298,6 +318,13 @@ have not been tested yet.
   not. Its other surfaces (the Ink TUI, the Desktop app, messaging platforms, cron) and
   subagents are ignored, and tool pruning is not available. See
   [its limits](plugin/README.md#hermes-agent).
+- **Factory Droid** support is experimental: it was tested on 0.233.0 only, on macOS. Droid
+  documents the hook contract this adapter uses, and the plugin's own hook output is covered by
+  tests; a learned fact reaching a live Droid model was verified on 2026-11-05 (a new session
+  received the 793-character block as `hookSpecificOutput.additionalContext` and the model
+  repeated it). Droid's TUI has no persistent per-tool setting (Factory issue #65), so tool
+  pruning is not available; its session logs are read for micro-skills and the loop guard, and
+  priced from the usage Droid writes beside each log. See [its notes](docs/DROID.md).
 
 ### Everyday commands
 
@@ -314,13 +341,14 @@ commands. They have the same names on every agent; only the way you type them di
 | Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` |
+| Factory Droid | `/tokeneconomizer-<command>` (e.g. `/tokeneconomizer-status`) |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
 | Command | What it does |
 |---|---|
 | `status` | what it learned and did here, and what your sessions cost |
 | `microskills` | the facts it injects, and those still forming |
-| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode, Hermes Agent or the Antigravity CLI) |
+| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode, Hermes Agent, the Antigravity CLI or Factory Droid) |
 | `toolprune restore` | give them back; they will not be removed again |
 | `config` | every setting in effect |
 | `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
@@ -351,6 +379,7 @@ are these settings:
 | *c* | `loopguard.judge_confidence` | 0.7 | how sure the judge must be that a turn is stuck |
 | *r* | `loopguard_nudges` | 1 | redirects per turn before the guard only tells you |
 | *b* | `loopguard.backstop_mult` | 2.5 | how many times its usual length a churning turn may run before it is redirected without the judge |
+| | `droid_sidecall` | off | on Droid, allow the plugin's own model calls, which run `droid exec` |
 
 Change them with `config set`, shown here in Claude Code's form (other agents type it as in
 [Everyday commands](#everyday-commands)):
@@ -361,6 +390,12 @@ Change them with `config set`, shown here in Claude Code's form (other agents ty
 /tokeneconomizer:config set toolprune_evidence=20          # p = 20: wait for twenty unused prompts
 /tokeneconomizer:config set loopguard_nudges=2             # r = 2: redirect twice before telling you
 ```
+
+On Droid, the plugin's own calls run `droid exec`, which writes a session log of its own, so
+they stay off until `config set droid_sidecall=on` (`TE_DROID_SIDECALL=1` does the same from a
+terminal). When on, they run with `--only-tools Read`, so `Read` is the only tool they may use.
+With them off, `microskills=envfacts` still learns and the loop guard keeps its rule-based
+backstop; only the paid fact proposer and the judge wait.
 
 Tool pruning counts prompts so that long sessions weigh more, and requires *m* sessions so that a
 single session never decides alone. It writes the deny list only once your sessions in the
@@ -404,6 +439,7 @@ what it can leave out differs:
 | opencode | nothing yet | — |
 | Hermes Agent | nothing yet | — |
 | Antigravity CLI | nothing yet | — |
+| Factory Droid | nothing (no persistent per-tool setting in the TUI) | — |
 
 Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it
 creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that says
@@ -439,6 +475,7 @@ Where that line appears, and how to stop the turn, in the terminal UI and in a h
 | Pi | as a notification | Esc | on stderr | Ctrl+C |
 | opencode | as a notification | Esc | on stderr | Ctrl+C |
 | Hermes Agent | in the model's reply | Ctrl+C | in the final reply | Ctrl+C |
+| Factory Droid | in the model's reply | Interrupt the agent | in the final reply | Ctrl+C |
 
 - **Claude Code** shows a plugin's own lines only in its detailed transcript (Ctrl+O), so the
   plugin asks Claude to repeat this one in its reply; the model may word it differently or leave
@@ -462,9 +499,9 @@ agent's own limits; afterwards, `te status` counts the redirects and "still stuc
 | [`tokeneconomizer/loopguard`](tokeneconomizer/loopguard/) | Failure-loop intervention: the per-call guard and its per-repository envelope |
 | [`tokeneconomizer/trace`](tokeneconomizer/trace/) | Each agent's session log, read into one shape |
 | [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
-| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode and Hermes plugins |
+| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode and Hermes plugins, the Droid bundle (`.factory-plugin/`) |
 | [`experiments`](experiments/) | The harness, launchers and task sets behind the paper's results |
-| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior) and `ARCHITECTURE.md` (how the package fits together) |
+| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior), `ARCHITECTURE.md` (how the package fits together) and `DROID.md` (the Factory Droid adapter) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |
 
 The package is standard-library only. Run the tests with `python -m pytest tests` (add
