@@ -48,7 +48,7 @@ person can tune by hand:
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
   * <agent>_paid_model          -- the model of the plugin's own calls on that agent, over
                                    `paid_model` (claude, codex, copilot, pi, opencode, cursor,
-                                   grok, hermes);
+                                   grok, hermes, droid);
   * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
   * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
                                    custom provider's, whose model they could not reach otherwise;
@@ -189,6 +189,7 @@ class LiveConfig:
     cursor_paid_model: str = ""
     grok_paid_model: str = ""
     hermes_paid_model: str = ""
+    droid_paid_model: str = ""
     claude_paid_effort: str = ""
     codex_paid_effort: str = ""
     pi_extensions: list = field(default_factory=list)
@@ -304,7 +305,7 @@ class LiveConfig:
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
         **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
-            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes")},
+            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes", "droid")},
         "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
