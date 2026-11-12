@@ -741,6 +741,13 @@ def cmd_repos(args):
         if not args.keys or len(args.keys) > 2:
             print("usage: te repos merge KEY [INTO] (keys as `te repos` lists them)")
             return 2
+        # A key names one directory in `repos/`: `.`, `""` or a path would name `repos/`
+        # itself, or somewhere else, and the merge would set all of it aside.
+        bad = [k for k in args.keys if k in ("", ".", "..") or os.path.basename(k) != k
+               or "/" in k or "\\" in k]
+        if bad:
+            print(f"not a state directory key: {bad[0]!r} (keys as `te repos` lists them)")
+            return 2
         src = args.keys[0]
         if not os.path.isdir(os.path.join(repos.repos_dir(root), src)):
             print(f"no state directory {src!r} in {repos.repos_dir(root)}")
