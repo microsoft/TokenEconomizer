@@ -2,8 +2,11 @@
 and 2x for the 1-hour one, and a message's usage says how its cache writes split between them
 (`cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`). Claude Code on a
 subscription writes to the 1-hour cache, so pricing every cache write at 1.25x understates such a
-session."""
+session. A cache hit is billed at 0.1x input except on a few models (0.05x on Opus 5.5 and
+Sonnet 5.5, 0.025x on Fable and Mythos 5.1 and 5.2), and hits are most of a session's tokens."""
 import json
+
+import pytest
 
 from tokeneconomizer import pricing, trace
 from tokeneconomizer.plugin import accounting
@@ -35,7 +38,7 @@ def test_a_row_without_the_split_is_priced_as_before():
 
 
 def test_a_claude_id_outside_the_table_gets_the_one_hour_rate_too():
-    row = _row(1000, one_hour=1000, model="claude-opus-5-5")
+    row = _row(1000, one_hour=1000, model="claude-opus-4-5")
     assert pricing.effective_tokens(row) == BASE + 1000 * 2.0
 
 
@@ -121,3 +124,40 @@ def test_an_unpriced_model_keeps_the_fallback_cache_write_rate():
              "cache_creation_input_tokens": 1000, "cache_creation_1h_input_tokens": 1000,
              "model": "some-new-model"}
     assert accounting.effective(usage) == (10 + 1000 * 1.25, "fallback")
+
+
+# ---- cache hits ------------------------------------------------------------------------------
+@pytest.mark.parametrize("model, ratio", [
+    ("claude-opus-5-5", 0.05), ("claude-sonnet-5-5", 0.05),
+    ("claude-fable-5-1", 0.025), ("claude-fable-5-2", 0.025),
+    ("claude-mythos-5-1", 0.025), ("claude-mythos-5-2", 0.025),
+    ("claude-sonnet-5.5", 0.05),                                # a router's dotted spelling
+    ("anthropic/claude-opus-5.5", 0.05),                        # and its provider prefix
+    ("claude-opus-5-5-20261001", 0.05),                         # a dated snapshot
+])
+def test_a_cache_hit_is_billed_at_the_models_own_fraction(model, ratio):
+    assert pricing.weights_for(_row(model=model))["cache_read"] == ratio
+    cache_hits = 10_000 * ratio
+    assert pricing.effective_tokens(_row(0, model=model)) == 100 + cache_hits + 10 * 5.0
+
+
+@pytest.mark.parametrize("model", [
+    "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6",
+    "claude-haiku-5-5", "claude-haiku-4-5", "claude-fable-5", "claude-mythos-5",
+    "claude-opus-4.5",
+])
+def test_the_other_claude_models_keep_the_usual_cache_hit_fraction(model):
+    assert pricing.weights_for(_row(model=model))["cache_read"] == 0.10
+    assert pricing.effective_tokens(_row(0, model=model)) == BASE
+
+
+def test_a_session_on_opus_5_5_is_priced_with_its_cheaper_cache_hits(tmp_path):
+    entries = [{"type": "assistant", "message": {
+        "id": "m1", "model": "claude-opus-5-5", "role": "assistant",
+        "usage": {"input_tokens": 10, "cache_read_input_tokens": 1000,
+                  "cache_creation_input_tokens": 0, "output_tokens": 50},
+        "content": [{"type": "text", "text": "x"}]}}]
+    eff, priced_by = accounting.effective(trace.claude_session_usage(_transcript(
+        tmp_path / "s.jsonl", entries)))
+    assert priced_by == "model"
+    assert eff == 10 + 1000 * 0.05 + 50 * 5.0

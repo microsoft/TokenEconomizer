@@ -918,8 +918,9 @@ def test_each_session_is_folded_once_and_priced(env, repo, tmp_path):
     ledger = store_for(env, repo).read_lines("ledger.jsonl")
     assert len(ledger) == 1
     rec = ledger[0]
-    # 3 requests x (10 fresh + 0.1 x 1000 cached + 1.25 x 100 written + 5 x 50 output)
-    assert rec["requests"] == 3 and rec["effective_tokens"] == pytest.approx(3 * 485.0)
+    # 3 requests x (10 fresh + 0.05 x 1000 cached + 1.25 x 100 written + 5 x 50 output); the
+    # session's model, Opus 5.5, bills a cache hit at 0.05x input, not the usual 0.1x
+    assert rec["requests"] == 3 and rec["effective_tokens"] == pytest.approx(3 * 435.0)
     assert rec["priced_by"] == "model" and set(rec["overhead"]) == {
         "optimizer_tokens", "spiral_judge_tokens", "spiral_nudge_writer_tokens"}
 
