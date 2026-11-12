@@ -50,6 +50,17 @@ person can tune by hand:
                                    `paid_model` (claude, codex, copilot, pi, opencode, cursor,
                                    grok, hermes);
   * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
+  * local_model, local_roles   -- run the named side calls (`judge`, `nudge`, `proposer`;
+                                   default `judge`) on an on-device model instead of the
+                                   agent's CLI: `fm`, Apple's Foundation Models CLI on macOS 27.
+                                   Off by default. A call the local model cannot make -- no `fm`,
+                                   model unavailable, no reply -- falls back to the agent's CLI.
+                                   Local calls are charged 0 tokens;
+  * local_judge_confidence      -- the confidence a stuck verdict from the local judge must reach
+                                   to count (default 0.9); below it the turn is spared. The local
+                                   model's confidences come in coarse steps, so the guard's own
+                                   `judge_confidence` would let nearly every local "stuck"
+                                   through; how 0.9 was chosen: microsoft/TokenEconomizer#186;
   * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;
@@ -82,6 +93,12 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
+# An on-device model some side calls can run on instead of the agent's CLI (`sidecall.local_runner`):
+# "fm" is Apple's Foundation Models CLI (`/usr/bin/fm`, macOS 27 with Apple Intelligence).
+LOCAL_MODELS = ("off", "fm")
+# The side calls `local_roles` may name. The judge is the default because it is the one the
+# evaluation supports; the redirect writer and the proposer are opt-in.
+LOCAL_ROLES = ("judge", "nudge", "proposer")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
@@ -188,6 +205,9 @@ class LiveConfig:
     hermes_paid_model: str = ""
     claude_paid_effort: str = ""
     codex_paid_effort: str = ""
+    local_model: str = "off"
+    local_roles: list = field(default_factory=lambda: ["judge"])
+    local_judge_confidence: float = 0.9
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
@@ -201,6 +221,7 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
+                "local_model": LOCAL_MODELS,
                 "vocabulary": ("auto", "generic", "python-git", "node-web"),
                 # Each CLI's own words (Claude Code 2.1.319, Codex 0.167.0); whether a model
                 # takes one is the CLI's to say.
@@ -245,6 +266,12 @@ class LiveConfig:
             if isinstance(cur, list):
                 items = value if isinstance(value, list) else str(value).split(",")
                 v = [str(x).strip() for x in items if str(x).strip()]
+            elif isinstance(cur, float):
+                if isinstance(value, bool):
+                    raise ValueError("not a number")
+                v = float(value)
+                if not 0.0 <= v <= 1.0:
+                    raise ValueError("must be between 0 and 1")
             elif isinstance(cur, bool):
                 v = value if isinstance(value, bool) else str(value).strip().lower() in (
                     "1", "true", "yes", "on")
@@ -262,6 +289,11 @@ class LiveConfig:
         except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: {key}={value!r} rejected ({e})")
             return False
+        if key == "local_roles":
+            bad = [r for r in v if r not in LOCAL_ROLES]
+            if bad:
+                self.warnings.append(f"{source}: local_roles {bad!r} not in {LOCAL_ROLES}")
+                return False
         choices = self._CHOICES.get(key)
         if choices and v not in choices:
             self.warnings.append(f"{source}: {key}={v!r} not one of {choices}")
@@ -302,6 +334,8 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
             "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes")},
         "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
+        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
+        "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
         "TE_PROPOSE_EVERY": "microskills_propose_every",
