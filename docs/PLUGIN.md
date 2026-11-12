@@ -720,6 +720,38 @@ was not.)
   call also writes a session log of its own, so side calls stay off until `droid_sidecall` is
   on (or `TE_DROID_SIDECALL=1`).
 
+**ZCode 0.17.1 -- adapter built 2026-11-12, read from its code, not run live:**
+
+* **Offline, tested here:** the session reader over a synthetic copy of ZCode's SQLite store (its
+  JSON keys were read off a real store, keys only); prompt counting; usage; host detection; the
+  `zcode -p` side call's command; and the hooks end to end through `hook.main`, with a payload
+  built as ZCode's own code builds it. **Not done:** a live ZCode session with the hook file
+  (`docs/ZCODE.md`, "Verify it"), and a real `zcode -p` call (what it prints, whether
+  `--disallowed-tools` keeps out every tool).
+* The hook contract is Claude-shaped: `session_id`, `tool_name`, `tool_input`, `tool_use_id`,
+  `tool_response`, `hook_event_name`, beside ZCode's own camelCase fields (`hookEventName`,
+  `sessionId`, `toolName`, `turnId`, `agentName`, `mode`). Events: `SessionStart`,
+  `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and no
+  `SessionEnd`. Its output schema takes `hookSpecificOutput.additionalContext` (the event's own
+  name in `hookEventName`), a top-level `additionalContext` and `systemMessage`; the contexts of
+  SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure and Stop are added to the
+  conversation as a `hook_context` entry, cut at 24,000 characters. `systemMessage` is used only to
+  explain a block, and `continue: false` is a block request on every event but Stop.
+* `transcript_path` and `transcriptPath` are one temporary file, `zcode-hook-*/transcript.jsonl`,
+  with the event's prompt or answer, deleted after the hook. That name is how `hosts.detect` tells
+  ZCode from Claude Code and from Grok (which also sends `hookEventName`). The log is the SQLite
+  store, `<ZCODE_STORAGE_DIR or ~/.zcode>/cli/db/db.sqlite`.
+* ZCode's tool names are Claude Code's. `model_usage.input_tokens` counts the cached reads (total
+  = input + output on every row of a real store, counted by aggregate queries only;
+  `cache_creation_input_tokens` was 0 on all of them); the ledger's input does not, so the reader subtracts them.
+* **Side call.** `zcode -p <text> --mode plan --cwd <empty dir> --disallowed-tools <names>`; `-p`
+  has no `--model`, and defaults to `yolo`. A deny list cannot be inverted, so the call is off
+  until `zcode_sidecall` is on (or `TE_ZCODE_SIDECALL=1`).
+
+**Kimi Code 2.1.1 -- not supported** (`docs/KIMI.md`): the `wire.jsonl` record that carries a
+prompt or a tool call has not been seen, and whether an exit-0 hook's stdout reaches the model has
+not been tried.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory

@@ -70,7 +70,7 @@ mechanisms:
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
 with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent**,
-the **Antigravity CLI** and **Factory Droid**. Each italic
+the **Antigravity CLI**, **Factory Droid** and **ZCode**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -184,6 +184,14 @@ setting, so tool pruning stays off; and because `droid exec` writes a session lo
 micro-skills' paid proposer and the loop guard's judge stay off until `droid_sidecall` is on
 (when on, they may use only Droid's read-only `Read` tool).
 See **[`docs/DROID.md`](docs/DROID.md)** for what works and how to import earlier sessions.
+
+**ZCode** (experimental; micro-skills, the loop guard and session cost, not tool pruning)
+
+ZCode has no plugin format this repository builds. Add the entries of `plugin/hooks/zcode-hooks.json`
+to the `hooks.events` of the repository's `zcode.json`, then trust them (`zcode hooks trust
+review`). The fold reads ZCode's SQLite store, not the hook's own transcript. Its `-p` side call
+stays off until `zcode_sidecall` is on. See **[`docs/ZCODE.md`](docs/ZCODE.md)**. Kimi Code is
+not supported yet; **[`docs/KIMI.md`](docs/KIMI.md)** says what is missing.
 
 **Cursor Agent** (experimental)
 
@@ -380,6 +388,7 @@ are these settings:
 | *r* | `loopguard_nudges` | 1 | redirects per turn before the guard only tells you |
 | *b* | `loopguard.backstop_mult` | 2.5 | how many times its usual length a churning turn may run before it is redirected without the judge |
 | | `droid_sidecall` | off | on Droid, allow the plugin's own model calls, which run `droid exec` |
+| | `zcode_sidecall` | off | on ZCode, allow the plugin's own model calls, which run `zcode -p` |
 
 Change them with `config set`, shown here in Claude Code's form (other agents type it as in
 [Everyday commands](#everyday-commands)):
@@ -501,7 +510,7 @@ agent's own limits; afterwards, `te status` counts the redirects and "still stuc
 | [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
 | [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode and Hermes plugins, the Droid bundle (`.factory-plugin/`) |
 | [`experiments`](experiments/) | The harness, launchers and task sets behind the paper's results |
-| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior), `ARCHITECTURE.md` (how the package fits together) and `DROID.md` (the Factory Droid adapter) |
+| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior), `ARCHITECTURE.md` (how the package fits together), `ZCODE.md` and `KIMI.md` (the ZCode adapter; why Kimi Code has none) and `DROID.md` (the Factory Droid adapter) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |
 
 The package is standard-library only. Run the tests with `python -m pytest tests` (add

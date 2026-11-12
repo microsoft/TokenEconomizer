@@ -1,0 +1,62 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"$HOME/.tokeneconomizer/src/plugin/scripts/te-hook\" --host zcode",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"$HOME/.tokeneconomizer/src/plugin/scripts/te-hook\" --host zcode",
+              "timeout": 20
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"$HOME/.tokeneconomizer/src/plugin/scripts/te-hook\" --host zcode",
+              "timeout": 60
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"$HOME/.tokeneconomizer/src/plugin/scripts/te-hook\" --host zcode",
+              "timeout": 60
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"$HOME/.tokeneconomizer/src/plugin/scripts/te-hook\" --host zcode",
+              "timeout": 10
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

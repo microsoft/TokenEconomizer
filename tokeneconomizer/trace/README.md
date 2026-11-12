@@ -17,6 +17,7 @@ session as an ordered list of `(tool_name, args, result_text, success)` calls th
 | `grok.py` | Grok Build sessions: `updates.jsonl` (ACP updates) written as a Claude transcript; prompts and usage from its session files |
 | `hermes.py` | Hermes Agent sessions: a copy of a session's `state.db` rows without the conversation's words, written as a Claude transcript; usage |
 | `pi.py` | Pi's session tree: the active branch, written as a Claude transcript; usage |
+| `zcode.py` | ZCode sessions: a copy of a session's rows from its SQLite store without the conversation's words, written as a Claude transcript; usage with the cache taken out of input |
 | `jsonl.py` | line and record readers shared by the above |
 
 A new agent needs a reader here and nothing else: once its log reads as `(name, args, result,
