@@ -395,6 +395,22 @@ def test_te_repos_lists_merges_and_says_what_it_did(tmp_path, env, monkeypatch, 
     assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", "nope"]) == 2
 
 
+def test_te_repos_merge_refuses_a_key_that_is_not_one_state_directory(tmp_path, env,
+                                                                      monkeypatch, capsys):
+    # `.` or "" (an unset shell variable) joined to `repos/` is `repos/` itself: merging it
+    # would set every repository's state aside under `merged/`.
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a}, "claude")
+    key = paths.repo_identity(a, env).key
+    for keys in (["."], [""], [".."], [f"{key}/claude"], [key, "."], [key, ""]):
+        assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", *keys]) == 2
+    assert "not a state directory key" in capsys.readouterr().out
+    assert os.listdir(repos.repos_dir(paths.state_root(env))) == [key]
+    assert not os.path.exists(os.path.join(paths.state_root(env), "merged"))
+
+
 # ---- deny lists are per checkout --------------------------------------------------------------
 def test_a_deny_list_applied_in_one_clone_is_still_proposed_in_another(tmp_path):
     st = Store(str(tmp_path / "st"))
