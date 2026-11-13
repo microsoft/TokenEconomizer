@@ -318,8 +318,10 @@ def test_droid_plugin_packaging(tmp_path):
     built_hooks = json.load(open(plugin / "hooks" / "hooks.json"))
     assert set(built_hooks) == {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop",
                                 "SessionEnd"}
-    command = (plugin / "commands" / "tokeneconomizer-status.md").read_text()
-    assert "${DROID_PLUGIN_ROOT}" in command and "Execute tool" in command
+    for name in ("config", "facts", "microskills", "repos", "status", "toolprune", "untool"):
+        command = (plugin / "commands" / f"tokeneconomizer-{name}.md").read_text(encoding="utf-8")
+        assert "${DROID_PLUGIN_ROOT}" in command and "Execute tool" in command
+        assert "Bash tool" not in command
     assert (plugin / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
     # Antigravity's files, which sit at the plugin root beside Droid's: Droid reads neither (its
     # hooks are `hooks/hooks.json`), and the bundle ships only what Droid loads.

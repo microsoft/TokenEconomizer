@@ -10,7 +10,7 @@ $root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join
 & (Join-Path $root 'bin\te.ps1') --host copilot --cwd (Get-Location).Path status
 ```
 
-Otherwise, use the Bash tool:
+Otherwise, run this command with the Bash tool:
 
 ```
 te="${CLAUDE_PLUGIN_ROOT}/scripts/te"; [ -x "$te" ] || te="${TOKENECONOMIZER_HOME:-$HOME/.tokeneconomizer}/bin/te"; "$te" --cwd "$(pwd)" status
