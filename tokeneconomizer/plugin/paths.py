@@ -76,8 +76,6 @@ def ensure_launcher(env=None):
     if os.name == "nt":
         import json
         import sys
-        launchers[path + ".ps1"] = "& '%s' @args\nexit $LASTEXITCODE\n" % (
-            target.replace("'", "''") + ".ps1")
         launchers[path + ".json"] = json.dumps({
             "python": sys.executable,
             "bootstrap": os.path.join(plugin, "scripts", "te_bootstrap.py"),
