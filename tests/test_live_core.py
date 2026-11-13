@@ -1512,11 +1512,13 @@ def test_the_side_calls_skip_json_lines_that_are_not_objects(monkeypatch, tmp_pa
     def fake_run(cmd, **kw):
         if "codex" in (cmd[0] or ""):
             out = "\n".join(json.dumps(e) for e in (*junk, {
-                "type": "item.completed",
-                "item": {"type": "agent_message", "text": "hi"}}))
+                "type": "item.completed", "item": "x"},
+                {"type": "item.completed",
+                 "item": {"type": "agent_message", "text": "hi"}}))
         else:
             out = "\n".join(json.dumps(e) for e in (*junk, {
-                "type": "assistant.message", "data": {"content": "- use python -m pytest"}},
+                "type": "assistant.message", "data": [1, 2]},
+                {"type": "assistant.message", "data": {"content": "- use python -m pytest"}},
                 {"type": "result", "sessionId": "side1", "exitCode": 0}))
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
@@ -1538,7 +1540,8 @@ def test_inspect_session_skips_hook_lines_that_do_not_parse(tmp_path, monkeypatc
     log = home / "session-state" / "s1" / "events.jsonl"
     log.parent.mkdir(parents=True)
     log.write_text('{"type": "session.start", "data": {"context": {"cwd": "/r"}}}\n'
-                   '"hook.end sessionStart"\n'                      # parses, not an object
+                   '"hook.end sessionStart"\n'                       # parses, not an object
+                   '{"type": "hook.end", "data": ["x"], "hookType": "sessionStart"}\n'
                    '{broken "hook.end" "sessionStart"\n'            # does not parse at all
                    '{"type": "session.shutdown", "data": {}}\n')    # so `settle` need not wait
     monkeypatch.setenv("COPILOT_HOME", str(home))

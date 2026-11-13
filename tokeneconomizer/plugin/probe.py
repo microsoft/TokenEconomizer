@@ -133,7 +133,7 @@ def run_session(repo, env, plugin, model, cli="copilot", timeout=600):
         if ev.get("type") == "result":
             sid = ev.get("sessionId")
         elif ev.get("type") == "assistant.message":
-            answer = (ev.get("data") or {}).get("content") or answer
+            answer = sidecall._obj(ev.get("data")).get("content") or answer
     return sid, answer.strip(), error[0]
 
 
@@ -152,7 +152,8 @@ def inspect_session(sid):
                 ev = json.loads(line)
             except ValueError:
                 continue
-            out = ((ev.get("data") or {}).get("output") or {}) if isinstance(ev, dict) else {}
+            data = sidecall._obj(ev.get("data")) if isinstance(ev, dict) else {}
+            out = sidecall._obj(data.get("output"))
             injected = injected or "fails here" in (out.get("additionalContext") or "")
     usage = trace.copilot_session_usage(log)
     first = tests[0] if tests else None

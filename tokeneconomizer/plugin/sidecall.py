@@ -63,6 +63,13 @@ import tempfile
 from .. import trace
 from . import accounting
 
+
+def _obj(v):
+    """`v` when it is a dict, else {}: agent CLI output is not schema-bound,
+    so a nested non-object where an object is expected must be skipped, not
+    trusted (#182)."""
+    return v if isinstance(v, dict) else {}
+
 TIMEOUT_S = 180
 
 
@@ -314,9 +321,9 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
             continue
         if not isinstance(ev, dict):
             continue
-        item = ev.get("item") or {}
+        item = _obj(ev.get("item"))
         if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
-            text = ev["item"].get("text") or text
+            text = item.get("text") or text
         elif ev.get("type") == "turn.completed":
             usage = ev.get("usage") or usage
     if not text:
@@ -728,7 +735,7 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
         if not isinstance(ev, dict):
             continue
         if ev.get("type") == "assistant.message":
-            text = (ev.get("data") or {}).get("content") or text
+            text = _obj(ev.get("data")).get("content") or text
         elif ev.get("type") == "result":
             sid = ev.get("sessionId") or sid
     if not text:
