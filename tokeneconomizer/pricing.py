@@ -98,6 +98,25 @@ MODEL_WEIGHTS = {
     "gpt-5.2-codex":           dict(input=1.0, cache_read=0.10,   cache_write=1.0,   output=8.0),
     # codex-mini-latest: $1.50 in / $0.375 cached / $6.00 out  => cr 0.25, out 4.0
     "codex-mini-latest":       dict(input=1.0, cache_read=0.25,   cache_write=1.0,   output=4.0),
+    # --- added 2026-11-13 from the vendors' Standard-tier price pages (short context) ------
+    # OpenAI, https://developers.openai.com/api/docs/pricing. A cache write costs 1.25x input
+    # for the 30-minute cache and 2.5x for the 12-hour one; a Codex rollout does not say which
+    # lifetime a write used, so the 30-minute rate stands. gpt-6.1-sol and gpt-6.1-terra bill a
+    # cache hit at 0.05x input: $2.00 in / $0.10 cached / $10 out, and $1.00 / $0.05 / $5.
+    "gpt-6-astra":             dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6-luna":              dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6-sol":               dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6.1-sol":             dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    "gpt-6.1-terra":           dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    # Google, https://aistudio.google.com/docs/pricing. No cache-write charge. Gemini 4 bills a
+    # cache hit at 0.05x input ($2.00 in / $0.10 cached / $10 out for argon and carbon). The
+    # gemini-4-* prices rise on 2026-12-01 and gemini-3.8-flash's on 2027-01-01; the ratios stay.
+    "gemini-3.1-flash-lite":   dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
+    "gemini-3.5-flash-lite":   dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=8.333),
+    "gemini-3.8-flash":        dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=5.0),
+    "gemini-4-argon":          dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
+    "gemini-4-carbon":         dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
+    "gemini-4-hydrogen":       dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
 }
 
 # Billed model id for an agent when a row does NOT pin one (rec['model'] is None).
