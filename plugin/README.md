@@ -197,8 +197,8 @@ using `-ExecutionPolicy Bypass`. Copilot's normal command approval still applies
 application-control policies that block Python still apply too.
 From a PowerShell terminal in the clone, use a Python >= 3.10 executable, for example:
 `python -X utf8 .\plugin\scripts\te_bootstrap.py cli --host copilot status`.
-The hooks run `TE_PYTHON` as named when set. Otherwise they try `python3`, versioned names from
-`python3.15` through `python3.10`, `python`, and `py`, selecting Python >= 3.10 and preferring
+The hooks run `TE_PYTHON` as named when set. Otherwise they try `python3`, `python`, and `py`,
+selecting Python >= 3.10 and preferring
 interpreters outside WindowsApps. If only an older Python exists, the bootstrap still handles
 the refusal. The slash commands reuse the interpreter selected by the hook.
 

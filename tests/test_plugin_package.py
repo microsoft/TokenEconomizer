@@ -268,7 +268,7 @@ def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shel
     (old / "python3.cmd").write_text(f'@"{sys.executable}" "{shim}" %*\n')
     new = tmp_path / "new"
     new.mkdir()
-    (new / "python3.12.cmd").write_text(f'@"{sys.executable}" %*\n')
+    (new / "python.cmd").write_text(f'@"{sys.executable}" %*\n')
     env = _hook_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
                     PATH=os.pathsep.join((str(old), str(new))))
     command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
