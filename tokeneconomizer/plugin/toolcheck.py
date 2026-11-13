@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import adapter as live_adapter
 from .denylist import CODEX_TOGGLES, write_json as _write_json
-from .sidecall import claude_cli, claude_flags, program
+from .sidecall import claude_cli, claude_flags, claude_json, program
 
 
 def verify_copilot(repo_root, servers, cli="copilot"):
@@ -67,7 +67,11 @@ def _init_tools(extra_args, cli=None, timeout=60):
                              stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=env,
                              cwd=cwd, start_new_session=os.name != "nt")
         tools, version = None, None
-        deadline = time.time() + timeout
+        # A probe that prints nothing never ends the loop below, so a deadline checked per line
+        # would never be reached: the timer kills the probe, its pipe closes, and the loop ends.
+        timer = threading.Timer(timeout, _kill_tree, [p])
+        timer.daemon = True
+        timer.start()
         try:
             for line in p.stdout:
                 try:
@@ -77,9 +81,8 @@ def _init_tools(extra_args, cli=None, timeout=60):
                 if ev.get("type") == "system" and ev.get("subtype") == "init":
                     tools, version = ev.get("tools"), ev.get("claude_code_version")
                     break
-                if time.time() > deadline:
-                    break
         finally:
+            timer.cancel()
             _kill_tree(p)
     return tools, version
 
@@ -223,10 +226,7 @@ def _prompt_tokens(extra_args, cli=None, timeout=180):
     with tempfile.TemporaryDirectory(prefix="te-measure-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", env=env,
                              cwd=cwd, timeout=timeout)
-    try:
-        data = json.loads(out.stdout or "{}")
-    except ValueError:
-        data = {}
+    data = claude_json(out.stdout)
     u = data.get("usage") or {}
     total = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
                                              "cache_creation_input_tokens"))

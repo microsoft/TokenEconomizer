@@ -152,6 +152,22 @@ def test_claude_usage_counts_each_message_once_and_includes_subagents(tmp_path):
     assert trace.claude_session_usage(main, include_subagents=False)["requests"] == 2
 
 
+def test_claude_usage_leaves_out_the_notices_claude_code_writes(tmp_path):
+    # An API error or "No response requested." is an assistant entry of model `<synthetic>`, with
+    # its own id and zero usage: no request, and no model to price the session by.
+    path = _claude_lines(str(tmp_path / "sess.jsonl"), n_messages=1, model="claude-sonnet-4-5")
+    zero = dict.fromkeys(("input_tokens", "cache_read_input_tokens",
+                          "cache_creation_input_tokens", "output_tokens"), 0)
+    with open(path, "a") as fh:
+        for i, text in enumerate(("API Error: Connection error.", "No response requested.")):
+            fh.write(json.dumps({"type": "assistant", "isApiErrorMessage": i == 0, "message": {
+                "id": f"synthetic-{i}", "model": "<synthetic>", "role": "assistant",
+                "usage": zero, "content": [{"type": "text", "text": text}]}}) + "\n")
+    u = trace.claude_session_usage(path)
+    assert u["requests"] == 1 and u["model"] == "claude-sonnet-4-5"
+    assert u["cache_read_input_tokens"] == 1000
+
+
 def test_deferred_tools_are_read_from_attachments(tmp_path):
     p = str(tmp_path / "t.jsonl")
     with open(p, "w") as fh:
@@ -265,7 +281,8 @@ def test_from_a_plain_terminal_te_is_about_the_agent_that_last_worked_here(tmp_p
     Code state of a repository only Codex (or Pi) had worked in."""
     from tokeneconomizer.plugin import cli
     from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
-    for k in ("TE_HOST", "CLAUDECODE", "COPILOT_CLI"):
+    for k in ("TE_HOST", "CLAUDECODE", "COPILOT_CLI", "FACTORY_SESSION_ID",
+              "DROID_PLUGIN_ROOT", "CURSOR_AGENT", "CURSOR_PROJECT_DIR"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
     work = tmp_path / "work"
@@ -645,7 +662,7 @@ def test_the_opencode_side_call_adds_only_the_flags_its_cli_lists(monkeypatch):
 
 # ---- the guard sees edits made through the shell ---------------------------------------------
 from tokeneconomizer import loopguard as guard  # noqa: E402
-from tokeneconomizer.loopguard import turn  # noqa: E402
+from tokeneconomizer.loopguard import shell_edits, turn  # noqa: E402
 
 
 @pytest.mark.parametrize("cmd,want", [
@@ -653,6 +670,15 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("cd /t && sed -i.bak -e 's/a/b/' -e 's/c/d/' x.py y.py && pytest -q", ["x.py", "y.py"]),
     ("sed -i '' 's/a/b/' x.py", ["x.py"]),                         # BSD sed's empty suffix
     ("perl -pi -e 's/foo/bar/' src/a.rs", ["a.rs"]),
+    # the script inside the option word, not in the next word
+    ("sed -i --expression='s/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sed --in-place --expression=s/a/b/ a.py b.py", ["a.py", "b.py"]),
+    ("sed -i -e's/a/b/' x.py", ["x.py"]),
+    ("sed -i --file=fix.sed x.py", ["x.py"]),
+    ("sed -ne 's/a/b/p' -i x.py", ["x.py"]),
+    ("perl -i -pe's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -i.orig -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
+    ("perl -Mre=eval -i -pe 's/foo/bar/' src/a.rs", ["a.rs"]),
     ("cat > repro.py <<'EOF'\nprint(1 > 0)\nEOF\npython repro.py", ["repro.py"]),
     ("echo 'x' | tee -a setup.cfg", ["setup.cfg"]),
     # how Sonnet 5.5 edits: an inline script that reads the file and writes it back
@@ -668,6 +694,11 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("apply_patch <<'P'\n*** Begin Patch\n*** Add File: a/new.py\n+x\n*** Update File: b/old.py\n"
      "*** End Patch\nP", ["new.py", "old.py"]),
     ("git checkout -- a.py b/c.py", ["a.py", "c.py"]),
+    # git's own options before the subcommand (`-C <dir>`, `-c <name>=<value>`, `--no-pager`)
+    ("git -C /w/repo apply /tmp/fix.diff", ["(patch)"]),
+    ("git -c core.autocrlf=false --no-pager apply fix.diff", ["(patch)"]),
+    ("git -C repo checkout HEAD -- pkg/mod.py", ["mod.py"]),
+    ("git --git-dir=.git --work-tree . restore pkg/mod.py", ["mod.py"]),
     # not edits: output captures, scratch, reads, and operators inside quotes
     ("python -m pytest -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt", []),
     ("grep -n 'x' a.py > hits.txt", []),
@@ -676,12 +707,39 @@ from tokeneconomizer.loopguard import turn  # noqa: E402
     ("python -c \"print(1>2)\"", []),
     ("git stash -q; python bin/test x; git stash pop -q", []),
     ("sed -n '1,20p' pkg/mod.py", []),
+    ("git -C repo diff -- pkg/mod.py", []),
+    ("git -C repo log -- pkg/mod.py", []),
     # a quoted `|` in a sed script must not split the command (seen live: sympy-13091)
     ("sed -i -E 's/x (<|<=|>|>=) y/z/' numbers.py expr.py", ["numbers.py", "expr.py"]),
     ("sed -i 's/a/b/' x.py 2>&1 | tail -2", ["x.py"]),
+    # a here-string (`<<<`) is not a heredoc: the lines after it are still commands
+    ("grep -q ok <<< \"ok\"\nsed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("read -r v <<< done\ncat > fix.py <<'EOF'\nx = 1\nEOF", ["fix.py"]),
 ])
 def test_edits_made_through_the_shell_are_recognised(cmd, want):
     assert guard.shell_edit_targets(cmd) == want
+
+
+def test_a_git_command_run_with_dash_c_still_counts_its_edit_and_its_revert():
+    """`git -C <dir> apply` and `git -C <dir> checkout -- <path>` name the subcommand after
+    git's own options. Reading the word after `git` as the subcommand missed both, so the
+    patch was no edit and putting back a file the turn edited was not counted either."""
+    revert = "git -C /w/repo checkout -- pkg/mod.py"
+    assert shell_edits.shell_revert_targets(revert) == ["mod.py"]
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "git -C /w/repo apply /tmp/fix.diff"}, "", 0)
+    g.fold("Bash", {"command": "sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": revert}, "", 0)
+    assert g.edits == 3
+    assert g.whole.edit_counts == {"(patch)": 1, "mod.py": 2}
+
+
+def test_an_edit_after_a_here_string_is_counted():
+    """`<<<` feeds one word to a command; reading it as a heredoc tag made every later line of
+    the command a heredoc body, so a `sed -i` after it was not counted as an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "grep -q ok <<< ok\nsed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    assert g.edits == 1 and g.whole.edit_counts == {"mod.py": 1}
 
 
 def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy():
@@ -696,6 +754,30 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
     g.fold("Bash", {"command": "sed -i 's/b/c/' pkg/mod.py && pytest -q"},
            "FAILED tests/test_m.py::t - AssertionError")
     assert g.edits == 3 and g.last_verify > g.last_edit and not g.resolved_proxy()
+
+
+def test_a_sed_script_given_inside_its_option_word_still_counts_the_edit():
+    """`sed -i --expression=...` and `perl -i -pe'...'` carry the script in the option word.
+    The file after it is the edited file, not the script, so the turn records an edit."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "sed -i --expression='s/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "perl -i -pe's/b/c/' pkg/mod.py"}, "", 0)
+    assert g.edits == 2 and g.whole.edit_counts == {"mod.py": 2}
+    assert "[edits mod.py]" in g.st.recent_digest()
+
+
+def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
+    """Claude Code on Windows names the file an edit tool changed with backslashes. The guard
+    counts that edit under the file's basename, as it counts a shell edit or a `git checkout --`
+    of the same file, and the judge's digest names the basename only."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": r"C:\w\repo\pkg\mod.py", "old_string": "a", "new_string": "b"},
+           "ok")
+    g.fold("Bash", {"command": "git checkout -- pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    assert g.whole.edit_counts == {"mod.py": 3}
+    assert g.whole.distinct_edit_files == 1
+    assert "C:" not in g.st.recent_digest()
 
 
 def test_reading_a_file_full_of_asserts_is_not_a_failure():
@@ -894,9 +976,9 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
     assert cmd.count("--excluded-tools") == len(sidecall.COPILOT_TOOLS)
     assert seen["env"]["TE_SIDECALL"] == "1"            # its own hooks must not recurse
     cfg = live_config.LiveConfig()
-    assert sidecall.runner_for("copilot", cfg).__code__.co_names.count("copilot_call") == 1
-    assert sidecall.runner_for("claude", cfg).__code__.co_names.count("claude_call") == 1
-    assert sidecall.runner_for("pi", cfg).__code__.co_names.count("pi_call") == 1
+    assert sidecall.runner_for("copilot", cfg).__wrapped__.__code__.co_names.count("copilot_call") == 1
+    assert sidecall.runner_for("claude", cfg).__wrapped__.__code__.co_names.count("claude_call") == 1
+    assert sidecall.runner_for("pi", cfg).__wrapped__.__code__.co_names.count("pi_call") == 1
 
 
 @pytest.mark.real_sidecalls
@@ -935,6 +1017,49 @@ def test_claude_side_calls_stay_out_of_the_persons_history_where_the_cli_allows(
     monkeypatch.setattr(sidecall, "_HELP", {})
     assert sidecall.claude_flags("new") == ["--no-session-persistence"]
     assert sidecall.claude_flags("old") == []
+
+
+def test_every_agent_with_side_calls_has_its_own_paid_model_setting():
+    from tokeneconomizer.plugin import config as live_config, hosts, sidecall
+    cfg = live_config.LiveConfig()
+    for name in set(hosts.HOSTS) - sidecall.NO_SIDE_CALLS:
+        assert cfg.set(f"{name}_paid_model", "m"), name
+
+
+@pytest.mark.real_sidecalls
+def test_side_calls_take_a_model_per_agent_and_an_effort(monkeypatch, tmp_path):
+    """`<agent>_paid_model` wins over the shared `paid_model`; `claude_paid_effort` and
+    `codex_paid_effort` reach each CLI in its own form, and only a Claude Code that lists
+    `--effort` is given it."""
+    import subprocess
+    from tokeneconomizer.plugin import config as live_config, sidecall
+    seen, helps = [], {"new": "  --effort <level>", "old": "  -p"}
+
+    def fake_run(cmd, **kw):
+        if cmd[1:] == ["--help"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=helps.get(cmd[0], ""), stderr="")
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "OK"}), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.setattr(sidecall, "_HELP", {})
+    monkeypatch.setattr(sidecall, "claude_cli", lambda: "new")
+    cfg = live_config.load_config(str(tmp_path), env={
+        "TE_PAID_MODEL": "shared", "TE_CODEX_PAID_MODEL": "small",
+        "TE_CLAUDE_PAID_EFFORT": "max", "TE_CODEX_PAID_EFFORT": "minimal"})
+    assert not cfg.warnings
+    assert not cfg.set("claude_paid_effort", "minimal") and not cfg.set("codex_paid_effort", "x")
+    sidecall.runner_for("claude", cfg)("hi")
+    sidecall.runner_for("codex", cfg)("hi")
+    claude, codex = seen
+    assert claude[claude.index("--model") + 1] == "shared"
+    assert claude[claude.index("--effort") + 1] == "max"
+    assert codex[codex.index("-m") + 1] == "small"
+    assert codex[codex.index("-c") + 1] == 'model_reasoning_effort="minimal"'
+    sidecall.claude_call("hi", cli="old", effort="high")
+    assert "--effort" not in seen[-1]
+    sidecall.runner_for("codex", live_config.LiveConfig())("hi")
+    assert "-m" not in seen[-1] and "-c" not in seen[-1]
 
 
 @pytest.mark.real_sidecalls
@@ -1073,7 +1198,7 @@ def test_every_side_call_starts_its_cli_through_program(tmp_path, monkeypatch):
     prompt = 'Say "hi & exit\n100% of %PATH%'
     for call, cli in ((sidecall.codex_call, "codex"), (sidecall.copilot_call, "copilot"),
                       (sidecall.opencode_call, "opencode"), (sidecall.pi_call, "pi"),
-                      (sidecall.cursor_call, "cursor-agent")):
+                      (sidecall.cursor_call, "cursor-agent"), (sidecall.droid_call, "droid")):
         seen.clear()
         call(prompt)
         assert seen and all(c[:2] == ["/n/node", f"/n/{cli}.js"] for c in seen), seen
@@ -1295,6 +1420,75 @@ def test_a_runner_started_by_a_launcher_counts_as_a_verification(cmd):
     assert g.verifications == 1 and not g.resolved_proxy()
 
 
+@pytest.mark.parametrize("cmd", ["env -u CURSOR_AGENT python -m pytest tests",
+                                 "env -i PATH=/usr/bin go test ./...", "env --unset=CI npm test",
+                                 "env -C web npx vitest run", "nice -n 10 pytest -q",
+                                 "nice -n10 cargo test", "nice -5 go test ./...",
+                                 "FOO=1 env -u X timeout 60 npm test"])
+def test_a_runner_behind_env_or_nice_options_counts_as_a_verification(cmd):
+    """`env -u VAR` and `nice -n 10` take options before the command they run. Only the bare
+    word was passed over, so the run was no verification and a failing one after the last edit
+    left the turn green."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd,status", [("env -u CI python -m pytest --collect-only", None),
+                                        ("env -u CI echo pytest", None),
+                                        ("nice -n 10 make", None), ("env pytest", "own"),
+                                        ("nice pytest -q", "own")])
+def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
+    assert turn.status_of_tests(cmd) == status
+
+
+@pytest.mark.parametrize("cmd", ["ruby test/ledger_test.rb", "ruby -w -Ilib test/slugify_test.rb",
+                                 "ruby -I lib test/x_test.rb", "ruby /w/repo/test/x_test.rb",
+                                 "ruby -Itest test/models/user_test.rb", "ruby spec/foo_spec.rb",
+                                 "ruby -W0 --disable-gems test/test_parser.rb",
+                                 "ruby -W:no-deprecated test/a_test.rb", "ruby -wv test/a_test.rb",
+                                 "ruby -C /w -Itest test/a_test.rb",
+                                 "bundle exec ruby -Itest test/a_test.rb -n test_x",
+                                 "rake test", "bundle exec rake test", "rake test:models",
+                                 "bin/rake test TEST=test/a_test.rb", "rake spec", "bin/rails test",
+                                 "rails test test/models/user_test.rb"])
+def test_a_ruby_test_run_counts_as_a_verification(cmd):
+    """minitest and test-unit are run as `ruby` given a test file, or through rake or rails, not
+    by a runner of their own as `rspec` is."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/lib/a.rb", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["ruby -Ilib -e 'require \"a\"; p A.new'", "ruby -wc lib/retry.rb",
+                                 "ruby -c test/a_test.rb", "ruby -wc test/a_test.rb",
+                                 "ruby -Wc test/a_test.rb", "ruby -cw test/a_test.rb",
+                                 "ruby -we 'load \"test/a_test.rb\"'", "ruby repro.rb", "ruby -v",
+                                 "ruby -e 'load \"test/a_test.rb\"'", "ruby lib/contest.rb",
+                                 "ruby -Icore lib/x.rb", "rake", "rake db:migrate",
+                                 "rails server", "cat test/a_test.rb"])
+def test_ruby_that_runs_no_test_file_is_not_a_verification(cmd):
+    """A one-off `ruby -e`, a syntax check and a script are not the project's checks."""
+    assert turn.status_of_tests(cmd) is None
+
+
+def test_a_piped_minitest_run_is_judged_by_its_summary():
+    """`ruby test/x_test.rb | tail -5` exits with `tail`'s status, so minitest's summary line
+    decides whether the turn ended green."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/lib/a.rb", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "ruby test/a_test.rb 2>&1 | tail -5"},
+           "8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
+    g.fold("Bash", {"command": "ruby test/a_test.rb 2>&1 | tail -5"},
+           "8 runs, 8 assertions, 0 failures, 0 errors, 0 skips", 0)
+    assert g.verifications == 2 and g.resolved_proxy()
+
+
 @pytest.mark.parametrize("cmd,status", [("uv run ruff check", None),
                                         ("npx prettier --check .", None),
                                         ("pnpm exec jest --help", None),
@@ -1320,6 +1514,44 @@ def test_a_non_test_command_mentioning_a_runner_is_not_a_verification(cmd):
     g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
     g.fold("Bash", {"command": cmd}, "ok", 0)
     assert g.verifications == 1 and not g.resolved_proxy()
+
+
+def test_a_heredoc_writing_a_script_runs_no_tests():
+    assert turn.status_of_tests("cat <<EOF > ci.sh\nnpm test\nEOF") is None
+
+
+@pytest.mark.parametrize("cmd", ["gh pr create --body-file - <<'EOF'\npytest -q\nEOF",
+                                 "gh issue comment 7 --body-file - <<EOF\nnpm test\nEOF"])
+def test_a_heredoc_line_naming_a_runner_is_not_a_verification(cmd):
+    """A heredoc's lines are the input of the command that reads them, as in
+    `exit_status_covers`: a body written with one runs no tests, so the failing run before it
+    is still the turn's last verification."""
+    assert turn.status_of_tests(cmd) is None
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": "pytest -q"}, "FAILED (failures=1)", 1)
+    g.fold("Bash", {"command": cmd}, "ok", 0)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["pytest -q <<EOF\ny\nEOF",
+                                 "cat <<EOF > ci.sh\nnpm test\nEOF\npytest -q"])
+def test_a_runner_beside_a_heredoc_is_still_judged_by_its_status(cmd):
+    """A runner that reads a heredoc, or runs after one, is the last command: its status is the
+    tests' own."""
+    assert turn.status_of_tests(cmd) == "own"
+
+
+@pytest.mark.parametrize("cmd, want", [
+    ("bash -lc 'pytest -q <<EOF\ny\nEOF'", "own"),
+    ("bash -lc \"pytest -q && cat <<'EOF'\nsummary\nEOF\"", "own"),
+    ("bash -lc \"gh pr create --body-file - <<'EOF'\npytest -q\nEOF\"", None),
+])
+def test_a_heredoc_that_ends_a_codex_script_is_read_inside_the_script(cmd, want):
+    """Codex records `bash -lc '<script>'`. A heredoc that ends the script closes on `EOF'` there,
+    not on a line of its own, so its body is left out after the unwrap: the run before it still
+    counts, and a runner named in its body still does not."""
+    assert turn.status_of_tests(cmd) == want
 
 
 TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
@@ -1376,6 +1608,10 @@ def test_a_test_run_followed_by_other_commands_is_judged_by_its_runners_summary(
     ("ok  \tacme/x\t0.012s", False), ("test result: FAILED. 1 passed; 1 failed", True),
     ("test result: ok. 3 passed; 0 failed", False), ("5 examples, 1 failure", True),
     ("Tests run: 4, Failures: 0, Errors: 1", True), ("[INFO] BUILD SUCCESS", False),
+    ("8 runs, 8 assertions, 1 failures, 0 errors, 0 skips", True),
+    ("8 runs, 8 assertions, 0 failures, 2 errors, 0 skips", True),
+    ("Finished in 0.01s\n5 runs, 9 assertions, 0 failures, 0 errors, 1 skips", False),
+    ("1 tests, 1 assertions, 0 failures, 0 errors, 0 pendings, 0 omissions", False),
     ("+    raise ValueError('no')", None), ("ok 1 - add", None)])
 def test_a_runners_summary_gives_its_verdict(out, failed):
     assert turn.runner_verdict(out) is failed

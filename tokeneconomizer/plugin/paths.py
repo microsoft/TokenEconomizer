@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 
 HOME_ENV = "TOKENECONOMIZER_HOME"
+# Names the repository of a session whose directory holds no git metadata, by its remote URL.
+REPO_ENV = "TOKENECONOMIZER_REPO"
 
 
 def state_root(env=None):
@@ -188,10 +190,14 @@ def origin_url(root):
 def normalize_remote(url):
     """`git@github.com:Owner/Repo.git` and `https://github.com/owner/repo` -> one spelling."""
     u = (url or "").strip()
-    u = re.sub(r"^[a-z+]+://", "", u)            # scheme
+    scheme = re.match(r"^[a-z+]+://", u)
+    u = u[scheme.end():] if scheme else u        # scheme
     u = re.sub(r"^[^@/]+@", "", u)               # user@
     u = re.sub(r"/+", "/", u.replace("\\", "/"))  # local Windows remotes, including git's escaped slashes
-    u = u.replace(":", "/", 1) if not re.match(r"^[a-zA-Z]:/", u) and re.match(r"^[^/]+:[^/\d]", u) else u
+    # `host:port/...` only after a scheme; in git's scp form (`host:owner/repo`) the path may
+    # start with a digit (`git@github.com:42wim/repo.git`).
+    sep = r"^[^/]+:[^/\d]" if scheme else r"^[^/]+:[^/]"
+    u = u.replace(":", "/", 1) if not re.match(r"^[a-zA-Z]:/", u) and re.match(sep, u) else u
     u = re.sub(r"\.git$", "", u.rstrip("/"))
     return u.lower()
 
@@ -234,10 +240,19 @@ def repo_identity(cwd, env=None):
     it has one (every clone, worktree and re-clone), else the real path of its main checkout (a
     linked worktree shares its clone's), else -- outside any checkout -- the directory itself.
     The key's readable part is the repository's name (the remote's last component, or the main
-    checkout's folder), not the folder one particular checkout sits in."""
+    checkout's folder), not the folder one particular checkout sits in.
+
+    `$TOKENECONOMIZER_REPO`, when set, is the repository's remote URL where git names none: a
+    session in a directory that holds no git metadata -- an export of a checkout in a container
+    or a sandbox, a fresh folder per run -- or in a checkout without an `origin` is then keyed
+    as a clone of that remote is, and shares what was learned there. A checkout's own `origin`
+    wins, so a value left set in a shell never merges another repository's state into it."""
+    env = os.environ if env is None else env
     found = find_repo_root(cwd, env)
     root = found or os.path.abspath(cwd or os.getcwd())
     remote = normalize_remote(origin_url(root)) if found else ""
+    if not remote:
+        remote = normalize_remote(env.get(REPO_ENV) or "")
     if remote:
         how, canon, name = BY_REMOTE, remote, remote.rstrip("/").rsplit("/", 1)[-1]
         label = "/".join(remote.split("/")[-2:])

@@ -116,7 +116,9 @@ def completed_calls(line, pend):
 
 
 def basename(p):
-    return p.rstrip("/").split("/")[-1] if p else (p or "")
+    """The last component of a path in either separator: Claude Code on Windows names the file
+    an edit tool changed `C:\\repo\\pkg\\mod.py`, and a shell edit of it `pkg/mod.py`."""
+    return p.replace("\\", "/").rstrip("/").split("/")[-1] if p else (p or "")
 
 
 def _failure_sig(text):

@@ -41,6 +41,14 @@ VERIFY_RE = re.compile(
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
     r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
+    # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
+    # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
+    # case-sensitive, so `-W` does not also take `-wc` under the pattern's `(?i)`.
+    r"rake(?:\s+\w+=\S*)*\s+(?:test|spec)(?::[\w:]+)?|rails\s+test(?::[\w:]+)?|"
+    r"ruby(?-i:\s+(?:-[Ir](?:\S+|\s+[^\s\-]\S*)|-C\s*\S+|-W[0-2]?(?::\S+)?|"
+    r"--[\w\-]+(?:=\S+)?|-[abdf-zABDF-Z]+))*\s+"
+    r"(?:[\w.\-~]*/)*(?:test_[\w.\-]*|[\w.\-]*_(?:test|spec))\.rb|"
     r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
 
 # A command line's exit status is its LAST command's, so it may not be the test run's: `npm test
@@ -55,9 +63,13 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
 # A runner asked for its help, version or test list, not to run the tests.
 _NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
-# What may precede the command itself: `FOO=1 timeout 60 npm test`, and a launcher that runs
-# it in the project's environment, `uv run pytest`, `npx jest`, `bundle exec rspec`.
-_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nice|nohup|command|env|"
+# What may precede the command itself: `FOO=1 timeout 60 npm test`, `env -u VAR`, `nice -n 10`,
+# and a launcher that runs it in the project's environment, `uv run pytest`, `npx jest`,
+# `bundle exec rspec`.
+_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nohup|command|"
+                        r"nice(?:\s+(?:-n\s*|--adjustment=)?[-+]?\d+)?|"
+                        # env's options; `-u`, `-C` and their long forms take a value
+                        r"env(?:\s+(?:(?:-[uC]|--unset|--chdir)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
@@ -71,8 +83,9 @@ _RANK = {"own": 0, "hidden": 1, "mixed": 2}
 
 def _pieces(cmd):
     """`cmd` as its commands and the separators between them (`[cmd, sep, cmd, ...]`), with
-    quoted text masked, and whether it sets `pipefail`. A command recorded as `bash -lc
-    '<script>'` (Codex) is split by its script."""
+    quoted text masked and heredoc bodies left out, and whether it sets `pipefail`. A command
+    recorded as `bash -lc '<script>'` (Codex) is split by its script: its heredocs are read
+    there, since one that ends the script closes on `EOF'`, not on a line of its own."""
     try:
         parts = shlex.split(cmd)
     except ValueError:
@@ -80,6 +93,7 @@ def _pieces(cmd):
     if (len(parts) >= 3 and os.path.basename(parts[0]) in _SHELLS
             and parts[1].startswith("-") and "c" in parts[1]):
         cmd = parts[2]
+    cmd = _split_heredocs(cmd)[0]       # a heredoc's lines are input, not commands
     pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
     while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
         del pieces[-2:]
@@ -123,7 +137,7 @@ def exit_status_covers(cmd):
     lines are the input of the command that reads them, not commands of their own."""
     if not isinstance(cmd, str) or not cmd.strip():
         return False
-    pieces, pipefail = _pieces(_split_heredocs(cmd)[0])
+    pieces, pipefail = _pieces(cmd)
     for i in range(0, len(pieces) - 1, 2):              # every command but the last
         sep = pieces[i + 1]
         if sep == "&&" or (pipefail and sep in ("|", "|&")):
@@ -176,6 +190,9 @@ _RUN_FAILED_RE = re.compile("|".join((
     r"^(?:--- FAIL: |FAIL\t|FAIL$)",                                # go
     r"^test result: FAILED",                                        # cargo
     r"\b\d+ examples?, [1-9]\d* failures?\b",                       # rspec
+    # minitest (`8 runs, 9 assertions, 1 failures, 0 errors, 0 skips`), test-unit (`tests`)
+    r"^\d+ (?:runs|tests), \d+ assertions, (?:[1-9]\d* failures, \d+ errors|\d+ failures, "
+    r"[1-9]\d* errors)\b",
     r"Tests run: \d+, Failures: (?:[1-9]|0, Errors: [1-9])",        # JUnit (Maven, Gradle)
     r"BUILD FAIL(?:URE|ED)")), re.MULTILINE)
 _RUN_PASSED_RE = re.compile("|".join((
@@ -190,6 +207,7 @@ _RUN_PASSED_RE = re.compile("|".join((
     r"^ok\s+\S+\s+(?:\d+(?:\.\d+)?s|\(cached\))",
     r"^test result: ok\.",
     r"\b\d+ examples?, 0 failures\b",
+    r"^\d+ (?:runs|tests), \d+ assertions, 0 failures, 0 errors\b",   # minitest, test-unit
     r"BUILD SUCCESS")), re.MULTILINE)
 
 
@@ -250,6 +268,7 @@ class TurnGuard:
         self.verifications = int(d.get("verifications", 0))
         self.judge_pending = d.get("judge_pending") or None   # {"id", "since", "segment"}
         self.nudge_ready = d.get("nudge_ready") or None       # a redirect the judge wrote
+        self.held = d.get("held") or None     # a decision no hook could say yet: [action, reason]
 
     def to_dict(self):
         return {"turn_key": self.turn_key, "st": state_to_dict(self.st),
@@ -262,7 +281,8 @@ class TurnGuard:
                 "writer_tokens": self.writer_tokens, "last_edit": self.last_edit,
                 "last_verify": self.last_verify, "last_verify_failed": self.last_verify_failed,
                 "edits": self.edits, "verifications": self.verifications,
-                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready}
+                "judge_pending": self.judge_pending, "nudge_ready": self.nudge_ready,
+                "held": self.held}
 
     # ---- outcome tracking for the ended-green proxy ----------------------------------
     def _track(self, name, args, result, exit_code, shell_edits=()):
@@ -397,7 +417,7 @@ class TurnGuard:
         fold_shell_edits(self.whole, shell_edits)
         self.cum_turns += 1
         self._track(name, args, result, exit_code, shell_edits)
-        if self.aborted:
+        if self.aborted or self.held:
             return None
 
         backstop = thr.get("backstop_turns")

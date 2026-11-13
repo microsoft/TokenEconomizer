@@ -1,13 +1,15 @@
 # TokenEconomizer plugin
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
-(experimental), opencode (experimental) and Hermes Agent (experimental). What the plugin does and why is in the [main README](../README.md); its
-design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
+(experimental), Grok Build (experimental), opencode (experimental), Hermes Agent (experimental),
+the Antigravity CLI (experimental) and Factory Droid (experimental). What the plugin does and
+why is in the [main README](../README.md); its design and the verified behaviour of each agent are
+in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
-  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [opencode](#opencode) ·
-  [Hermes Agent](#hermes-agent)
+  [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
+  [Hermes Agent](#hermes-agent) · [Antigravity CLI](#antigravity-cli) · [Factory Droid](#factory-droid)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -332,6 +334,50 @@ On Windows, Cursor runs these hook commands through PowerShell, which cannot run
 Tool pruning follows the global setting and is not applied to Cursor. Cursor commands run from a terminal:
 `~/.tokeneconomizer/bin/te --host cursor <command>`.
 
+## Grok Build
+
+Experimental; verified on grok 1.0.70. Grok runs Claude Code plugins and their hooks, so the plugin
+installs as the Claude Code one does:
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+grok plugin marketplace add "$PWD/TokenEconomizer"
+grok plugin install tokeneconomizer --trust
+```
+
+Without `--trust`, grok shows the source, warns that installing activates the plugin's hooks, and
+stops. Grok leaves plugins off until they are enabled: check `grok plugin list` (`grok plugin enable
+tokeneconomizer` if it is off), then start a new session. If TokenEconomizer is already installed for Claude Code, grok runs it from `~/.claude/plugins`
+too, and nothing more is needed. Either way the hook file passes no `--host`: the plugin tells grok
+from Claude Code by the fields only grok sends (`hookEventName`) and by its session folder
+(`~/.grok/sessions`), and a hook run from a Claude Code session is still Claude Code.
+
+**Check it.** From a terminal in the repository: `~/.tokeneconomizer/bin/te --host grok status`.
+Grok's tool shell and plugin slash commands were not checked, so run commands from a terminal.
+
+What grok does differently, and so what to expect:
+
+* **Micro-skills arrive with the first tool call.** Grok reads only a message for you from a
+  `SessionStart` hook, and discards a `UserPromptSubmit` hook's output; the one channel to the
+  model is a `PostToolUse` hook's `additionalContext`. The plugin saves the session's start context
+  (under `~/.tokeneconomizer/grok-start/`) and adds it to the first tool result, once. A session that
+  answers without a tool call never gets it. A resumed session is not given it again, as grok keeps
+  that note in the conversation.
+* **No tool pruning.** Micro-skills and the loop guard only.
+* **Stopping a stuck turn** is Ctrl+C; Esc does not cancel a turn in grok. Grok shows a hook's
+  message to you only from `SessionStart`, so the still-stuck line is also passed on by the model.
+* **Interrupted turns** (`StopCancelled`) are closed when your next prompt arrives, as on Claude
+  Code. At the end of a session grok fires one more, observe-only `Stop` (reason `shutdown`); the
+  plugin ignores it.
+* **Cost.** The session's tokens come from the `usage.json` grok keeps with the session; xAI models
+  are not in the price table, so they are priced on the labelled fallback curve.
+* **Model calls.** The proposer and the judge run through `grok -p --output-format json` in a
+  throwaway folder on your default model (`paid_model` names another), with the shell, edit, write,
+  web and subagent tools removed. Each such call leaves a session under `~/.grok/sessions/` that
+  the plugin does not track.
+
+**Uninstall.** `grok plugin uninstall tokeneconomizer`. Optional: `rm -rf ~/.tokeneconomizer`.
+
 ## opencode
 
 **1. Install.** One plugin file serves opencode 1.x (the `server` entry) and 2.x (the `setup`
@@ -356,10 +402,12 @@ where it is set. Settings made with `te config` need no restart.
 
 **How it hands a session over.** On 1.x the plugin exports the session with `opencode export` at
 the end of every turn and sends the path; on 2.x, which has no export command, it records the
-session from its events and writes the same JSON. A headless `opencode run` is folded when its
-turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no chance to
-say so: that session is folded by the next session's start, once its export has been quiet for
-10 minutes.
+session from its events and writes the same JSON (where that copy holds no prompt, the fold reads
+2.x's `opencode session export` instead). A turn ends at 2.x's `session.execution.*` events or
+the documented `session.idle`, whichever the release emits; a headless `opencode run` is folded
+when its turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no
+chance to say so: that session is folded by the next session's start, once its export has been
+quiet for 10 minutes.
 
 **Model calls.** The proposer and the loop guard's judge run through `opencode run` on your
 default opencode model (`paid_model` names another): tools that change anything are denied,
@@ -367,7 +415,8 @@ the session is deleted afterwards, and no other plugin runs (`--pure` on 1.x; `-
 2.x). On 2.x a reply that used no tool carries no usage, so its cost is estimated.
 
 **Verified live,** on opencode 1.19.5 and 2.2.0 (Python 3.12), with a scripted local model
-endpoint and, on 1.19.5, the free `opencode/big-pickle` model:
+endpoint and, on 1.19.5, the free `opencode/big-pickle` model; the 2.x entry is also exercised
+against 2.2.5 in CI:
 the plugin loads; sessions are folded with real usage and model; facts learned over five sessions
 reach the next session through the system prompt; the loop guard's judge ran, nudged a
 failing edit-and-test loop, and the redirect arrived in the model's next tool results; the
@@ -495,6 +544,89 @@ log a warning for the empty section of a session with no facts.
 **Uninstall.** `hermes plugins disable tokeneconomizer`, `rm ~/.hermes/plugins/tokeneconomizer`,
 `hermes gateway restart`. Optional: `rm -rf ~/.tokeneconomizer`.
 
+
+## Antigravity CLI
+
+Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1 on macOS and Linux
+(agy runs hook commands through `cmd /c` on Windows, and the launcher is a POSIX shell script).
+
+**1. Install.** Build the self-contained plugin, which copies the package into it, and install the
+directory:
+
+```bash
+python scripts/build_plugin.py --out dist/marketplace
+agy plugin install dist/marketplace/tokeneconomizer
+```
+
+`agy plugin validate dist/marketplace/tokeneconomizer` checks it. agy reads the plugin's hooks
+from `hooks.json` at the plugin root; the `hooks/hooks.json` beside it is Claude Code's, and agy's
+validator says it is never loaded.
+
+**2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host antigravity status` in the
+repository. agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
+is off by default: `te --host antigravity config set microskills=envfacts`.
+
+**How it works, and what it does not do.**
+
+- Three hooks are registered: `SessionStart` (injects the learned facts), `PreInvocation` (before
+  every model call: opens a turn at a new prompt and reads the tool results since the last call)
+  and `Stop`.
+- It never registers `PreToolUse`: a `PreToolUse` hook that prints `{}` makes agy deny the tool.
+  `PostToolUse` is unused: its payload holds no tool result, so the results are read from the
+  conversation's `transcript_full.jsonl` instead. A cursor into it is kept in
+  `~/.tokeneconomizer/antigravity-sessions/`, private to you.
+- agy has no `SessionEnd`: a conversation is folded by the next session start in that repository,
+  once its transcript has been quiet for 10 minutes.
+- Tool pruning is not available. Calls a subagent makes are not in the transcript and are not seen.
+  The transcript names no model, so session cost is priced on a labelled fallback, and older agy
+  versions leave token counts out of most of it.
+- The plugin makes no model call through `agy`: it has no option that runs a prompt with every
+  tool off, and such a call's prompt holds text a repository controls. So micro-skills' paid
+  proposer never runs, and the loop guard, which needs a judge's verdict to act, never redirects
+  a turn.
+
+## Factory Droid
+
+Experimental. Full notes are in [`docs/DROID.md`](../docs/DROID.md).
+
+**1. Install.** Droid needs a native plugin layout, so build the Droid bundle (it copies the
+Python package into `lib/`, since Droid copies the plugin directory into its cache):
+
+```sh
+python scripts/build_plugin.py --droid
+droid plugin marketplace add "$PWD/dist/tokeneconomizer-droid"
+droid plugin install tokeneconomizer@tokeneconomizer-droid --scope user
+```
+
+Start a new Droid session: hooks are snapshotted at startup.
+
+**2. Check it.** Run `/tokeneconomizer-status`, or from a terminal in the repository
+`~/.tokeneconomizer/bin/te --host droid status`.
+
+**3. Import earlier sessions.** Droid's own logs are read by the same history import as the
+other hosts:
+
+```sh
+~/.tokeneconomizer/bin/te --host droid history import
+```
+
+It runs only into a repository with nothing folded yet and makes no model call. Start sessions
+in the project's own folder: a directory that holds several repositories is learned as one.
+
+**What works.** Micro-skills, the loop guard and session cost. Droid writes each session's
+`tokenUsage` to `<session id>.settings.json` beside its log, and the plugin prices the session
+from it (an unknown model is labelled `fallback`). **What does not:** tool pruning, because the
+TUI has no persistent per-tool setting (Factory issue #65). **Model calls** run through
+`droid exec` and are off until `config set droid_sidecall=on` (or `TE_DROID_SIDECALL=1` in a
+terminal session): that command writes a session log of its own, so enabling it is a deliberate
+choice. When on, they run with `--only-tools Read`, so `Read` is the only tool they may use;
+Droid has no setting for none at all. With it off, `microskills=envfacts` still learns.
+
+**Verified live on 2026-11-05:** a fact reaching a live Droid model. A new session
+(`bb18c4fc`) received the 793-character block as `hookSpecificOutput.additionalContext`, and the
+model repeated it verbatim. The hook output is covered by tests; Droid appending it to the
+model's context has now been observed.
+
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
@@ -579,7 +711,10 @@ How to run them:
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
+| Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
+| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
+| Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
 
 `doctor`, `history`, `repomap` and `microskills forget`/`unforget` run from a terminal (or as `/te …` on
 Pi); there is no slash command or Codex skill for them. Quote a fact id that holds spaces or shell
@@ -642,7 +777,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
 | `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
 | `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it (a list is written at the latest a day after it formed); `0` writes at once |
-| `toolprune_protect` | none | tools never left out however long they go unused, by name or pattern (`mcp__headroom__*`), separated by commas; a deny rule the plugin added for one is removed at the next fold, and rules you wrote are never touched |
+| `toolprune_protect` | none | tools never left out however long they go unused, by name or pattern (`mcp__headroom__*`), separated by commas (on Codex, capability packages: `collaboration`, `goals`, `image_media`); a deny rule the plugin added for one is removed at the next fold, and rules you wrote are never touched |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
 | `loopguard_nudges` | `1` | redirects per turn before the guard only tells you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |
@@ -707,7 +842,9 @@ first session there ends.
 | Key | Default | Values |
 |---|---|---|
 | `enabled` | `true` | `false`: the whole plugin is off; its hooks return at once and record nothing |
-| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `paid_model` | `""` | model for the plugin's own calls on every agent; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `<agent>_paid_model` | `""` | the same for one agent (`claude`, `codex`, `copilot`, `pi`, `opencode`, `cursor`, `grok`, `hermes`), over `paid_model` |
+| `claude_paid_effort`, `codex_paid_effort` | `""` | the reasoning effort of those calls: Claude Code `low` to `max`, Codex `none` to `max`; which values a model takes is the CLI's to say; empty: the CLI's default |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |

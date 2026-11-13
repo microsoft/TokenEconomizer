@@ -429,9 +429,12 @@ def _apply_codex(repo_root, capabilities, store):
     for cap in capabilities:
         if cap not in CODEX_TOGGLES or cap in applied(store, path):
             continue
+        changed = False
         for table, key, value in CODEX_TOGGLES[cap]:
-            text, _ = _toml_insert(text, table, key, value, f"{MARK}:{cap}")
-        added.append(cap)
+            text, did = _toml_insert(text, table, key, value, f"{MARK}:{cap}")
+            changed = changed or did
+        if changed:
+            added.append(cap)
     if not added:
         return []
     if not _toml_valid(text):
@@ -501,13 +504,14 @@ def codex_home(env=None):
 def codex_project_trusted(repo_root, env=None):
     """True/False from the user's Codex config: is this checkout a trusted project? A
     project-local `.codex/config.toml` is ignored until it is. None if the config is
-    unreadable."""
+    unreadable. Decided as Codex decides it: the checkout's own entry, else -- for a linked
+    worktree -- the entry of the clone it was made from."""
+    from .paths import _main_checkout
     try:
         text = open(os.path.join(codex_home(env), "config.toml"), encoding="utf-8").read()
     except OSError:
         return None
-    want = {os.path.normcase(p) for p in (os.path.abspath(repo_root), os.path.realpath(repo_root))}
-    current = None
+    levels, current = {}, None
     for line in text.splitlines():
         m = re.match(r'^\s*\[projects\.(?:"([^"]+)"|\'([^\']+)\')\]\s*$', line)
         if m:
@@ -516,8 +520,14 @@ def codex_project_trusted(repo_root, env=None):
         if _ANY_HEADER_RE.match(line):
             current = None
             continue
-        if current in want and re.match(r'^\s*trust_level\s*=\s*"trusted"', line):
-            return True
+        m = re.match(r'^\s*trust_level\s*=\s*"([^"]*)"', line)
+        if current is not None and m:
+            levels[current] = m.group(1)
+    main = _main_checkout(repo_root)
+    for root in (repo_root, main) if main else (repo_root,):
+        for p in (os.path.abspath(root), os.path.realpath(root)):
+            if os.path.normcase(p) in levels:
+                return levels[os.path.normcase(p)] == "trusted"
     return False
 
 

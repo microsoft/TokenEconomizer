@@ -534,10 +534,12 @@ def parse_payload(raw):
 
 
 def _reparse_cmds(dg):
-    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize)."""
+    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize). The blobs no
+    longer say which output came from which command, so the whole output rides on the first
+    command: pairing them line by line would drop every output line past the command count."""
     cmds = dg.get("_cmd_blob", "").split("\n")
-    outs = dg.get("_out_blob", "").split("\n")
-    return list(zip(cmds, outs + [""] * (len(cmds) - len(outs))))
+    out = dg.get("_out_blob", "")
+    return [(c, out if i == 0 else "") for i, c in enumerate(cmds)]
 
 
 # ---- distiller -------------------------------------------------------------
@@ -629,7 +631,14 @@ class Distiller(Forgetting):
                                        {i: f.claim for i, f in self.facts.items()},
                                        set(self.extractors), excerpts, external=external,
                                        generic=self.generic)
-        raw, eff = self.runner(prompt, self.model)
+        # A side call that fails (a CLI error, a timeout) skips this tick instead of aborting the
+        # fold, as the loop guard's judge does (#131). It still counts as the tick: a runner
+        # that keeps failing is tried every PROPOSE_EVERY sessions, not at every fold.
+        try:
+            raw, eff = self.runner(prompt, self.model)
+        except Exception:
+            self.last_propose = self.now
+            return
         if eff is not None:
             self.opt_tokens += eff
         exts, facts = parse_payload(raw)

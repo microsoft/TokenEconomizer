@@ -24,8 +24,6 @@ thread.  Two profiles ship (`profile_policy`):
 
 The bare dataclass defaults (`DEFAULT_POLICY`) are a single trigger: after the envelope, a
 patch spanning at least 15 distinct files has failed verification after its latest edit.
-An orthogonal, opt-in completion audit can use the same thread once when deterministic
-end-state evidence shows an empty patch or a still-failing post-edit verification.
 """
 
 from __future__ import annotations
@@ -118,13 +116,6 @@ def verification_scopes(command: str) -> Optional[set[str]]:
              for match in _TEST_PATH_RE.finditer(command)}
     paths = {p for p in paths if p}
     return paths or {_ALL_SCOPE}
-_NO_CHANGE_CLAIM_RE = re.compile(
-    r"(?i)(?:\balready (?:fixed|resolved) (?:at|in|on|by|the|this|current)\b|"
-    r"\bno (?:additional |source )?changes? (?:are|were|is|was) "
-    r"(?:necessary|required|needed)\b)"
-)
-
-COMPLETION_AUDIT_MARKER = "[AGENTEO_CODEX_COMPLETION_AUDIT]"
 
 
 @dataclass(frozen=True)
@@ -293,7 +284,6 @@ def profile_version(profile: str) -> str:
 # and what `codex-trimech` co-activates. The shipped policy stays reachable, and named, as
 # `codex-spiral-postgreen`.
 CODEX_DEFAULT_PROFILE = "defensive"
-CODEX_SHIPPED_PROFILE = "post-green"
 
 
 def _normalize(text: str, limit: int = 180) -> str:
@@ -431,16 +421,6 @@ def parse_events(line: str) -> list[CodexEvent]:
     return []
 
 
-def parse_event(line: str) -> Optional[CodexEvent]:
-    """The PRIMARY event of a line (kept for callers that expect one); the command event
-    for a command line even when it also carries an edit -- use ``parse_events`` to see
-    both."""
-    events = parse_events(line)
-    if not events:
-        return None
-    return events[-1]
-
-
 def iter_events(lines: Iterable[str], *, first_thread_only: bool = False):
     """Yield parsed events, optionally excluding suffixes made by an old restart."""
     threads = 0
@@ -451,24 +431,6 @@ def iter_events(lines: Iterable[str], *, first_thread_only: bool = False):
                 if first_thread_only and threads > 1:
                     return
             yield event
-
-
-def final_agent_message(lines: Iterable[str]) -> str:
-    """Return the last completed Codex agent message from JSONL text/lines."""
-    if isinstance(lines, str):
-        lines = lines.splitlines()
-    final = ""
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except Exception:
-            continue
-        item = event.get("item") or {}
-        if (event.get("type") == "item.completed"
-                and item.get("type") == "agent_message"
-                and isinstance(item.get("text"), str)):
-            final = item["text"]
-    return final
 
 
 class CodexSpiralState:
@@ -886,32 +848,10 @@ def nudge_text(reason: str) -> str:
     )
 
 
-def completion_audit_text(reason: str) -> str:
-    evidence = {
-        "claimed-already-fixed":
-            "The previous response claimed the issue was already fixed but produced no patch.",
-        "empty-patch":
-            "The previous response completed without a source patch.",
-        "latest-verification-failed":
-            "The latest relevant verification still failed after the newest edit.",
-    }[reason]
-    return (
-        COMPLETION_AUDIT_MARKER + "\n"
-        "Automated completion audit: " + evidence + " The current checkout is the "
-        "failing base for this benchmark; preserve any current work and do not assume the "
-        "issue is already fixed. Re-read the issue and `git diff`, produce the smallest "
-        "nonempty source patch, check every affected public entry point or call path, and "
-        "run the narrowest focused reproduction after the latest edit. Do not edit tests. "
-        "This continuation is capped, so prioritize the minimal fix and verification."
-    )
-
-
 class CodexResumeGuard:
     """Live one-shot detector that continues only through native Codex resume."""
 
-    def __init__(self, policy: CodexSpiralPolicy = DEFAULT_POLICY, *, verbose: bool = False,
-                 completion_audit: bool = False,
-                 completion_audit_tool_turns: int = 8):
+    def __init__(self, policy: CodexSpiralPolicy = DEFAULT_POLICY, *, verbose: bool = False):
         self.policy = policy
         self.verbose = verbose
         self.state = CodexSpiralState(policy.recent_window)
@@ -919,13 +859,6 @@ class CodexResumeGuard:
         self.pending_reason: Optional[str] = None
         self.fired_reasons: set[str] = set()   # one nudge per reason per task
         self.events: list[dict] = []
-        self.completion_audit_enabled = bool(completion_audit)
-        self.completion_audit_tool_turns = max(1, int(completion_audit_tool_turns))
-        self.completion_audits_done = 0
-        self.completion_audit_reason: Optional[str] = None
-        self.completion_audit_active = False
-        self.completion_audit_start_turn = 0
-        self.completion_audit_capped = False
 
     def monitor(self, line: str) -> bool:
         events = parse_events(line)
@@ -934,23 +867,6 @@ class CodexResumeGuard:
         for event in events:
             self.state.update(event)
         event = events[-1]
-        if self.completion_audit_active:
-            used = self.state.turns - self.completion_audit_start_turn
-            if (event.kind in ("command", "edit")
-                    and used >= self.completion_audit_tool_turns):
-                self.completion_audit_active = False
-                self.completion_audit_capped = True
-                self.events.append({
-                    "action": "completion-audit-cap",
-                    "reason": self.completion_audit_reason,
-                    "tool_turns": used,
-                    "snapshot": self.state.snapshot(),
-                })
-                if self.verbose:
-                    print(f"  [codex-completion-audit] CAP at {used} tool turns")
-                return True
-            # Do not stack another spiral intervention inside the final audit.
-            return False
         if event.kind == "thread" or self.nudges_done >= self.policy.nudge_budget:
             return False
         reason = self.state.decision(self.policy)
@@ -1002,55 +918,6 @@ class CodexResumeGuard:
             request["effort"] = self.policy.resume_effort
         return request
 
-    def completion_continuation(self, patch: str, transcript: str):
-        """Return one deterministic same-thread end-state audit, if warranted."""
-        if (not self.completion_audit_enabled or self.completion_audits_done
-                or not self.state.thread_id):
-            return None
-        patch_empty = not (patch or "").strip()
-        final_message = final_agent_message(transcript)
-        if patch_empty and _NO_CHANGE_CLAIM_RE.search(final_message):
-            reason = "claimed-already-fixed"
-        elif patch_empty:
-            reason = "empty-patch"
-        elif (self.state.last_failed_verification_turn > self.state.last_edit_turn
-              and not self.state.currently_green):
-            reason = "latest-verification-failed"
-        else:
-            return None
-
-        self.completion_audits_done = 1
-        self.completion_audit_reason = reason
-        self.completion_audit_active = True
-        self.completion_audit_start_turn = self.state.turns
-        record = {
-            "action": "completion-audit-resume",
-            "reason": reason,
-            "thread_id": self.state.thread_id,
-            "snapshot": self.state.snapshot(),
-        }
-        self.events.append(record)
-        if self.verbose:
-            print(f"  [codex-completion-audit] RESUME ({reason})")
-        return {
-            "mode": "resume",
-            "session_id": self.state.thread_id,
-            "prompt": completion_audit_text(reason),
-        }
-
-    def finish_completion_audit(self):
-        """Record a naturally completed audit (a capped one already records itself)."""
-        if not self.completion_audit_active:
-            return
-        used = self.state.turns - self.completion_audit_start_turn
-        self.completion_audit_active = False
-        self.events.append({
-            "action": "completion-audit-complete",
-            "reason": self.completion_audit_reason,
-            "tool_turns": used,
-            "snapshot": self.state.snapshot(),
-        })
-
     def telemetry(self) -> dict:
         return {
             "policy": asdict(self.policy),
@@ -1059,10 +926,5 @@ class CodexResumeGuard:
             "snapshot": self.state.snapshot(),
             "thread_id_captured": bool(self.state.thread_id),
             "paid_judge_effective_tokens": 0,
-            "completion_audit_enabled": self.completion_audit_enabled,
-            "completion_audits": self.completion_audits_done,
-            "completion_audit_reason": self.completion_audit_reason,
-            "completion_audit_capped": self.completion_audit_capped,
-            "completion_audit_tool_turn_cap": self.completion_audit_tool_turns,
             "resume_effort": self.policy.resume_effort or None,
         }

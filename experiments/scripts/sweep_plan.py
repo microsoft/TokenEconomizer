@@ -98,12 +98,6 @@ SWEEP_ARMS_WEBBENCH_OUT_OF_SCOPE = ("inject-only", "untool-only", "spiral-only-w
 # Generic arms only: this planner enumerates the Claude / Copilot sweep. The Codex arms
 # are launched by codex_ab.sh, and its Web-Bench list already leaves out the two repomap-bearing arms for the same reason as here.
 SWEEP_ARMS_WEBBENCH_UNAVAILABLE = ("serena", "repomap", "trimech-repomap")
-# `trimech-rtk` is not "unavailable" on Web-Bench -- it is SUPERSEDED there by
-# `trimech-rtk-web`, exactly as `trimech` is by `trimech-web`. Listing it as unavailable
-# would claim the scaffold cannot run, which is false and would mislead the reader.
-SWEEP_ARMS_WEBBENCH_SUPERSEDED = {"trimech": "trimech-web",
-                                  "spiral-only": "spiral-only-web",
-                                  "trimech-rtk": "trimech-rtk-web"}
 SWEEP_SEEDS = (0, 1, 2)   # the paper's three seeds
 
 # Measured on the stored claude_swebench tree: 984 task-runs, mean $0.34/task on the honest

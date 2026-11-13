@@ -71,6 +71,9 @@ def test_classify_forms_and_intents():
     # heredoc bodies never become commands
     assert observe.classify_command("python - <<'PY'\npytest_is_a_word = 1\nPY")[0].intent == \
         "run_interpreter"
+    # a here-string (`<<<`) has no body: the commands after it are still read
+    assert [o.intent for o in observe.classify_command("read -r x <<< x\npytest -q\nx=1")] == \
+        ["run_tests"]
 
 
 def test_error_classes_are_environmental_only():
