@@ -24,7 +24,8 @@ Each finished session goes through three steps:
    prevented, in at least 40% of the sessions that exercise it (over at least four).
    A person can also retire a fact by hand (`stage.forget_facts`; the plugin's
    `te microskills forget`): it leaves the block, and its id goes into its layer's
-   `forgotten` set, so the fact is never formed again under that id.
+   `forgotten` set, so the fact is never formed again under that id; the proposer's
+   admission also refuses a new id that confirms only on the forgotten fact's evidence.
 
 `stage.PrefixStage` ties these together for a caller: render the block before a session, fold
 the session in after it. The block is capped (`MAX_FACTS`, `MAX_TOKENS`), and a lint refuses any

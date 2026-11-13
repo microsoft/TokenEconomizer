@@ -177,3 +177,18 @@ def test_a_failed_write_leaves_the_state_as_it_was(tmp_path):
         write_json_atomic(path, {"a": object()})
     assert json.load(open(path)) == {"a": 1}
     assert os.listdir(tmp_path) == ["state.json"]
+
+
+def test_argline_keeps_a_quoted_id_with_spaces_as_one_argument():
+    """Pi's `/te ...` hands `te` the line as typed (`--argline`); `te` splits it as a shell would."""
+    from tokeneconomizer.plugin.cli import _expand_argline
+    line = 'microskills forget "form_repair:run_tests:python -m pytest" other-id'
+    assert _expand_argline(["--host", "pi", "--argline", line]) == [
+        "--host", "pi", "microskills", "forget", "form_repair:run_tests:python -m pytest", "other-id"]
+    assert _expand_argline(["--argline=status"]) == ["status"]
+    assert _expand_argline(["status"]) == ["status"]
+
+
+def test_an_unclosed_quote_in_argline_changes_nothing(te):  # noqa: F811
+    from tokeneconomizer.plugin import cli
+    assert cli.main(["--argline", 'microskills forget "unclosed']) == 2

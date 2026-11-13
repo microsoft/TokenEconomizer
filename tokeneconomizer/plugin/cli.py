@@ -5,6 +5,7 @@
     te microskills                    the facts it injects, and the ones still forming
     te microskills forget ID ...      stop injecting the facts with these ids (as listed by
                                       `te microskills`); they are not learned again
+                                      under that id or from the same evidence
     te microskills unforget ID ...    bring forgotten facts back, as they were
     te toolprune show                 the proposed deny list, and the evidence behind it
     te toolprune apply [ITEM ...]     write the proposal (or the named items) to the repository's
@@ -48,6 +49,7 @@ import argparse
 import glob
 import json
 import os
+import shlex
 import sys
 import time
 
@@ -366,7 +368,8 @@ def _microskills_forget(args):
     if any(changed for _, changed, _ in done):
         print("from the next session, " + (
             "these facts are kept and injected under the same rules as any other fact" if undo
-            else "these facts are not injected, and are not learned again "
+            else "these facts are not injected, and are not learned again under the same id "
+                 "or from the same evidence "
                  "(`microskills unforget ID` undoes this)"))
     return 0
 
@@ -1038,7 +1041,24 @@ def _recent_host(cwd):
     return max(seen, key=seen.get) if seen else None
 
 
+def _expand_argline(argv):
+    """`--argline TEXT` stands for TEXT split as a POSIX shell would: a host's slash command
+    (Pi's `/te ...`) hands over the line as typed, and a fact id may hold spaces and quotes."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    for i, a in enumerate(argv):
+        if a == "--argline" and i + 1 < len(argv):
+            return argv[:i] + shlex.split(argv[i + 1]) + argv[i + 2:]
+        if a.startswith("--argline="):
+            return argv[:i] + shlex.split(a.split("=", 1)[1]) + argv[i + 1:]
+    return argv
+
+
 def main(argv=None):
+    try:
+        argv = _expand_argline(argv)
+    except ValueError as e:
+        print(f"te: could not read the arguments: {e}")
+        return 2
     args = build_parser().parse_args(argv)
     if args.host is None:
         args.host = hosts.default_host(recent=_recent_host(args.cwd))

@@ -635,6 +635,8 @@ class Distiller(Forgetting):
         exts, facts = parse_payload(raw)
         for e in exts:
             self._admit_extractor(e)              # append-only
+        # A forgotten id is refused at admission anyway: keep it from taking a candidate slot.
+        facts = [f for f in facts if f.get("id") not in self.forgotten]
         for spec in facts[:MAX_CANDS]:
             self._admit(spec)
         self.last_propose = self.now
@@ -653,6 +655,31 @@ class Distiller(Forgetting):
         return True
 
     # ---- fact admission: new id = append; existing id = contradict-only revise --
+    def _confirms(self, detector):
+        """The window's task ids on which `detector` confirms, under the CURRENT features."""
+        out = set()
+        for dg in self.window:
+            det = DetectorV3Scope(detector or {}, dg.get("features", {}))
+            if det.verdict(dg)[0] == "confirm":
+                out.add(dg["iid"])
+        return out
+
+    def _restates_forgotten(self, spec):
+        """The forgotten fact a new-id candidate restates, if any: the candidate confirms on at
+        least MIN_CITE of the tasks the forgotten fact's detector confirms on, and on no other.
+        A fact whose detector also confirms on other tasks still gets in."""
+        mine = self._confirms(spec.get("detector"))
+        if len(mine) < MIN_CITE:
+            return None
+        for fid, rec in self.forgotten.items():
+            det = ((rec.get("record") or {}).get("spec") or {}).get("detector")
+            if not det:
+                continue
+            theirs = self._confirms(det)
+            if len(mine & theirs) >= MIN_CITE and mine <= theirs:
+                return fid
+        return None
+
     def _ground(self, spec):
         """#window cites whose confirm regex fires under the CURRENT features."""
         by_iid = {d["iid"]: d for d in self.window}
@@ -695,6 +722,8 @@ class Distiller(Forgetting):
             hits = self._ground(spec)
             if hits < MIN_CITE:
                 return False, f"grounding-fail({hits}/{MIN_CITE})"
+            if self.forgotten and self._restates_forgotten(spec):
+                return False, "restates-forgotten"
             spec.setdefault("rev", 1)
             self.facts[fid] = self._build_fact(spec)
             return True, "admitted"
