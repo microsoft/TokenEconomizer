@@ -7,6 +7,7 @@ each finished session back in, reporting the paid proposer's cost for that sessi
 """
 import os
 
+from ..names import repo_filename
 from ..stage import Stage
 from . import distiller as _distiller
 from .distiller import Distiller
@@ -130,3 +131,52 @@ class PrefixStage(Stage):
         opt_tokens = self.distiller.opt_tokens - before
         srow["manual_facts"] = self.distiller.debug_row()
         return opt_tokens, self.reason
+
+
+# ---- forgetting a fact by hand ---------------------------------------------
+def _saved_layers(repo, root, vocab=None):
+    """The distillers with state saved under `root`, loaded: the environment layer first."""
+    from . import envfacts
+    out = []
+    for cls, sub in ((envfacts.EnvFactsDistiller, envfacts.STATE_SUBDIR),
+                     (Distiller, _distiller.STATE_SUBDIR)):
+        if os.path.exists(os.path.join(root, sub, repo_filename(repo) + ".json")):
+            out.append(cls.load(repo, root, vocab=vocab))
+    return out
+
+
+def forget_facts(repo, root, ids, vocab=None, undo=False):
+    """Forget the facts `ids` (or, with `undo`, bring them back) in whichever saved layer holds
+    each, and save the layers that changed. A forgotten fact is no longer rendered, and is not
+    learned again under its id. Returns [(id, changed, claim)] in the order given. When an id
+    is unknown to every layer nothing is changed, and KeyError carries the unknown ids."""
+    layers = _saved_layers(repo, root, vocab)
+    owner = {}
+    for layer in layers:
+        for fid in layer.known_ids():
+            owner.setdefault(fid, layer)
+    unknown = [fid for fid in ids if fid not in owner]
+    if unknown:
+        raise KeyError(unknown)
+    out, changed = [], []
+    for fid in dict.fromkeys(ids):
+        layer = owner[fid]
+        did = layer.unforget(fid) if undo else layer.forget(fid)
+        if did and layer not in changed:
+            changed.append(layer)
+        fact = layer.facts.get(fid)
+        claim = (layer._claim_of(fact) if fact is not None
+                 else layer.forgotten.get(fid, {}).get("claim", ""))
+        out.append((fid, did, claim))
+    for layer in changed:
+        layer.save(root)
+    return out
+
+
+def forgotten_facts(repo, root, vocab=None):
+    """{id: the claim it made} for every forgotten fact saved under `root`."""
+    out = {}
+    for layer in _saved_layers(repo, root, vocab):
+        for fid, rec in layer.forgotten.items():
+            out.setdefault(fid, rec.get("claim", ""))
+    return out

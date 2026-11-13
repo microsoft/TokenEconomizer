@@ -23,7 +23,7 @@ import re
 from ..names import repo_filename
 from ..trace import call_cwds
 from ..trace.claude import CONVERSATION
-from .lifecycle import Lifecycle, edited_files, edited_pyfiles
+from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
 # ---- proposer cadence / caps / gates ---------------------------------------
 PROPOSE_EVERY  = 8      # one LLM proposer call per this many tasks (PrefixStage rebinds
@@ -543,7 +543,7 @@ def _reparse_cmds(dg):
 
 
 # ---- distiller -------------------------------------------------------------
-class Distiller:
+class Distiller(Forgetting):
     """Learns and injects a per-repo operating manual over the task stream.
 
     Public surface (the injection Stage calls these):
@@ -553,6 +553,8 @@ class Distiller:
         d.update(transcript_path, iid=..., resolved=...) # fold in the finished task
         d.save(root)
     """
+    FACT_CLS = Fact
+
     def __init__(self, repo, runner=None, model="agent", external_facts=None, vocab=None):
         self.repo = repo
         # The plugin's generic reading (`Vocabulary.generic`): the generic digest and prompt.
@@ -569,6 +571,7 @@ class Distiller:
         self.last_propose = -1
         self.extractors = {}            # name -> Extractor
         self.raw_window = []            # bounded recent [(cmd,out)] per task
+        self.forgotten = {}             # id -> {claim, record}: never admitted again
 
     # ---- featurization -----------------------------------------------------
     def _observe_fact(self, fact, now, dg, files):
@@ -641,6 +644,8 @@ class Distiller:
         exts, facts = parse_payload(raw)
         for e in exts:
             self._admit_extractor(e)              # append-only
+        # A forgotten id is refused at admission anyway: keep it from taking a candidate slot.
+        facts = [f for f in facts if f.get("id") not in self.forgotten]
         for spec in facts[:MAX_CANDS]:
             self._admit(spec)
         self.last_propose = self.now
@@ -659,6 +664,31 @@ class Distiller:
         return True
 
     # ---- fact admission: new id = append; existing id = contradict-only revise --
+    def _confirms(self, detector):
+        """The window's task ids on which `detector` confirms, under the CURRENT features."""
+        out = set()
+        for dg in self.window:
+            det = DetectorV3Scope(detector or {}, dg.get("features", {}))
+            if det.verdict(dg)[0] == "confirm":
+                out.add(dg["iid"])
+        return out
+
+    def _restates_forgotten(self, spec):
+        """The forgotten fact a new-id candidate restates, if any: the candidate confirms on at
+        least MIN_CITE of the tasks the forgotten fact's detector confirms on, and on no other.
+        A fact whose detector also confirms on other tasks still gets in."""
+        mine = self._confirms(spec.get("detector"))
+        if len(mine) < MIN_CITE:
+            return None
+        for fid, rec in self.forgotten.items():
+            det = ((rec.get("record") or {}).get("spec") or {}).get("detector")
+            if not det:
+                continue
+            theirs = self._confirms(det)
+            if len(mine & theirs) >= MIN_CITE and mine <= theirs:
+                return fid
+        return None
+
     def _ground(self, spec):
         """#window cites whose confirm regex fires under the CURRENT features."""
         by_iid = {d["iid"]: d for d in self.window}
@@ -695,10 +725,14 @@ class Distiller:
 
     def _admit(self, spec):
         fid = spec.get("id")
+        if fid in self.forgotten:
+            return False, "forgotten"
         if fid not in self.facts:
             hits = self._ground(spec)
             if hits < MIN_CITE:
                 return False, f"grounding-fail({hits}/{MIN_CITE})"
+            if self.forgotten and self._restates_forgotten(spec):
+                return False, "restates-forgotten"
             spec.setdefault("rev", 1)
             self.facts[fid] = self._build_fact(spec)
             return True, "admitted"
@@ -771,13 +805,14 @@ class Distiller:
         window = [dict(dg, _cmd_blob=dg.get("_cmd_blob", "")[-BLOB_CAP:],
                        _out_blob=dg.get("_out_blob", "")[-2 * BLOB_CAP:])
                   for dg in self.window[-WINDOW:]]
-        json.dump({"repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
-                   "last_propose": self.last_propose,
-                   "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
-                   "facts": {k: f.to_dict() for k, f in self.facts.items()},
-                   "window": window,
-                   "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]},
-                  open(self._path(root, self.repo), "w", encoding="utf-8"), indent=2)
+        write_json_atomic(self._path(root, self.repo), {
+            "repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
+            "last_propose": self.last_propose,
+            "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
+            "facts": {k: f.to_dict() for k, f in self.facts.items()},
+            "forgotten": self.forgotten,
+            "window": window,
+            "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]})
 
     @classmethod
     def load(cls, repo, root, runner=None, model="agent", external_facts=None, vocab=None):
@@ -793,6 +828,8 @@ class Distiller:
         self.facts = {k: Fact.from_dict(v) for k, v in d.get("facts", {}).items()}
         self.window = list(d.get("window") or [])[-WINDOW:]
         self.raw_window = [[(c, "") for c in cmds] for cmds in d.get("raw_cmds") or []]
+        self.forgotten = dict(d.get("forgotten") or {})
+        self.drop_forgotten()
         return self
 
     def debug_row(self):
@@ -805,3 +842,4 @@ class Distiller:
             if isinstance(row.get(fid), dict):
                 row[fid]["rev"] = f.spec.get("rev", 1)
         return row
+

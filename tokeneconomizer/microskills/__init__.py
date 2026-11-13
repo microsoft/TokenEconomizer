@@ -13,8 +13,8 @@ from .distiller import Distiller
 from .envfacts import EnvFactsDistiller
 from .lifecycle import Lifecycle
 from .observe import GENERIC, NODE_WEB, PYTHON_GIT, Vocabulary, classify_command, observe_task
-from .stage import ComposedDistiller, PrefixStage
+from .stage import ComposedDistiller, PrefixStage, forget_facts, forgotten_facts
 
 __all__ = ["Distiller", "EnvFactsDistiller", "GENERIC", "Lifecycle", "NODE_WEB", "PYTHON_GIT",
            "Vocabulary", "classify_command", "observe_task", "ComposedDistiller",
-           "PrefixStage"]
+           "PrefixStage", "forget_facts", "forgotten_facts"]

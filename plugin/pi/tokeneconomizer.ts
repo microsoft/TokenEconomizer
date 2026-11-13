@@ -225,7 +225,8 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   pi.registerCommand("te", {
     description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
     handler: async (args, ctx) => {
-      const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
+      // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
+      const argv = ["--argline", (args || "").trim() || "status"];
       // The session id lets `te status` say when this session is recorded under the repository
       // it started in rather than the one `ctx.cwd` is in now.
       const out = await run("te", ["--host", "pi", "--cwd", ctx.cwd, ...argv], "", ctx.mode, {

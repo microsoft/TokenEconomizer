@@ -337,6 +337,68 @@ def test_the_generic_digest_keeps_line_breaks_of_list_tool_results(tmp_path):
         {"cmd": "npm run lint", "error": "error: missing script: lint"}]
 
 
+
+BUILD_TEST = [("Bash", {"command": "make build"}, "built"),
+              ("Bash", {"command": "make test"}, "ok  ./... 0.01s")]
+BUILD_LINT = [("Bash", {"command": "make build"}, "built"),
+              ("Bash", {"command": "make lint"}, "0 issues")]
+
+
+def _fold_with(tmp_path, monkeypatch, propose, root, sessions, start=0):
+    monkeypatch.setattr(dist, "PROPOSE_EVERY", 3)
+    for i, calls in enumerate(sessions, start):
+        d = dist.Distiller.load("acme/tool", root, runner=propose, vocab=GENERIC)
+        d.update(_session(tmp_path, i, calls), iid=f"s{i}")
+        d.save(root)
+    return dist.Distiller.load("acme/tool", root, vocab=GENERIC)
+
+
+def _fact(fid, scope=r"make test", confirm=r"make build", cite=("s0", "s1")):
+    return {"id": fid, "claim": f"{fid} claim", "injection": f"`{fid}`: run make build first.",
+            "detector": {"scope": scope, "confirm": confirm}, "cite": list(cite)}
+
+
+def test_a_forgotten_fact_is_not_admitted_again_under_a_new_id(tmp_path, monkeypatch):
+    """The window still holds the sessions that grounded a forgotten fact; a new id that
+    confirms on that evidence and nothing else is the same fact restated, and is refused."""
+    root = str(tmp_path / "state")
+    first = lambda prompt, model: (json.dumps({"extractors": [], "facts": [
+        _fact("build-before-test")]}), 1.0)
+    d = _fold_with(tmp_path, monkeypatch, first, root, [BUILD_TEST, BUILD_TEST])
+    assert "build-before-test" in d.facts
+    d.forget("build-before-test")
+    d.save(root)
+    d = _fold_with(tmp_path, monkeypatch, None, root, [BUILD_LINT, BUILD_LINT], start=2)
+
+    # same evidence, new id and wording: refused
+    assert d._admit(_fact("make-build-first")) == (False, "restates-forgotten")
+    # a narrower restatement (one of the same sessions) is refused at grounding already
+    assert d._admit(_fact("make-build-first", cite=("s0",)))[0] is False
+    # a fact whose evidence reaches past the forgotten one's gets in, citing the same sessions
+    wider = _fact("build-first-everywhere", scope=r"make (test|lint)", cite=("s0", "s1"))
+    assert d._admit(wider) == (True, "admitted")
+    # and so does one grounded on other sessions
+    lint = _fact("build-before-lint", scope=r"make lint", cite=("s2", "s3"))
+    assert d._admit(lint) == (True, "admitted")
+
+
+def test_a_forgotten_id_takes_no_candidate_slot(tmp_path, monkeypatch):
+    """Up to MAX_CANDS candidates are admitted per paid turn; a forgotten id the proposer
+    returns does not use one of them up."""
+    root = str(tmp_path / "state")
+    first = lambda prompt, model: (json.dumps({"extractors": [], "facts": [
+        _fact("build-before-test")]}), 1.0)
+    d = _fold_with(tmp_path, monkeypatch, first, root, [BUILD_TEST, BUILD_TEST])
+    d.forget("build-before-test")
+    d.save(root)
+    again = lambda prompt, model: (json.dumps({"extractors": [], "facts": (
+        [_fact("build-before-test")] * dist.MAX_CANDS
+        + [_fact("build-before-lint", scope=r"make lint", cite=("s2", "s3"))])}), 1.0)
+    d = _fold_with(tmp_path, monkeypatch, again, root, [BUILD_LINT, BUILD_LINT, BUILD_LINT],
+                   start=2)
+    assert "build-before-lint" in d.facts and "build-before-test" not in d.facts
+
+
 def test_an_output_extractor_authored_on_a_tick_reads_every_output_line(tmp_path, monkeypatch):
     """An extractor the proposer authors is computed over the window it was authored from, so a
     fact of the same tick can name it. Over the window's saved blobs it must read what it reads

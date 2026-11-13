@@ -685,6 +685,8 @@ repository is not used by Codex there), while settings are shared by every agent
 |---|---|
 | `status` | what it has learned in this repository, what it did, and what your sessions cost |
 | `microskills` | the facts it injects at session start, and those still forming |
+| `microskills forget ID …` | stop injecting the facts with these ids (as `microskills` lists them), and never learn them again under that id or from the same evidence; an unknown id changes nothing |
+| `microskills unforget ID …` | bring forgotten facts back, with the evidence they had |
 | `toolprune` | the deny list: what it left out, what it would leave out next, and the evidence |
 | `toolprune apply [ITEM …]` | apply a waiting proposal (with `toolprune=propose`), or the named items; from the next session |
 | `toolprune restore [ITEM …]` | give back the plugin's entries (all, or the named ones); they are not removed again |
@@ -714,8 +716,9 @@ How to run them:
 | Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
 | Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
 
-`doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
-Codex skill for them.
+`doctor`, `history`, `repomap` and `microskills forget`/`unforget` run from a terminal (or as `/te …` on
+Pi); there is no slash command or Codex skill for them. Quote a fact id that holds spaces or shell
+characters: `te microskills forget 'form_repair:run_tests:pytest -q'`.
 
 Inside an agent, each command is one model turn; from a terminal it costs nothing. Codex asks
 before a command that changes something (`config set`, `toolprune restore`, ...), since it

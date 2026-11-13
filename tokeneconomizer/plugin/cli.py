@@ -3,6 +3,10 @@
     te status                         what it has learned for this repository, and what it did
     te status --explain               explain the current settings and saved learning state
     te microskills                    the facts it injects, and the ones still forming
+    te microskills forget ID ...      stop injecting the facts with these ids (as listed by
+                                      `te microskills`); they are not learned again
+                                      under that id or from the same evidence
+    te microskills unforget ID ...    bring forgotten facts back, as they were
     te toolprune show                 the proposed deny list, and the evidence behind it
     te toolprune apply [ITEM ...]     write the proposal (or the named items) to the repository's
                                       settings: tools (Claude Code), capabilities (Codex) or
@@ -45,6 +49,7 @@ import argparse
 import glob
 import json
 import os
+import shlex
 import sys
 import time
 
@@ -294,6 +299,12 @@ def cmd_status(args):
 
 
 def cmd_microskills(args):
+    if args.action in ("forget", "unforget"):
+        return _microskills_forget(args)
+    if args.ids:
+        print(f"`microskills {args.action}` takes no ids; did you mean `microskills forget "
+              f"{' '.join(args.ids)}`?")
+        return 2
     ctx = _ctx(args)
     inj = ctx.store.read("injection.json") or {}
     if ctx.config.microskills == "off":
@@ -311,6 +322,55 @@ def cmd_microskills(args):
         for k, v in sorted(rows):
             print(f"  {v.get('state', '?'):9s} fire={v.get('fire', '?'):>5s} "
                   f"{'INJECTED' if v.get('inject') else '        '} {k}")
+    from tokeneconomizer.microskills import forgotten_facts
+    gone = forgotten_facts(ctx.repo.label, os.path.join(ctx.store.base, "mechanisms"))
+    if gone:
+        print("\nforgotten (`microskills unforget ID` brings one back):")
+        for k, claim in sorted(gone.items()):
+            print(f"  {k}" + (f"  ({_short(claim)})" if claim else ""))
+    return 0
+
+
+def _short(text, n=80):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 1] + "\u2026"
+
+
+def _microskills_forget(args):
+    from tokeneconomizer.microskills.lifecycle import NO_RECORD
+    undo = args.action == "unforget"
+    if not args.ids:
+        print(f"`microskills {args.action}` needs the id of at least one fact; "
+              f"`microskills` lists them")
+        return 2
+    ctx = _ctx(args)
+    refused = _refuse_unwritable(ctx.root)
+    if refused:
+        return refused
+    try:
+        done = fold.forget_microskills(ctx, args.ids, undo=undo)
+    except KeyError as e:
+        unknown = e.args[0] if e.args and isinstance(e.args[0], list) else list(e.args)
+        print(f"not changed: no learned fact here has the id {', '.join(unknown)} "
+              f"({ctx.host.name}, {ctx.repo.label}); `microskills` lists the ids")
+        return 1
+    except fold.Busy as e:
+        print(f"not changed: {e}; try again in a moment")
+        return 1
+    for fid, changed, claim in done:
+        if changed == NO_RECORD:
+            print(f"no longer forgotten, but nothing to bring back: {fid} had no saved record; "
+                  f"a later fold may learn it again")
+            continue
+        what = (("brought back" if changed else "not forgotten, nothing to bring back") if undo
+                else ("forgotten" if changed else "already forgotten"))
+        print(f"{what}: {fid}" + (f"  ({_short(claim)})" if claim else ""))
+    if any(changed for _, changed, _ in done):
+        print("from the next session, " + (
+            "these facts are kept and injected under the same rules as any other fact" if undo
+            else "these facts are not injected, and are not learned again under the same id "
+                 "or from the same evidence "
+                 "(`microskills unforget ID` undoes this)"))
     return 0
 
 
@@ -936,7 +996,12 @@ def build_parser():
     p.add_argument("--explain", action="store_true",
                    help="briefly explain current settings and saved state (no model calls)")
     p.set_defaults(fn=cmd_status)
-    add("microskills", "facts").set_defaults(fn=cmd_microskills)
+    p = add("microskills", "facts")
+    p.add_argument("action", nargs="?", default="show", choices=("show", "forget", "unforget"),
+                   help="show the facts (default); forget: stop injecting them and never learn "
+                        "them again; unforget: bring forgotten facts back")
+    p.add_argument("ids", nargs="*", metavar="ID", help="fact ids, as `te microskills` lists them")
+    p.set_defaults(fn=cmd_microskills)
     p = add("toolprune", "untool")
     p.add_argument("action", nargs="?", default="show",
                    choices=("show", "apply", "restore", "refresh-catalog", "measure",
@@ -998,7 +1063,24 @@ def _recent_host(cwd):
     return max(seen, key=seen.get) if seen else None
 
 
+def _expand_argline(argv):
+    """`--argline TEXT` stands for TEXT split as a POSIX shell would: a host's slash command
+    (Pi's `/te ...`) hands over the line as typed, and a fact id may hold spaces and quotes."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    for i, a in enumerate(argv):
+        if a == "--argline" and i + 1 < len(argv):
+            return argv[:i] + shlex.split(argv[i + 1]) + argv[i + 2:]
+        if a.startswith("--argline="):
+            return argv[:i] + shlex.split(a.split("=", 1)[1]) + argv[i + 1:]
+    return argv
+
+
 def main(argv=None):
+    try:
+        argv = _expand_argline(argv)
+    except ValueError as e:
+        print(f"te: could not read the arguments: {e}")
+        return 2
     args = build_parser().parse_args(argv)
     if args.host is None:
         args.host = hosts.default_host(recent=_recent_host(args.cwd))
