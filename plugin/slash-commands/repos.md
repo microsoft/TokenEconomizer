@@ -9,7 +9,9 @@ In Copilot CLI on Windows, use the PowerShell tool:
 
 ```powershell
 $root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join-Path $HOME '.tokeneconomizer' }
-& (Join-Path $root 'bin\te.ps1') --host copilot --cwd (Get-Location).Path repos $ARGUMENTS
+$launcher = Get-Content -LiteralPath (Join-Path $root 'bin\te.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+& $launcher.python -X utf8 $launcher.bootstrap cli --host copilot --cwd (Get-Location).Path repos $ARGUMENTS
 ```
 
 Otherwise, run this command with the Bash tool:

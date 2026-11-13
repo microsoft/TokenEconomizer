@@ -53,7 +53,7 @@ def launcher_path(env=None):
 
 
 def ensure_launcher(env=None):
-    """Keep `bin/te` (and `bin/te.ps1` on Windows) pointing at this plugin. Returns te or None.
+    """Keep `bin/te` and Windows launch information pointing at this plugin. Returns te or None.
 
     A slash command has to name the CLI's path. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`
     into a command's text; the Copilot CLI substitutes nothing but `$ARGUMENTS` (1.0.83:
@@ -74,8 +74,14 @@ def ensure_launcher(env=None):
             "command line.\nexec %s \"$@\"\n" % shlex.quote(target))
     launchers = {path: body}
     if os.name == "nt":
+        import json
+        import sys
         launchers[path + ".ps1"] = "& '%s' @args\nexit $LASTEXITCODE\n" % (
             target.replace("'", "''") + ".ps1")
+        launchers[path + ".json"] = json.dumps({
+            "python": sys.executable,
+            "bootstrap": os.path.join(plugin, "scripts", "te_bootstrap.py"),
+        }) + "\n"
     for launcher, body in launchers.items():
         try:
             with open(launcher, encoding="utf-8") as fh:

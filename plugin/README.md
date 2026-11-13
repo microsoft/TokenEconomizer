@@ -191,10 +191,14 @@ copilot plugin list       # tokeneconomizer@tokeneconomizer ... (enabled)
 
 Copilot loads the plugin from the clone directly, without copying it.
 
-On Windows, its hooks and slash commands use PowerShell; Git Bash is not required.
-From a PowerShell terminal in the clone, run `.\plugin\scripts\te.ps1 --host copilot status`.
-The launcher honors `TE_PYTHON`, then looks for `python3`, `python`, or `py`, preferring
-interpreters outside WindowsApps.
+On Windows, its hooks and slash commands invoke Python directly from PowerShell commands;
+Git Bash is not required. They work under `Restricted` without changing execution policy or
+using `-ExecutionPolicy Bypass`. Copilot's normal command approval
+still applies; application-control policies that block Python still apply too.
+From a PowerShell terminal in the clone, use a Python >= 3.10 executable, for example:
+`python -X utf8 .\plugin\scripts\te_bootstrap.py cli --host copilot status`.
+The hooks honor `TE_PYTHON`, then look for `python3`, `python`, or `py`, preferring
+interpreters outside WindowsApps. The slash commands reuse the interpreter selected by the hook.
 
 **2. Check it.** In Copilot's interactive mode, type `/tokeneconomizer:status`. Each slash command
 is a model turn, and Copilot asks before running the plugin's script; choose **Yes**. Slash
@@ -217,15 +221,24 @@ start says so. `/tokeneconomizer:toolprune restore` turns the server back on, an
 `toolprune measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
-launcher appears after the first session). In PowerShell, use
-`& "$HOME\.tokeneconomizer\bin\te.ps1" --host copilot <command>` instead (or the same path under
-`$env:TOKENECONOMIZER_HOME` when set). Session-start and prompt hooks create or repair the launchers,
-so an open session picks up the PowerShell launcher on its next prompt after updating.
+launcher appears after the first session). In PowerShell, read the launch paths as data and
+invoke Python directly, replacing `status` with the command you want:
+
+```powershell
+$root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join-Path $HOME '.tokeneconomizer' }
+$launcher = Get-Content -LiteralPath (Join-Path $root 'bin\te.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+& $launcher.python -X utf8 $launcher.bootstrap cli --host copilot --cwd (Get-Location).Path status
+```
+
+Session-start and prompt hooks create or repair the launchers and `te.json`, so an open session
+picks up the native launch paths on its next prompt after updating. The `.ps1` launchers remain
+available for terminals whose existing execution policy permits PowerShell script files.
 A turn that is still stuck after the loop guard's
 redirect shows "● TokenEconomizer: …" in the conversation (and on stdout under `copilot -p`); press
 **Esc** twice to interrupt it, or Ctrl+C to end a `copilot -p` run.
 
-**Update.** `git pull` in the clone; Copilot loads the plugin from it, so nothing else is needed.
+**Update.** `git pull` in the clone, then restart Copilot to load the updated hook commands.
 
 **Uninstall.**
 
