@@ -838,7 +838,7 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
   runs, verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
-* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, written against
+* **Antigravity CLI and Desktop (`agy`, experimental)** — micro-skills' LLM-free facts, written against
   agy 1.5.1 and its own installed hook documentation; tool pruning is not implemented. The
   plugin makes no model call through `agy`, which has no option that runs a prompt with every tool
   off (`sidecall.NO_SIDE_CALLS`), so the paid proposer and the loop guard's judge never run. What
@@ -848,7 +848,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
   `PostToolUse` carries no tool result and a matcher `"*"` never matches, so the results are read
   from the conversation's `transcript_full.jsonl` at the next `PreInvocation` and at `Stop`, where
-  every result of the previous model call is already written (`trace/antigravity.py`). There is no
+  every result of the previous model call is already written (`trace/antigravity.py`). Recognizes
+  both CLI tool signatures (`write_to_file`, `replace_file_content`) and Antigravity Desktop IDE
+  tools (`write_file`, `edit_file` with `Path` parameter). There is no
   prompt event and no `SessionEnd`: a prompt is the `PreInvocation` with `invocationNum` 0, and a
   conversation is folded by the next session start in its repository once its transcript has been
   quiet for ten minutes. Context goes back as `injectSteps`: a persistent `systemMessage` at
