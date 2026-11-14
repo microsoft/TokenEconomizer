@@ -79,6 +79,8 @@ def load_calls(fp):
             d = json.loads(line)
         except Exception:
             continue
+        if not isinstance(d, dict):
+            continue
         m = d.get("message")
         if not isinstance(m, dict) or d.get("type", "assistant") not in CONVERSATION:
             continue
@@ -88,16 +90,23 @@ def load_calls(fp):
         for b in c:
             if not isinstance(b, dict):
                 continue
-            if b.get("type") == "tool_use" and b.get("id") not in uses:
-                uses[b.get("id")] = (b.get("name", ""), b.get("input") or {})
-                order.append(b.get("id"))
+            tid = b.get("id") if b.get("type") == "tool_use" else b.get("tool_use_id")
+            if not isinstance(tid, str):
+                continue
+            if b.get("type") == "tool_use" and tid not in uses:
+                name = b.get("name")
+                inp = b.get("input")
+                uses[tid] = (name if isinstance(name, str) else "",
+                             inp if isinstance(inp, dict) else {})
+                order.append(tid)
             elif b.get("type") == "tool_result":
                 cont = b.get("content")
                 if isinstance(cont, list):
-                    txt = "\n".join(x.get("text", "") for x in cont if isinstance(x, dict))
+                    txt = "\n".join(x.get("text") for x in cont
+                                    if isinstance(x, dict) and isinstance(x.get("text"), str))
                 else:
                     txt = cont if isinstance(cont, str) else json.dumps(cont)
-                res[b.get("tool_use_id")] = txt
+                res[tid] = txt
     return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
 
 
