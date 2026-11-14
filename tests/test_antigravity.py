@@ -9,6 +9,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -445,3 +446,51 @@ def test_the_plugin_declares_the_three_events_and_never_pretooluse():
     assert (ROOT / "plugin/scripts/te.cmd").is_file()
     # no other agent reads the root hook file: Claude Code's is `hooks/hooks.json`.
     assert "hooks" not in claude
+
+
+def test_windows_hook_launcher_fails_open_with_no_python():
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env.pop("TE_PYTHON", None)
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input="{}", text=True, capture_output=True, env=env)
+    assert p.returncode == 0
+    assert json.loads(p.stdout.strip()) == {}
+
+
+def test_windows_te_launcher_reports_missing_python():
+    cmd_script = ROOT / "plugin" / "scripts" / "te.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env.pop("TE_PYTHON", None)
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "status"],
+                       text=True, capture_output=True, env=env)
+    assert p.returncode == 1
+    assert "no python3 on PATH" in p.stderr
+
+
+def test_windows_hook_launcher_executes_with_valid_python(tmp_path):
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP") if k in os.environ}
+    env["PATH"] = f"{os.path.dirname(sys.executable)}{os.pathsep}{os.environ.get('PATH', '')}"
+    env["TOKENECONOMIZER_HOME"] = str(tmp_path / "home")
+    payload = {
+        "hook_event_name": "SessionStart",
+        "conversationId": CID,
+        "workspacePaths": [str(tmp_path)],
+        "transcriptPath": str(tmp_path / "transcript.jsonl"),
+        "modelName": "m",
+        "lastUserInput": "test",
+    }
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input=json.dumps(payload), text=True, capture_output=True, env=env)
+    assert p.returncode == 0
+    assert json.loads(p.stdout.strip()) == {}
+
