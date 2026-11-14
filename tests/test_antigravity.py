@@ -322,6 +322,34 @@ def test_the_trace_conversion_feeds_the_mechanisms_and_prompts_are_counted(tp, t
     assert host.mechanism_trace(str(tp) + ".none", str(work)) is None
 
 
+def test_desktop_tools_feed_mechanisms_and_session_usage(tmp_path):
+    fixture_path = str(ROOT / "tests" / "fixtures" / "antigravity_desktop_transcript.jsonl")
+    host = Antigravity()
+
+    # 1. Verify session usage sums tokens from the desktop fixture
+    usage = host.session_usage(fixture_path)
+    assert usage["requests"] == 2
+    assert usage["input_tokens"] == 1420 + 1550
+    assert usage["cache_read_input_tokens"] == 9600 + 10800
+    assert usage["output_tokens"] == 75 + 60
+    assert usage["model"] == "antigravity"
+
+    # 2. Verify mechanism trace produces valid Claude-shaped trajectory
+    out = host.mechanism_trace(fixture_path, str(tmp_path))
+    assert out is not None and os.path.isfile(out)
+    records = [json.loads(line) for line in open(out, encoding="utf-8") if line.strip()]
+    actions = [(r["message"]["content"][0]["name"], r["message"]["content"][0]["input"])
+               for r in records if r.get("type") == "assistant" and "content" in r.get("message", {})]
+    assert actions == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"}),
+    ]
+    assert [(tool, args) for tool, args, _text, _ok in trace.load_trajectory(out)] == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"}),
+    ]
+
+
 # ---- the hook entry point ------------------------------------------------------------------
 def test_main_reads_the_event_from_the_command_line(tp, env):
     out_ = io.StringIO()
