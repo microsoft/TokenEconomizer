@@ -103,15 +103,17 @@ class Store:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
 
     def read_lines(self, name, limit=None):
-        """Records of a JSONL log, oldest first; the last `limit` when given."""
+        """Object records of a JSONL log, oldest first; the last `limit` when given."""
         out = []
         try:
             with open(self.path(name), encoding="utf-8") as fh:
                 for line in fh:
                     try:
-                        out.append(json.loads(line))
+                        rec = json.loads(line)
                     except ValueError:
                         continue
+                    if isinstance(rec, dict):
+                        out.append(rec)
         except OSError:
             return []
         return out[-limit:] if limit else out
