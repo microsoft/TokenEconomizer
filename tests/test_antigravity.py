@@ -438,8 +438,8 @@ def test_the_plugin_declares_the_three_events_and_never_pretooluse():
     assert {e: h[0]["timeout"] for e, h in events.items()} == {
         "SessionStart": 15, "PreInvocation": 10, "Stop": 10}
     for event, (handler,) in events.items():
-        assert f"--host antigravity --event {event}" in handler["command"]
-        assert "./scripts/te-hook" in handler["command"] and "te-hook.cmd" in handler["command"]
+        expected = f"./scripts/te-hook --host antigravity --event {event} || scripts\\te-hook.cmd --host antigravity --event {event}"
+        assert handler["command"] == expected
     assert os.access(ROOT / "plugin/scripts/te-hook", os.X_OK)
     assert (ROOT / "plugin/scripts/te-hook.cmd").is_file()
     assert (ROOT / "plugin/scripts/te.cmd").is_file()
