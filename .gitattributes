@@ -2,3 +2,5 @@
 plugin/scripts/te text eol=lf
 plugin/scripts/te-hook text eol=lf
 *.sh text eol=lf
+*.cmd text eol=crlf
+
