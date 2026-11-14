@@ -1444,6 +1444,30 @@ def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
     assert turn.status_of_tests(cmd) == status
 
 
+@pytest.mark.parametrize("cmd", ["python -W error -m pytest -q", "python3 -Werror -m pytest",
+                                 "python -X dev -m pytest tests",
+                                 "python3.12 -Xfaulthandler -m pytest",
+                                 "python -u -m unittest discover", "python -bb -B -m pytest",
+                                 "python -I -m unittest -v", ".venv/bin/python -W error -m pytest",
+                                 "python -W error::DeprecationWarning manage.py test",
+                                 "python -u tests/runtests.py"])
+def test_a_runner_behind_pythons_own_options_counts_as_a_verification(cmd):
+    """`python -W error -m pytest` and `python -X dev -m pytest` put the interpreter's options
+    before `-m`. Only `python -m` was read, so the run was no verification and a failing one after
+    the last edit left the turn green."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["python -W error repro.py", "python -X dev -c 'import a'",
+                                 "python -u -m pip install -e .", "python -m pytest --version"])
+def test_pythons_own_options_leave_what_it_runs_to_decide(cmd):
+    assert turn.status_of_tests(cmd) is None
+
+
 @pytest.mark.parametrize("cmd", ["ruby test/ledger_test.rb", "ruby -w -Ilib test/slugify_test.rb",
                                  "ruby -I lib test/x_test.rb", "ruby /w/repo/test/x_test.rb",
                                  "ruby -Itest test/models/user_test.rb", "ruby spec/foo_spec.rb",
