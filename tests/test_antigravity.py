@@ -229,6 +229,22 @@ def test_running_steps_system_rows_and_finish_do_not_shift_the_pairing(tp):
     assert [(i["args"]["command"], i["exit_code"]) for i in items] == [("ls", 0)]
 
 
+def test_antigravity_recognizes_desktop_tools_from_fixture():
+    fixture_path = ROOT / "tests" / "fixtures" / "antigravity_desktop_transcript.jsonl"
+    items, offset, last_idx = trace.antigravity_read(str(fixture_path), offset=0, after=-1, final=True)
+    assert last_idx == 4
+    tool_items = [item for item in items if item["kind"] == "tool"]
+    assert len(tool_items) == 2
+    # Verify write_file maps to Write with file_path
+    assert tool_items[0]["name"] == "Write"
+    assert tool_items[0]["args"] == {"file_path": "/work/repo/src/helper.py"}
+    assert tool_items[0]["is_error"] is False
+    # Verify edit_file maps to Edit with file_path
+    assert tool_items[1]["name"] == "Edit"
+    assert tool_items[1]["args"] == {"file_path": "/work/repo/src/helper.py"}
+    assert tool_items[1]["is_error"] is False
+
+
 # ---- agy's answer --------------------------------------------------------------------------
 def test_render_answers_each_event_in_agys_terms():
     host = Antigravity()
