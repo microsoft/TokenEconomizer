@@ -829,7 +829,8 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **opencode (experimental)** — verified on 1.19.5, 2.2.0 and 2.2.5 (CI), not in the 2.x
   terminal UI. On 2.x the loop guard's notices go to the server's stderr because plugins cannot
   toast there; opencode has no deny-list settings file, so tool pruning does not apply (as on
-  Pi), and a TUI quit is only noticed by the next session's start.
+  Pi), and a TUI quit is noticed by the plugin itself: a session quiet for `fold.STALE_S`
+  (600 s; `TE_OPENCODE_QUIET_MS` overrides it) is handed over without waiting for a next start.
 * **Grok Build (experimental)** — micro-skills and the loop guard, on 1.0.70. No tool pruning. The
   start context reaches the model only with the session's first tool call (a session with none
   never gets it), and the ledger counts it as injected from `SessionStart`. A turn interrupted

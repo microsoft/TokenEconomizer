@@ -463,8 +463,9 @@ session from its events and writes the same JSON (where that copy holds no promp
 2.x's `opencode session export` instead). A turn ends at 2.x's `session.execution.*` events or
 the documented `session.idle`, whichever the release emits; a headless `opencode run` is folded
 when its turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no
-chance to say so: that session is folded by the next session's start, once its export has been
-quiet for 10 minutes.
+chance to say so, so the plugin hands a session over itself once it has been quiet for 10
+minutes — the window TE's own recovery uses (`fold.STALE_S`; `TE_OPENCODE_QUIET_MS` overrides it,
+floor 10 s) — whether or not a later session start ever arrives.
 
 **Model calls.** The proposer and the loop guard's judge run through `opencode run` on your
 default opencode model (`paid_model` names another): tools that change anything are denied,

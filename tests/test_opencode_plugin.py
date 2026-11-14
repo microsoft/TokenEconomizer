@@ -59,6 +59,7 @@ await plugin.setup({
 await hooks["session.prompt"]({ sessionID: "ses_t", messageID: "m1", prompt: { text: "say hi" } });
 await hooks["tool.execute.after"]({ sessionID: "ses_t", status: "completed", tool: "bash",
   id: "c1", input: { command: "echo hi" }, result: { content: "hi", metadata: { exit: 0 } } });
+if (process.env.TE_WAIT_MS) await new Promise((r) => setTimeout(r, Number(process.env.TE_WAIT_MS)));
 console.log("harness done");
 process.exit(0);
 '''
@@ -111,6 +112,22 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
         text.replace("windowsHide: true", "windowsHide: false"), encoding="utf-8")
     control = _run(tmp_path, copy / "opencode" / "tokeneconomizer.ts", "control")
     assert all(r["visible"] for r in control if r["hook"]), control
+
+
+def test_a_quiet_session_is_handed_over_without_a_mode_guess(tmp_path, monkeypatch):
+    """On 2.x `opencode run` and the TUI are the same background process, so the plugin cannot
+    tell them apart. A session quiet for the window it is told (TE_OPENCODE_QUIET_MS) is handed
+    over with SessionEnd while the process is still up, instead of waiting for the next start."""
+    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
+    monkeypatch.setenv("TE_WAIT_MS", "15000")
+    _run(
+        tmp_path,
+        os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+        "quiet",
+    )
+    (state,) = (tmp_path / "te-quiet").glob("repos/*/opencode/sessions/ses_t.json")
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    assert doc.get("end_reason") == "idle" and doc.get("ended"), doc
 
 
 class _Chat(BaseHTTPRequestHandler):

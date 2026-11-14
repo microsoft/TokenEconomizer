@@ -16,12 +16,15 @@
  *                                                      still-stuck notice is shown as a toast
  *   event session.idle           -> Stop               closes the turn; the session is exported as
  *                                                      JSON and its path sent along
- *   event session.deleted, a headless run's end, or the process exiting
- *                                -> SessionEnd         hands the session to a detached fold; a
- *                                                      TUI quit sends nothing, so the plugin's
- *                                                      session-recovery folds it at the next
- *                                                      start once its export has been quiet for
- *                                                      10 minutes
+ *   event session.deleted, a headless run's end, a session quiet for 10 minutes, or the
+ *   process exiting              -> SessionEnd         hands the session to a detached fold. On
+ *                                                      2.x `opencode run` and the TUI are the
+ *                                                      same background process, so the plugin
+ *                                                      does not guess which one it is: any
+ *                                                      session quiet as long as TE's own
+ *                                                      recovery treats it as over (fold.STALE_S)
+ *                                                      is handed over, whether or not a later
+ *                                                      session start ever arrives.
  *
  * The module's one export is the default object below: opencode 1.x reads its `server`, 2.x its
  * `setup`, and 1.x would call a second export as another plugin. The two entries map the same
@@ -381,7 +384,36 @@ const setupV2 = async (ctx: any) => {
     manuals.set(id, out?.hookSpecificOutput?.additionalContext ?? "");
     notify(out?.systemMessage);
   };
+  /**
+   * A session that has been quiet this long is over, however it was started. opencode 2.x runs
+   * plugins in its background service, where `opencode run` and the TUI are the same process, so
+   * `mode()` cannot tell them apart -- and a release may move which one holds the plugin again.
+   * TE's own recovery already calls a session quiet for `fold.STALE_S` (600 s) over; this
+   * enforces the same rule here, so the hand-over does not wait for a later session start and
+   * does not depend on guessing the mode. Any activity resets the timer.
+   */
+  const QUIET_MS = (() => {
+    const raw = Number(process.env.TE_OPENCODE_QUIET_MS);
+    return Number.isFinite(raw) && raw >= 10_000 ? raw : 600_000;
+  })();
+  const quiet = new Map<string, ReturnType<typeof setTimeout>>();
+  const settled = (id: string) => {
+    const timer = quiet.get(id);
+    if (timer) clearTimeout(timer);
+    quiet.delete(id);
+  };
+  const bumpQuiet = (id: string) => {
+    if (!open.has(id)) return;
+    settled(id);
+    const timer = setTimeout(() => {
+      quiet.delete(id);
+      if (open.has(id)) void end(id, "idle");
+    }, QUIET_MS);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    quiet.set(id, timer);
+  };
   const end = async (id: string, reason: string) => {
+    settled(id);
     if (!open.delete(id)) return;
     await hook({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason });
   };
@@ -397,7 +429,10 @@ const setupV2 = async (ctx: any) => {
       prompt_id: turns.get(id) ?? "",
       stop_hook_active: false,
     });
+    // Where the process really is a one-shot run, hand the session over now; everywhere else the
+    // quiet timer does it, so the fold no longer depends on how the plugin was launched.
     if (mode() === "run") await end(id, "run");
+    else bumpQuiet(id);
   };
   process.once("exit", () => {
     for (const id of open)
@@ -426,6 +461,7 @@ const setupV2 = async (ctx: any) => {
       const turn = `${id}:${n}`;
       turns.set(id, turn);
       unsettled.add(id);
+      bumpQuiet(id);
       const text: string = e.prompt?.text ?? "";
       records.get(id)?.push({
         info: { id: String(e.messageID ?? turn), role: "user" },
@@ -453,6 +489,7 @@ const setupV2 = async (ctx: any) => {
   try {
     await ctx.tool.hook("execute.after", async (e: any) => {
       const id: string = e.sessionID;
+      bumpQuiet(id);
       const ok = e.status === "completed";
       const result = ok ? e.result : undefined;
       const text = ok
