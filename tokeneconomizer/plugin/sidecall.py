@@ -29,9 +29,11 @@ so no extra API key is needed and the call is billed where the session is:
     extension registers needs that extension loaded (`pi_extensions`); `pi_cli` names the `pi`
     to run, where the first on PATH is a wrapper the calls should not go through.
 
-  * opencode: `opencode run --format json` in a throwaway directory, on the person's default
-    model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
-    1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * opencode: `opencode run --format json` in a throwaway directory, on `opencode_paid_model`
+    (or `paid_model`); with neither, on the model the session itself is running -- the 2.x plugin
+    reports it from `session.step.started` -- rather than the CLI's configured default, which can
+    be a free model the person has already moved past. `bash`, `edit`, `webfetch` and `websearch`
+    denied, no other plugin (`--pure` on 1.x, `--standalone` on 2.x), session deleted afterwards.
   * Grok: `grok -p <prompt> --output-format json` in a throwaway directory, on the person's default
     model, with only the read-only `read_file` tool allowed (`--tools read_file`), grok's MCP
     dispatchers removed (`--disallowed-tools`) and the shell, edit, write, web and subagent
@@ -986,7 +988,7 @@ def call_name(host_name):
     return _CALLS.get(host_name, f"{host_name} -p")
 
 
-def runner_for(host_name, config, role=None):
+def runner_for(host_name, config, role=None, session_model=""):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
     when micro-skills is on, the loop guard's judge when the guard is. None for a host in
@@ -994,8 +996,13 @@ def runner_for(host_name, config, role=None):
 
     `role` (`judge`, `nudge`, `proposer`) lets `local_model` run that call on-device instead
     (`local_runner`), falling back to the host's CLI when the local call fails; on a host in
-    `NO_SIDE_CALLS` the local model is the only runner."""
-    call = _host_call(host_name, config)
+    `NO_SIDE_CALLS` the local model is the only runner.
+
+    `session_model` is the model the session itself runs on, when the host reports it: on
+    opencode it stands in where no `paid_model` is configured, so a provider the person picked
+    in the session is not looked past in favour of the CLI's default. The other hosts name
+    their own default (Claude's `haiku`), which a session's model does not replace."""
+    call = _host_call(host_name, config, session_model=session_model)
     host = None if call is None else _noted(host_name, call)
     if role is not None:
         local = local_runner(role, config, fallback=host)
@@ -1004,7 +1011,7 @@ def runner_for(host_name, config, role=None):
     return host
 
 
-def _host_call(host_name, config):
+def _host_call(host_name, config, session_model=""):
     if host_name in NO_SIDE_CALLS:
         return None
     model = getattr(config, f"{host_name}_paid_model", "") or config.paid_model
@@ -1016,7 +1023,9 @@ def _host_call(host_name, config):
         return lambda prompt, _m="agent": pi_call(prompt, model=model, cli=cli,
                                                   extensions=extensions)
     if host_name == "opencode":
-        return lambda prompt, _m="agent": opencode_call(prompt, model=model)
+        # No configured model: follow the session's own, not the CLI's default (which can be a
+        # free model the person already moved past).
+        return lambda prompt, _m="agent": opencode_call(prompt, model=model or session_model)
     if host_name == "cursor":
         return lambda prompt, _m="agent": cursor_call(prompt, model=model)
     if host_name == "grok":

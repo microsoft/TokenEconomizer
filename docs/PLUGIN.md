@@ -95,7 +95,7 @@ event): no nudge is counted, and there is no one left to redirect.
 | Still stuck after the redirect | terminal abort, in autonomous runs | a one-line **notice** to the person, ending with how to stop the turn on that agent and in that mode (§3); the plugin never stops a turn, and `loopguard: stop` is read as `nudge` | Not every agent's hooks can stop a turn (Codex and Copilot ignore `continue: false`), and the person decides: the benchmark guard's own design note says "interactive callers should map it to a hand-off" |
 | Micro-skills' reading | a domain vocabulary per benchmark (Python/git, Node/web); the proposer's digest counts edited Python files, lists test invocations and flags Python import errors, and its prompt leads with the test command | **generic**, whatever the repository: every ecosystem's interpreters, package tools and test runners at once, builds and checks (`make`, `tsc`, `npm run build`, `cargo check`, ...) as their own intent, every edited file, and a language-neutral digest (failing commands with a normalized error line, paths relative to the repository) and prompt, with tests one topic among several. `vocabulary=python-git` or `node-web` selects an experiment's | A person's repository may be in any language, or several; the experiments keep the paper's reading (its prompt is pinned by a test) |
 | Micro-skills | on in the arms that measured it: the proposer every 5 tasks (on Codex, every 10, over the free layer) | **off by default**; `on` runs the free layer under the proposer, every `microskills_propose_every` sessions (3 by default: after the 2nd, 5th, 8th, ...), since a real session usually carries more work than one benchmark task | The proposer calls a model on the person's plan, and what it injects is derived from command output a repository controls: turning it on is the person's call. In the experiments the free layer alone formed almost nothing once the harness set each environment up properly, so `on` keeps the proposer |
-| Optimizer model | the agent's own model, so overhead could not look cheaper than its arm | the cheapest capable model on the user's own agent CLI (`paid_model`; when empty, `haiku` on Claude Code, the agent's default model on Codex and Pi, and on Copilot a concrete `COPILOT_MODEL` or a BYOK provider's Haiku): the proposer when micro-skills is on, the loop guard's judge and redirect writer whenever the guard is on | Every call is still charged to the session ledger |
+| Optimizer model | the agent's own model, so overhead could not look cheaper than its arm | the cheapest capable model on the user's own agent CLI (`paid_model`; when empty, `haiku` on Claude Code, the agent's default model on Codex and Pi, the session's own model on opencode 2.x, and on Copilot a concrete `COPILOT_MODEL` or a BYOK provider's Haiku): the proposer when micro-skills is on, the loop guard's judge and redirect writer whenever the guard is on | Every call is still charged to the session ledger |
 
 ## 3. Verified agent behaviour
 
@@ -356,8 +356,10 @@ settings would be):
   only after `opencode service restart`.
 * Model side calls run `opencode run` with `--pure` (1.x) or `--standalone` (2.x, so the shared
   service's other plugins — this one included — cannot fire inside them) and `bash`, `edit`,
-  `webfetch`, `websearch` denied; a `read`, `task` or `*` denial stalls 1.19.5 at start-up. On
-  2.x a reply that used no tool carries no usage, so its cost is estimated.
+  `webfetch`, `websearch` denied; a `read`, `task` or `*` denial stalls 1.19.5 at start-up. With
+  no `opencode_paid_model` or `paid_model`, a 2.x call runs on the model the session itself is
+  on, not the CLI's configured default. On 2.x a reply that used no tool carries no usage, so
+  its cost is estimated.
 
 **End to end, as a new user, 2026-10-14** — on each agent a fresh home followed `README.md` and
 this plugin's guide step by step (Claude Code 2.1.300, Codex 0.153.1, Copilot CLI 1.0.83, Pi

@@ -14,6 +14,7 @@ What a job spends is charged to the ledger the moment it is spent, as its own `o
 for the session: a verdict that lands after its turn -- or its session -- has ended was still paid
 for, and must not drop out of the account.
 """
+import os
 import time
 
 from . import sidecall
@@ -68,10 +69,14 @@ def run_job(ctx, session_id, job_id):
     if req.get("id") != job_id:                       # superseded by a newer request
         return None
     paused = sidecall.paused(ctx.host.name, ctx.root)
+    # The model the session runs on, so the judge follows it rather than the CLI's default.
+    sess = ctx.store.read(os.path.join("sessions", f"{session_id}.json")) or {}
+    session_model = str(sess.get("model") or "")
     # Each call asks for its own runner: `local_roles` may put the judge on-device and leave
     # the redirect on the agent's CLI, or the other way round. A paused host's CLI is skipped,
     # but a local runner (which needs no login) still answers.
-    runner = sidecall.runner_for(ctx.host.name, ctx.config, role="judge") if not paused \
+    runner = sidecall.runner_for(ctx.host.name, ctx.config, role="judge",
+                                 session_model=session_model) if not paused \
         else sidecall.local_runner("judge", ctx.config)
     writer = sidecall.runner_for(ctx.host.name, ctx.config, role="nudge") if not paused \
         else sidecall.local_runner("nudge", ctx.config)

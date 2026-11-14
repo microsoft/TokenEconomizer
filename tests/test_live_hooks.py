@@ -1734,3 +1734,105 @@ def test_measure_reports_a_failed_probe_in_one_line(env, repo, monkeypatch, caps
     monkeypatch.setattr(toolcheck, "measure", fail)
     assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "measure", "Workflow"]) == 1
     assert capsys.readouterr().out.strip() == "not measured: `claude -p` exited 1: boom"
+
+
+# ---- the model a session runs on -----------------------------------------------------------
+def test_the_model_the_plugin_sends_is_kept_in_the_session_state(env, repo):
+    """`session.step.started` names the model; the 2.x plugin sends it with every hook, and the
+    session keeps it so a later judge or fold does not fall back to the CLI's default."""
+    from tokeneconomizer.plugin import hosts
+
+    assert hosts.OpenCode().session_model({"model": "opencode-go/m#high"}) == "opencode-go/m#high"
+    assert hosts.Host().session_model({"model": "opencode-go/m#high"}) == ""
+    base = {"session_id": "ses_model", "cwd": repo, "model": "opencode-go/m#high"}
+    call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="hi", prompt_id="t1"),
+         host="opencode")
+    call(env, dict(base, hook_event_name="Stop", prompt_id="t1", stop_hook_active=False),
+         host="opencode")
+    s = store_for(env, repo, host="opencode").read("sessions/ses_model.json")
+    assert s["model"] == "opencode-go/m#high"
+
+
+def test_a_side_call_follows_the_session_model_only_on_opencode(monkeypatch):
+    """No `paid_model`: opencode takes the session's own model. An explicit setting still wins,
+    and another host's default (Claude's haiku) is not replaced by a session model."""
+    from tokeneconomizer.plugin import sidecall
+    from tokeneconomizer.plugin.config import LiveConfig
+
+    seen = []
+    monkeypatch.setattr(sidecall, "opencode_call",
+                        lambda prompt, model="", **kw: (seen.append(model), ("", 0))[1])
+    monkeypatch.setattr(sidecall, "claude_call",
+                        lambda prompt, model="", **kw: (seen.append(model), ("", 0))[1])
+    cfg = LiveConfig()
+    sidecall.runner_for("opencode", cfg, session_model="opencode-go/m#high")("x")
+    assert seen[-1] == "opencode-go/m#high"
+    cfg.opencode_paid_model = "explicit/model"
+    sidecall.runner_for("opencode", cfg, session_model="opencode-go/m#high")("x")
+    assert seen[-1] == "explicit/model"
+    sidecall.runner_for("claude", cfg, session_model="opencode-go/m#high")("x")
+    assert seen[-1] == "haiku"
+
+
+def test_the_judge_follows_the_session_model(env, repo, monkeypatch):
+    """The loop guard's judge runs through the model the session is on."""
+    from tokeneconomizer.plugin import judge, sidecall
+
+    seen = {}
+
+    def fake_runner_for(host, cfg, role=None, session_model=""):
+        seen[role] = session_model
+        return lambda prompt, _m="agent": ("", 0)
+
+    monkeypatch.setattr(sidecall, "runner_for", fake_runner_for)
+    monkeypatch.setattr(sidecall, "paused", lambda *a, **k: None)
+    ctx = LiveContext.build(hosts.OpenCode(), repo, env)
+    ctx.store.write("sessions/ses_j.json", {"session_id": "ses_j",
+                                            "model": "opencode-go/j#high"})
+    ctx.store.write("judge/ses_j.request.json", {"id": "job1", "digest": "d", "threshold": 0})
+    judge.run_job(ctx, "ses_j", "job1")
+    # The judge follows the session; the nudge writer keeps the host's own default.
+    assert seen["judge"] == "opencode-go/j#high"
+    assert seen["nudge"] == ""
+
+
+def test_a_fold_takes_the_model_from_the_session_state(env, repo, tmp_path, monkeypatch):
+    """The fold hands the proposer the model the plugin's hooks recorded for the session. The
+    log names another model, so a fallback to it would show: `opencode run --model` needs
+    `provider/model`, and the log keeps the bare id."""
+    import tokeneconomizer.microskills as ms
+    from tokeneconomizer.plugin import fold, sidecall
+
+    from fixtures import opencode_session_export
+
+    seen = {}
+
+    def fake_runner_for(host, cfg, role=None, session_model=""):
+        seen["model"] = session_model
+        return lambda prompt, _m="agent": ("", 0)
+
+    monkeypatch.setattr(sidecall, "runner_for", fake_runner_for)
+
+    class FakeStage:
+        def __init__(self, *a, **kw):
+            pass
+
+        def after_task(self, *a, **kw):
+            return 0, "fake"
+
+        def render(self):
+            return ""
+
+        def injected_ids(self):
+            return []
+
+    monkeypatch.setattr(ms, "PrefixStage", FakeStage)
+    export = tmp_path / "ses_s.json"
+    export.write_text(opencode_session_export("ses_s"), encoding="utf-8")
+    ctx = LiveContext.build(hosts.OpenCode(), repo, env)
+    ctx.config.microskills = "envfacts+distiller"
+    ctx.store.write("sessions/ses_s.json", {"session_id": "ses_s",
+                                            "model": "opencode-go/s#high"})
+    rec = fold.fold_session(ctx, "ses_s", transcript_path=str(export))
+    assert rec is not None
+    assert seen["model"] == "opencode-go/s#high"

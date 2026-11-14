@@ -342,11 +342,15 @@ const setupV2 = async (ctx: any) => {
   const records = new Map<string, any[]>();       // sessionID -> messages, in the export's shape
   const steps = new Map<string, any>();           // assistantMessageID -> assistant message
   const names = new Map<string, string>();        // tool call id -> tool name
+  // The model each session actually runs on, in the CLI's `provider/model#variant` form: the
+  // plugin's own calls follow it, rather than whatever the CLI's default happens to be.
+  const models = new Map<string, string>();
 
   const base = (sessionID: string, transcript = "") => ({
     session_id: sessionID,
     transcript_path: transcript,
     cwd: directory,
+    ...(models.get(sessionID) ? { model: models.get(sessionID) } : {}),
   });
   const notify = (text: unknown) => {
     if (typeof text === "string" && text) console.error(text);
@@ -495,6 +499,15 @@ const setupV2 = async (ctx: any) => {
         if (t === "session.step.started") {
           const m = assistant(id, p.assistantMessageID);
           m.info.modelID = p.model?.id ?? p.model?.modelID ?? m.info.modelID;
+          // `session.step.started` names the model the turn runs on; the plugin's own calls use
+          // it when no `paid_model` is configured, so a paid provider is not looked past.
+          const provider = p.model?.providerID ?? p.model?.provider;
+          const modelID = p.model?.id ?? p.model?.modelID;
+          if (provider && modelID)
+            models.set(
+              id,
+              `${provider}/${modelID}${p.model?.variant ? `#${p.model.variant}` : ""}`,
+            );
         } else if (t === "session.step.ended") {
           const m = assistant(id, p.assistantMessageID);
           m.info.cost = p.cost ?? 0;
