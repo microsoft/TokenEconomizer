@@ -126,6 +126,38 @@ def test_an_unpriced_model_keeps_the_fallback_cache_write_rate():
     assert accounting.effective(usage) == (10 + 1000 * 1.25, "fallback")
 
 
+# ---- Pi sessions -----------------------------------------------------------------------------
+# Pi's usage names the 1-hour share of `cacheWrite` as `cacheWrite1h` (Anthropic only).
+def _pi_usage(cache_write, one_hour):
+    return {"input": 10, "output": 50, "cacheRead": 1000, "cacheWrite": cache_write,
+            "cacheWrite1h": one_hour, "totalTokens": 1060 + cache_write,
+            "cost": {"total": 0.001}}
+
+
+def test_a_pi_session_reports_its_one_hour_cache_writes(tmp_path):
+    lines = [{"type": "session", "version": 3, "id": "pi-1", "cwd": "/w/repo"},
+             {"type": "message", "id": "e1", "parentId": None,
+              "message": {"role": "user", "content": "fix the bug"}}]
+    for i, (cw, one_hour) in enumerate([(1000, 1000), (200, 50)], start=2):
+        lines.append({"type": "message", "id": f"e{i}", "parentId": f"e{i - 1}", "message": {
+            "role": "assistant", "provider": "anthropic", "model": "claude-opus-4-8",
+            "usage": _pi_usage(cw, one_hour), "content": [{"type": "text", "text": "ok"}]}})
+    u = trace.pi_session_usage(_transcript(tmp_path / "s.jsonl", lines))
+    assert u["cache_creation_input_tokens"] == 1200
+    assert u["cache_creation_1h_input_tokens"] == 1050
+    assert accounting.effective(u) == (
+        20 + 2000 * 0.10 + 150 * 1.25 + 1050 * 2.0 + 100 * 5.0, "model")
+
+
+def test_a_pi_side_call_is_priced_with_its_one_hour_cache_writes():
+    run = [{"type": "message_end", "message": {
+        "role": "assistant", "model": "claude-haiku-4-5", "usage": _pi_usage(1000, 1000),
+        "content": [{"type": "text", "text": "- use python -m pytest"}]}}]
+    _, usage = trace.pi_json_reply("\n".join(json.dumps(e) for e in run))
+    usage.pop("cost_usd")
+    assert accounting.effective(usage) == (10 + 1000 * 0.10 + 1000 * 2.0 + 50 * 5.0, "model")
+
+
 # ---- cache hits ------------------------------------------------------------------------------
 @pytest.mark.parametrize("model, ratio", [
     ("claude-opus-5-5", 0.05), ("claude-sonnet-5-5", 0.05),

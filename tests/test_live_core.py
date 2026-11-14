@@ -1231,6 +1231,7 @@ def test_a_pi_reply_is_read_from_its_json_run():
     assert text == "- use python -m pytest"
     assert usage == {"input_tokens": 745, "cache_read_input_tokens": 0,
                      "cache_creation_input_tokens": 0, "output_tokens": 298,
+                     "cache_creation_1h_input_tokens": 0,
                      "cost_usd": 0.002235, "model": "anthropic/claude-haiku-4.5"}
     assert trace.pi_json_reply("") == ("", None)
 
