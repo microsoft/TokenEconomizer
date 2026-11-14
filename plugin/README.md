@@ -447,6 +447,13 @@ ln -s /path/to/TokenEconomizer/plugin/opencode/tokeneconomizer.ts ~/.config/open
 
 (Per repository: `.opencode/plugins/`.) Python 3.10+ must be on `PATH`, or named by `TE_PYTHON`.
 
+**A copied plugin, not a link,** has no `scripts/` beside it, so it cannot find the dispatcher on
+its own. Point it at the checkout: `TE_CORE_PATH=/path/to/TokenEconomizer`, or `TE_PLUGIN_ROOT`
+at the directory that holds `scripts/`. Without one of them a copied plugin starts no hook at all.
+The state launcher (`~/.tokeneconomizer/bin/te`) is written once a hook has reached the
+dispatcher, so it cannot make the first one work. On 2.x the variable must reach the service —
+`opencode service restart` from a shell where it is set (see below).
+
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host opencode status` in the
 repository. opencode has no plugin slash commands, so every command runs from a terminal. Tool
 pruning does not apply. Micro-skills is off by default: `te --host opencode config set
