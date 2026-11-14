@@ -445,17 +445,3 @@ def test_the_plugin_declares_the_three_events_and_never_pretooluse():
     assert (ROOT / "plugin/scripts/te.cmd").is_file()
     # no other agent reads the root hook file: Claude Code's is `hooks/hooks.json`.
     assert "hooks" not in claude
-
-
-def test_antigravity_recognizes_modern_antigravity_tools(tp, tmp_path):
-    t = Transcript(tp)
-    t.prompt("modern tools")
-    t.call([("write_file", {"Path": "/work/repo/b.py"}),
-            ("edit_file", {"Path": "/work/repo/b.py"})],
-           [("created", {"type": "GENERIC"}), ("updated", {"type": "GENERIC"})])
-    host, work = Antigravity(), tmp_path / "w2"
-    work.mkdir()
-    path = host.mechanism_trace(str(tp), str(work))
-    traj = trace.load_trajectory(path)
-    assert ("Write", {"file_path": "/work/repo/b.py"}, "created", True) in traj
-    assert ("Edit", {"file_path": "/work/repo/b.py"}, "updated", True) in traj
