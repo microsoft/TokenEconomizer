@@ -527,10 +527,18 @@ def parse_payload(raw):
     except Exception:
         return [], []
     exts = [e for e in (obj.get("extractors") or [])
-            if isinstance(e, dict) and e.get("name") and isinstance(e.get("pattern"), str)]
+            if isinstance(e, dict) and isinstance(e.get("name"), str) and e.get("name")
+            and isinstance(e.get("pattern"), str)]
     facts = [f for f in (obj.get("facts") or [])
-             if isinstance(f, dict) and f.get("id") and isinstance(f.get("detector"), dict)]
+             if isinstance(f, dict) and isinstance(f.get("id"), str) and f.get("id")
+             and isinstance(f.get("detector"), dict) and _detector_fields_ok(f["detector"])
+             and (f.get("cite") is None or isinstance(f.get("cite"), list))]
     return exts, facts
+
+
+def _detector_fields_ok(det):
+    return all(det.get(k) is None or isinstance(det.get(k), str)
+               for k in ("scope", "fired", "confirm", "contradict"))
 
 
 def _reparse_cmds(dg):
@@ -654,7 +662,10 @@ class Distiller:
         """#window cites whose confirm regex fires under the CURRENT features."""
         by_iid = {d["iid"]: d for d in self.window}
         hits = 0
-        for iid in (spec.get("cite") or []):
+        cites = spec.get("cite")
+        for iid in (cites if isinstance(cites, list) else []):
+            if not isinstance(iid, str):
+                continue
             dg = by_iid.get(iid)
             if dg is None:
                 continue
