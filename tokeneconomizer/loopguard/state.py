@@ -182,12 +182,17 @@ class SpiralState:
         tool_name = canon_tool(tool_name)   # accept Copilot- or Claude-named tools
         action = tool_name or "?"
         if tool_name in _EDIT_TOOLS:
-            b = basename(args.get("path") or args.get("filePath")
-                          or args.get("file_path") or "")
-            if b:
+            # A patch names every file it changes in `paths`; any other edit names one.
+            paths = args.get("paths")
+            if not isinstance(paths, (list, tuple)) or not paths:
+                paths = [args.get("path") or args.get("filePath") or args.get("file_path")]
+            names = list(dict.fromkeys(basename(p) for p in paths if isinstance(p, str)))
+            names = [b for b in names if b]
+            for b in names:
                 self.edit_order.append(b)
                 self.edit_counts[b] = self.edit_counts.get(b, 0) + 1
-                action = f"edit {b}"
+            if names:
+                action = f"edit {', '.join(names)}"
         cmd = args.get("command", "") if tool_name == "bash" else ""
         if cmd:
             short = re.sub(r"\s+", " ", cmd.strip())[:90]
