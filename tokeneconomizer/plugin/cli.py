@@ -819,12 +819,12 @@ def cmd_doctor(args):
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
     agents = [h for h in ("antigravity", "claude", "codex", "copilot", "droid", "grok", "hermes",
-                          "opencode", "pi", "zcode")
+                          "kimi", "opencode", "pi", "zcode")
               if _sh.which(sidecall.claude_cli() if h == "claude" else
                            sidecall.hermes_cli() if h == "hermes" else
                            "agy" if h == "antigravity" else h)]
     print("agents      " + (', '.join(agents) or 'none of antigravity (agy), claude, codex, '
-                             'copilot, droid, grok, hermes, opencode, pi, zcode on PATH'))
+                             'copilot, droid, grok, hermes, kimi, opencode, pi, zcode on PATH'))
     ctx = _ctx(args)          # the per-agent lines below read the settings in effect
     for h in agents:
         pause = sidecall.paused(h, root)
@@ -870,6 +870,8 @@ def cmd_doctor(args):
             side = ("off (set `droid_sidecall=on` or TE_DROID_SIDECALL=1 to try them)")
         print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
               f"available in the TUI")
+    if "kimi" in agents:
+        print("kimi        wire logs and hooks in observe-only mode; model side calls off")
     if "zcode" in agents:
         if getattr(ctx.config, "zcode_sidecall", False):
             side = "on (the `zcode_sidecall` setting)"

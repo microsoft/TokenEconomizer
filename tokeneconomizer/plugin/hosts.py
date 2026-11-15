@@ -47,8 +47,10 @@ import os
 import re
 import shlex
 import time
+from pathlib import Path
 
 from .. import trace
+from ..trace import kimi
 
 _RESPONSE_KEYS = ("stdout", "stderr", "output", "aggregated_output", "formatted_output",
                   "content", "result", "error", "message", "text_result_for_llm")
@@ -1415,9 +1417,70 @@ class ZCode(Host):
         return trace.zcode_session_usage(transcript_path)
 
 
+_KIMI_SESSION = re.compile(r"session_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+_KIMI_BASH_EXIT = re.compile(r"(?m)^Command failed with exit code: ([0-9]+)\.$")
+
+
+def is_kimi_payload(payload):
+    return (payload.get("client_type") == "kimi_code_cli"
+            and bool(_KIMI_SESSION.fullmatch(str(payload.get("session_id") or ""))))
+
+
+class Kimi(Host):
+    """Observe Kimi Code 2.6's tool calls and wire log. Hook output stays empty."""
+    name = "kimi"
+
+    def session_id(self, p):
+        value = super().session_id(p)
+        return value if _KIMI_SESSION.fullmatch(value) else ""
+
+    def prepare(self, payload, env):
+        payload = dict(payload, transcript_path="")
+        sid = self.session_id(payload)
+        if not sid:
+            return payload
+        home = Path(env.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code").resolve()
+        matches = [path for path in home.glob(f"sessions/wd_*/{sid}/agents/main/wire.jsonl")
+                   if path.is_file() and path.resolve().is_relative_to(home)]
+        if len(matches) == 1:
+            payload["transcript_path"] = str(matches[0])
+        return payload
+
+    def tool_call(self, p):
+        args = p.get("tool_input")
+        args = args.copy() if isinstance(args, dict) else {}
+        name = str(p.get("tool_name") or "")
+        error = p.get("error")
+        failed = isinstance(error, dict)
+        text = response_text(error.get("message") if failed else p.get("tool_output"))
+        code = None
+        if name == "Bash":
+            match = _KIMI_BASH_EXIT.search(text) if failed else None
+            code = int(match[1]) if match else (None if failed else 0)
+        if name == "Read" and "path" in args:
+            args["file_path"] = args.pop("path")
+        return name, args, text, code
+
+    def render(self, payload, out, ctx):
+        # Kimi can append raw stdout to the prompt. Observe without emitting context or notices.
+        return {}
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "kimi_trace.jsonl")
+        if transcript_path and kimi.kimi_session_to_claude(transcript_path, out) is not None:
+            return out
+        return None
+
+    def prompt_count(self, transcript_path):
+        return kimi.kimi_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return kimi.kimi_session_usage(transcript_path)
+
+
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
          "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
-         "antigravity": Antigravity, "zcode": ZCode}
+         "antigravity": Antigravity, "zcode": ZCode, "kimi": Kimi}
 
 
 def default_host(env=None, recent=None):
@@ -1463,6 +1526,8 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
+    if isinstance(payload, dict) and is_kimi_payload(payload):
+        return Kimi()
     # Before Grok's test: ZCode also sends `hookEventName`.
     if isinstance(payload, dict) and _zcode_transcript(payload):
         return ZCode()

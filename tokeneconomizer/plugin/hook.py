@@ -1,7 +1,7 @@
 """The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
 
     python -m tokeneconomizer.plugin.hook [--host antigravity|claude|codex|copilot|cursor|droid|grok|
-                                                  hermes|opencode|pi|zcode] [--event NAME]
+                                                  hermes|kimi|opencode|pi|zcode] [--event NAME]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
@@ -72,6 +72,7 @@ def main(argv=None, stdin=None, stdout=None, env=None):
         hint = argv[i + 1] if i + 1 < len(argv) else None
     event = argv[argv.index("--event") + 1] if "--event" in argv[:-1] else None
     out = {}
+    suppress_stdout = hint == "kimi"
     try:
         # The agents send UTF-8 whatever the locale; a text stdin would decode it with the
         # locale's code page on Windows and garble a non-ASCII path.
@@ -80,6 +81,8 @@ def main(argv=None, stdin=None, stdout=None, env=None):
         if not (_truthy(env.get("TE_SIDECALL")) or _truthy(env.get("TE_DISABLE"))):
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
+                from .hosts import is_kimi_payload
+                suppress_stdout = suppress_stdout or (hint is None and is_kimi_payload(payload))
                 if event:
                     payload.setdefault("hook_event_name", event)
                 # stdout carries exactly one JSON object back to the agent. The mechanisms
@@ -92,6 +95,8 @@ def main(argv=None, stdin=None, stdout=None, env=None):
     except Exception:
         _record_error(env)
         out = {}
+    if suppress_stdout:
+        return 0
     from .hosts import PROGRESS
     for line in out.pop(PROGRESS, None) or ():
         stdout.write(json.dumps({"type": "progress", "message": line}))

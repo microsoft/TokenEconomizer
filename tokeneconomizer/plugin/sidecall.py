@@ -754,7 +754,7 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 
 
 # Hosts the plugin makes no model call for: their CLI cannot run a prompt with every tool off.
-NO_SIDE_CALLS = frozenset({"antigravity"})
+NO_SIDE_CALLS = frozenset({"antigravity", "kimi"})
 
 
 # Hosts whose side-call command has no flag that names a model, so they have no

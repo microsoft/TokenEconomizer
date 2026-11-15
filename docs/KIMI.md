@@ -1,39 +1,55 @@
 # TokenEconomizer on Kimi Code
 
-Kimi Code 2.x is not supported. It is observe-only: there is no adapter, no reader and no hook
-entry, and `tests/test_kimi.py` pins that. This note says why and what is needed.
+The Kimi Code 2.6 adapter observes the tool trajectory and token usage. Hook output is empty,
+including on errors. Model side calls are disabled for this host.
 
-## What is known (Kimi Code 2.1.1)
+## Tested contract
 
-- The binary is `~/.kimi-code/bin/kimi`. The Python `kimi_cli` in `~/.kimi/` is the older 1.x.
-- A session is `~/.kimi-code/sessions/wd_<name>_<hash>/session_<uuid>/agents/main/wire.jsonl`, one
-  JSON record per line with a `type` key. The types seen are `metadata`, `config.update` and
-  `tools.set_active_tools`. No record of a prompt, a tool call or a tool result has been seen.
-- Hooks are `[[hooks]]` in `~/.kimi-code/config.toml` only. Events include `SessionStart`,
-  `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` and `SessionEnd`. Exit 2 blocks on
-  `UserPromptSubmit`, `PreToolUse` and `Stop`; other failures let the call go on. There is no
-  `updatedInput`.
-- Context: the docs say stdout of an exit-0 hook "may be appended to context". There is no
-  `additionalContext` field. This has not been tried.
-- Side call: `kimi -p <prompt>` runs under the `auto` permission policy and has no flag that
-  removes tools, so a side call could act on text a repository controls.
+Kimi Code 2.6.2 was run for two turns in one isolated session with a scripted loopback model.
+A failed Bash command and a successful Read produced both a call and a result. The hook payload
+identifies the client as `kimi_code_cli`; the session ID includes the `session_` prefix. The payload
+does not include the log path. The adapter finds that session's only log at
+`$KIMI_CODE_HOME/sessions/wd_*/session_<uuid>/agents/main/wire.jsonl`. The default data directory
+is `~/.kimi-code`.
 
-## What is missing, and why no reader was written
+`turn.prompt` records the user prompt. `context.append_loop_event` carries `tool.call` and
+`tool.result`. A `usage.record` with `usageScope: "turn"` reports the tokens for one model step.
+The reader counts uncached input, cache reads, cache creation and output separately.
 
-A reader written from the three record types above would have to guess where a prompt and a tool
-result are, and would pass its own tests while counting the wrong things. Two pieces of evidence
-come first. Each has a skipped test in `tests/test_kimi.py` that becomes a real one.
+Kimi included an exit-zero `UserPromptSubmit` hook's stdout in a model request. It did not do this
+for `SessionStart`. The adapter emits neither for observation. Print mode exposed acting tools
+to the model, so the adapter does not start a side call. The two print runs did not emit
+`Stop` or `SessionEnd`. Run `te --host kimi fold --session <id>` to fold a session that did not emit an end.
 
-1. **A multi-turn `wire.jsonl`.** In one Kimi Code session, send two prompts; make one of them
-   run a shell command and read a file. Then list the record `type` and the key names of every
-   line of that session's `agents/main/wire.jsonl` (types and key names only, no text) and save
-   them as `tests/fixtures/kimi_wire_types.json`. A one-line `jq` over the file is enough:
-   `jq -c '[.type, (keys)]' wire.jsonl`.
-2. **An injection test.** In a scratch directory, add a `UserPromptSubmit` `[[hooks]]` entry to
-   `~/.kimi-code/config.toml` whose command prints a made-up sentence and exits 0. Ask Kimi Code
-   to repeat the sentence the hook printed. Record whether it can.
+## Enable for an observation run
 
-If the sample has the three records and the injection works, the adapter is the ZCode one with
-a `wire.jsonl` reader (`trace/kimi.py`) instead of the SQLite one, and plain-stdout context. If
-the injection fails, Kimi stays observe-only with micro-skills' block and the loop guard's judge
-off: nothing can be injected, and its side call cannot be restricted.
+Set TokenEconomizer to shadow mode. In Kimi Code's own `config.toml`, add entries for
+`SessionStart`, `UserPromptSubmit`, `PostToolUse` and `PostToolUseFailure`. Keep any existing
+authorization hooks first. Use the absolute path to the pinned checkout's
+`plugin/scripts/te-hook`:
+
+```toml
+[[hooks]]
+event = "SessionStart"
+command = "/path/to/TokenEconomizer/plugin/scripts/te-hook --host kimi >/dev/null"
+timeout = 5
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = "/path/to/TokenEconomizer/plugin/scripts/te-hook --host kimi >/dev/null"
+timeout = 5
+
+[[hooks]]
+event = "PostToolUse"
+command = "/path/to/TokenEconomizer/plugin/scripts/te-hook --host kimi >/dev/null"
+timeout = 5
+
+[[hooks]]
+event = "PostToolUseFailure"
+command = "/path/to/TokenEconomizer/plugin/scripts/te-hook --host kimi >/dev/null"
+timeout = 5
+```
+
+The fixture in `tests/fixtures/kimi-2.6.2-wire.jsonl` contains only the observations needed by
+the tests, from the synthetic project. No provider account or real session is needed to run
+the tests.
