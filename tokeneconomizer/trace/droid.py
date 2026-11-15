@@ -27,6 +27,8 @@ import re
 from datetime import datetime
 
 SYSTEM_PREFIXES = ("<system-reminder", "<local-command", "[Request interrupted")
+# A header version, with an optional "v" prefix and 1-3 numeric parts.
+_VERSION_RE = re.compile(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 # Droid's own markers for messages that are not the person's prompt.
 NOT_PROMPTS = ("llm_only", "user_only")
 
@@ -86,6 +88,55 @@ def droid_session_header(path):
         if ev.get("type") == "session_start":
             return ev
     return {}
+
+
+def droid_version(path):
+    """The session log header's Droid version as a 3-tuple, or None when the header
+    carries none that parses (`"1.12.1"` -> (1, 12, 1); `2` -> (2, 0, 0))."""
+    v = droid_session_header(path).get("version")
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return (v, 0, 0)
+    if isinstance(v, str):
+        m = _VERSION_RE.match(v.strip())
+        if m:
+            return tuple(int(g) if g is not None else 0 for g in m.groups())
+    return None
+
+
+def droid_session_calls(path):
+    """Every tool call of a Droid session log that has its result, in log order:
+    [(name, args, result_text, success)]. A call whose result is not in the log
+    yet (still running when the log was read) is left out, not guessed at: its
+    outcome is unknown, and a later read picks it up once the result lands.
+    Names are the Claude Code equivalents the mechanism readers already key on."""
+    calls, order, results = {}, [], {}
+    for ev in droid_records(path):
+        if ev.get("type") != "message":
+            continue
+        for b in _droid_content((ev.get("message") or {}).get("content")):
+            if b.get("type") == "tool_use":
+                tid = b.get("id")
+                if not isinstance(tid, str) or tid in calls:
+                    continue
+                calls[tid] = (claude_tool_name(b.get("name")),
+                              b.get("input") if isinstance(b.get("input"), dict) else {})
+                order.append(tid)
+            elif b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
+                results[b.get("tool_use_id")] = (c if isinstance(c, str) else "",
+                                                 not b.get("is_error", False))
+    out = []
+    for tid in order:
+        if tid not in results:
+            continue
+        name, args = calls[tid]
+        text, ok = results[tid]
+        out.append((name, args, text, ok))
+    return out
 
 
 def droid_session_cwd(path):
