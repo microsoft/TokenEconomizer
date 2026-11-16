@@ -543,6 +543,15 @@ def _reparse_cmds(dg):
 
 
 # ---- distiller -------------------------------------------------------------
+def _forgotten_evidence(rec):
+    """The tasks a forgotten fact stood on when it was forgotten. An entry saved before they
+    were recorded falls back to the tasks the fact cited when it was admitted."""
+    ev = rec.get("evidence")
+    if ev is None:
+        ev = ((rec.get("record") or {}).get("spec") or {}).get("cite")
+    return [i for i in (ev if isinstance(ev, list) else []) if isinstance(i, str)]
+
+
 class Distiller(Forgetting):
     """Learns and injects a per-repo operating manual over the task stream.
 
@@ -673,18 +682,23 @@ class Distiller(Forgetting):
                 out.add(dg["iid"])
         return out
 
+    def _evidence(self, fact):
+        """The window's tasks the fact's detector confirms on as it is forgotten: the evidence
+        a restatement under a new id would be grounded on (see _restates_forgotten)."""
+        return sorted(self._confirms(fact.spec.get("detector")))
+
     def _restates_forgotten(self, spec):
         """The forgotten fact a new-id candidate restates, if any: the candidate confirms on at
-        least MIN_CITE of the tasks the forgotten fact's detector confirms on, and on no other.
-        A fact whose detector also confirms on other tasks still gets in."""
+        least MIN_CITE of the tasks that fact stood on when it was forgotten, and on no other
+        task in the window. Only that evidence counts, not what the forgotten detector would
+        confirm on now: it leaves the window as tasks come in, so a fact that later tasks
+        show (a corrected one, or another about the same commands) still gets in, where a
+        broad forgotten detector would otherwise keep it out for good."""
         mine = self._confirms(spec.get("detector"))
         if len(mine) < MIN_CITE:
             return None
         for fid, rec in self.forgotten.items():
-            det = ((rec.get("record") or {}).get("spec") or {}).get("detector")
-            if not det:
-                continue
-            theirs = self._confirms(det)
+            theirs = set(_forgotten_evidence(rec))
             if len(mine & theirs) >= MIN_CITE and mine <= theirs:
                 return fid
         return None
@@ -842,4 +856,3 @@ class Distiller(Forgetting):
             if isinstance(row.get(fid), dict):
                 row[fid]["rev"] = f.spec.get("rev", 1)
         return row
-

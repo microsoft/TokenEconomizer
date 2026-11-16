@@ -337,7 +337,6 @@ def test_the_generic_digest_keeps_line_breaks_of_list_tool_results(tmp_path):
         {"cmd": "npm run lint", "error": "error: missing script: lint"}]
 
 
-
 BUILD_TEST = [("Bash", {"command": "make build"}, "built"),
               ("Bash", {"command": "make test"}, "ok  ./... 0.01s")]
 BUILD_LINT = [("Bash", {"command": "make build"}, "built"),
@@ -397,6 +396,47 @@ def test_a_forgotten_id_takes_no_candidate_slot(tmp_path, monkeypatch):
     d = _fold_with(tmp_path, monkeypatch, again, root, [BUILD_LINT, BUILD_LINT, BUILD_LINT],
                    start=2)
     assert "build-before-lint" in d.facts and "build-before-test" not in d.facts
+
+
+def test_a_forget_refuses_only_restatements_of_its_own_evidence(tmp_path, monkeypatch):
+    """A broad forgotten detector confirms on every later session of the same workflow. The
+    check compares a candidate with the sessions the fact stood on when it was forgotten, so a
+    corrected fact, or another fact about the same commands, can form from later sessions."""
+    root = str(tmp_path / "state")
+    broad = _fact("make-does-it-all", scope=r"make test", confirm=r"make")
+    first = lambda prompt, model: (json.dumps({"extractors": [], "facts": [broad]}), 1.0)
+    d = _fold_with(tmp_path, monkeypatch, first, root, [BUILD_TEST, BUILD_TEST])
+    assert "make-does-it-all" in d.facts
+    d.forget("make-does-it-all")
+    assert d.forgotten["make-does-it-all"]["evidence"] == ["s0", "s1"]
+    d.save(root)
+
+    corrected = lambda cite: _fact("make-test-builds-itself", confirm=r"make test", cite=cite)
+    # on the evidence it was forgotten with, a restatement is refused
+    assert d._admit(corrected(("s0", "s1"))) == (False, "restates-forgotten")
+    # one later session that shows it is enough, while the old evidence is still in the window
+    d = _fold_with(tmp_path, monkeypatch, None, root, [BUILD_TEST], start=2)
+    assert d._admit(corrected(("s1", "s2"))) == (True, "admitted")
+
+    # and once the old evidence has left the window, nothing about `make test` is kept out
+    d = _fold_with(tmp_path, monkeypatch, None, root, [BUILD_TEST] * 9, start=3)
+    assert {dg["iid"] for dg in d.window}.isdisjoint({"s0", "s1"})
+    other = _fact("go-test-passes-quietly", confirm=r"ok\s+\./\.\.\. 0\.0", cite=("s10", "s11"))
+    assert d._admit(other) == (True, "admitted")
+
+
+def test_a_forgotten_entry_without_evidence_falls_back_to_its_cites(tmp_path, monkeypatch):
+    """An entry forgotten before the evidence was recorded is checked against the sessions the
+    fact cited when it was admitted."""
+    root = str(tmp_path / "state")
+    first = lambda prompt, model: (json.dumps({"extractors": [], "facts": [
+        _fact("build-before-test")]}), 1.0)
+    d = _fold_with(tmp_path, monkeypatch, first, root, [BUILD_TEST, BUILD_TEST])
+    d.forget("build-before-test")
+    del d.forgotten["build-before-test"]["evidence"]
+    d.save(root)
+    d = dist.Distiller.load("acme/tool", root, vocab=GENERIC)
+    assert d._admit(_fact("make-build-first")) == (False, "restates-forgotten")
 
 
 def test_an_output_extractor_authored_on_a_tick_reads_every_output_line(tmp_path, monkeypatch):

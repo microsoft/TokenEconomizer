@@ -164,13 +164,23 @@ class Forgetting:
     def known_ids(self):
         return set(self.facts) | set(self.forgotten)
 
+    def _evidence(self, fact):
+        """The sessions `fact` stands on as it is forgotten, for a layer that refuses a
+        restatement of it (the proposed facts); None for one that does not."""
+        return None
+
     def forget(self, fid):
         """True when `fid` is forgotten now, False when it already was; KeyError when no fact
         has that id."""
         if fid in self.forgotten:
             return False
-        fact = self.facts.pop(fid)
-        self.forgotten[fid] = {"claim": self._claim_of(fact), "record": fact.to_dict()}
+        fact = self.facts[fid]
+        entry = {"claim": self._claim_of(fact), "record": fact.to_dict()}
+        evidence = self._evidence(fact)
+        if evidence is not None:
+            entry["evidence"] = evidence
+        del self.facts[fid]
+        self.forgotten[fid] = entry
         return True
 
     def unforget(self, fid):
