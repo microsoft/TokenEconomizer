@@ -191,6 +191,17 @@ copilot plugin list       # tokeneconomizer@tokeneconomizer ... (enabled)
 
 Copilot loads the plugin from the clone directly, without copying it.
 
+On Windows, its hooks and slash commands invoke Python directly from PowerShell commands;
+Git Bash is not required. They work under `Restricted` without changing execution policy or
+using `-ExecutionPolicy Bypass`. Copilot's normal command approval still applies;
+application-control policies that block Python still apply too.
+From a PowerShell terminal in the clone, use a Python >= 3.10 executable, for example:
+`python -X utf8 .\plugin\scripts\te_bootstrap.py cli --host copilot status`.
+The hooks run `TE_PYTHON` as named when set. Otherwise they try `python3`, `python`, and `py`,
+selecting Python >= 3.10 and preferring
+interpreters outside WindowsApps. If only an older Python exists, the bootstrap still handles
+the refusal. The slash commands reuse the interpreter selected by the hook.
+
 **2. Check it.** In Copilot's interactive mode, type `/tokeneconomizer:status`. Each slash command
 is a model turn, and Copilot asks before running the plugin's script; choose **Yes**. Slash
 commands work only in interactive mode; the plugin's notices also appear under `copilot -p`.
@@ -212,7 +223,19 @@ start says so. `/tokeneconomizer:toolprune restore` turns the server back on, an
 `toolprune measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
-launcher appears after the first session). A turn that is still stuck after the loop guard's
+launcher appears after the first session). In PowerShell, read the launch paths as data and
+invoke Python directly, replacing `status` with the command you want:
+
+```powershell
+$root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join-Path $HOME '.tokeneconomizer' }
+$launcher = Get-Content -LiteralPath (Join-Path $root 'bin\te.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+& $launcher.python -X utf8 $launcher.bootstrap cli --host copilot --cwd (Get-Location).Path status
+```
+
+Session-start and prompt hooks create or repair the launchers and `te.json`, so an open session
+picks up the native launch paths on its next prompt after updating.
+A turn that is still stuck after the loop guard's
 redirect shows "● TokenEconomizer: …" in the conversation (and on stdout under `copilot -p`); press
 **Esc** twice to interrupt it, or Ctrl+C to end a `copilot -p` run.
 

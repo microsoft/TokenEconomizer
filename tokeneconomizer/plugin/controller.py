@@ -95,16 +95,17 @@ class LiveController:
         self.ctx.settle()
         self.cfg = self.ctx.config
         event = self.p.get("hook_event_name") or ""
+        if event in ("SessionStart", "UserPromptSubmit"):
+            try:
+                ensure_launcher(self.ctx.env)
+            except OSError:
+                self._record_error()
         handler = self.handler(event)
         return hookqueue.run(self, event, handler) if handler else {}
 
     # ---- SessionStart -----------------------------------------------------------------
     def session_start(self):
         source = self.p.get("source") or "startup"
-        try:
-            ensure_launcher(self.ctx.env)
-        except OSError:
-            pass
         s = self._session()
         s["source"] = source
         s.setdefault("cwd", self.host.cwd(self.p, self.ctx.env))

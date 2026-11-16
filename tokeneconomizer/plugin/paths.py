@@ -53,15 +53,16 @@ def launcher_path(env=None):
 
 
 def ensure_launcher(env=None):
-    """Keep `<state root>/bin/te` pointing at this plugin's `te`. Returns its path, or None.
+    """Keep `bin/te` and Windows launch information pointing at this plugin. Returns te or None.
 
     A slash command has to name the CLI's path. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`
     into a command's text; the Copilot CLI substitutes nothing but `$ARGUMENTS` (1.0.83:
     `${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, `${COPILOT_PLUGIN_ROOT}`, `{{plugin_root}}` all
-    arrive literally), and its shell exports none of them. So every hook session start writes
-    this one-line launcher, the commands fall back to it, and a person on any host has a stable
-    `te` to run. The plugin's location comes from the bootstrap (`TE_PLUGIN_ROOT`); the file is
-    rewritten only when it changes, as an installed copy's path does across updates."""
+    arrive literally), and its shell exports none of them. Session-start and prompt hooks keep
+    these launchers current, including in sessions already open when the plugin was updated.
+    The commands fall back to them, and a person on any host has a stable `te` to run. The plugin's
+    location comes from the bootstrap (`TE_PLUGIN_ROOT`); each file is rewritten only when it
+    changes, as an installed copy's path does across updates."""
     import shlex
     env = os.environ if env is None else env
     plugin = env.get("TE_PLUGIN_ROOT")
@@ -71,18 +72,27 @@ def ensure_launcher(env=None):
     path = launcher_path(env)
     body = ("#!/bin/sh\n# Written by the TokenEconomizer plugin at session start: its `te` "
             "command line.\nexec %s \"$@\"\n" % shlex.quote(target))
-    try:
-        with open(path, encoding="utf-8") as fh:
-            if fh.read() == body:
-                return path
-    except OSError:
-        pass
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(body)
-    os.chmod(tmp, 0o700)
-    os.replace(tmp, path)
+    launchers = {path: body}
+    if os.name == "nt":
+        import json
+        import sys
+        launchers[path + ".json"] = json.dumps({
+            "python": sys.executable,
+            "bootstrap": os.path.join(plugin, "scripts", "te_bootstrap.py"),
+        }) + "\n"
+    for launcher, body in launchers.items():
+        try:
+            with open(launcher, encoding="utf-8") as fh:
+                if fh.read() == body:
+                    continue
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(launcher), exist_ok=True)
+        tmp = "%s.%d.tmp" % (launcher, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(tmp, 0o700)
+        os.replace(tmp, launcher)
     return path
 
 

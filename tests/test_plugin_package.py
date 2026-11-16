@@ -70,6 +70,8 @@ def test_hook_files_run_the_launcher_on_every_event(name, host):
             assert f"--host {host}" in h["command"]
         if host == "copilot":
             assert h["command"].startswith('"${PLUGIN_ROOT}/scripts/te-hook"')
+            assert "te_bootstrap.py" in h["windows"] and "'--host', 'copilot'" in h["windows"]
+            assert h["windows"] == next(_commands(doc))[2]["windows"]
         if host == "codex":
             assert h["commandWindows"] == CODEX_WINDOWS
             if event == "SessionEnd":
@@ -141,6 +143,156 @@ def _hook_env(tmp_path, **extra):
                 "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"})
     env.update(extra)
     return env
+
+
+POWERSHELLS = [p for p in (shutil.which("powershell"), shutil.which("pwsh")) if p]
+
+
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+@pytest.mark.parametrize("policy", [None, "Restricted"])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, event, policy):
+    work = tmp_path / "work space \u00e9"
+    work.mkdir()
+    scripts = tmp_path / "plugin's copy" / "scripts"
+    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    env = _hook_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
+                    COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    env["PATH"] = os.path.dirname(sys.executable)
+    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+
+    def run(script, payload=None):
+        flags = ["-ExecutionPolicy", policy] if policy else []
+        return subprocess.run([shell, "-NoProfile"] + flags + ["-Command", script],
+                              input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+
+    payload = json.dumps({"hook_event_name": event, "session_id": "s",
+                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
+    out = run(command, payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    errors = tmp_path / "home" / "errors.log"
+    assert not errors.exists(), errors.read_text(encoding="utf-8")
+    sessions = list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
+    assert sessions, (out.stdout, out.stderr)
+    assert json.loads(sessions[0].read_text(encoding="utf-8"))["cwd"] == str(work)
+    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
+        text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
+        script = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
+        out = run(script.replace("$ARGUMENTS", ""))
+        assert out.returncode == 0 and out.stdout.strip(), (name, out.stderr)
+    assert (tmp_path / "home" / "bin" / "te.json").exists()
+    config = open(os.path.join(PLUGIN, "slash-commands", "config.md"), encoding="utf-8").read()
+    script = re.search(r"```powershell\n(.*?)\n```", config, re.S).group(1)
+    out = run(script.replace("$ARGUMENTS", "set loopguard=off"))
+    assert out.returncode == 0, out.stderr
+    settings = list((tmp_path / "home" / "repos").glob("*/config.json"))
+    assert settings and json.loads(settings[0].read_text())["loopguard"] == "off"
+    out = run(f"'{payload.replace(chr(39), chr(39) * 2)}' | {command}")
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    env.update(PATH="", TE_PYTHON=str(tmp_path / "missing.exe"))
+    out = run(command, payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
+
+
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_path, shell):
+    from tokeneconomizer.plugin.paths import ensure_launcher
+
+    work = tmp_path / "work space \u00e9"
+    work.mkdir()
+    scripts = tmp_path / "plugin's copy" / "scripts"
+    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (scripts / "te_bootstrap.py").write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\nsys.exit(7)\n")
+    env = _hook_env(tmp_path, TE_PYTHON=sys.executable, COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    ensure_launcher(dict(env, TE_PLUGIN_ROOT=str(scripts.parent)))
+
+    def run(command, payload=None):
+        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
+                               command], input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+
+    text = open(os.path.join(PLUGIN, "slash-commands", "config.md"), encoding="utf-8").read()
+    command = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
+    command = command.replace("$ARGUMENTS", "set 'paid_model=a&b' 'a|b' 'a%PATH%b'")
+    out = run(command + "; exit $LASTEXITCODE")
+    assert out.returncode == 7, out.stderr
+    assert json.loads(out.stdout) == ["cli", "--host", "copilot", "--cwd", str(work),
+                                     "config", "set", "paid_model=a&b", "a|b", "a%PATH%b"]
+
+    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    winapps.mkdir(parents=True)
+    marker = tmp_path / "alias_called"
+    alias = winapps / "python3.cmd"
+    alias.write_text(f'@echo alias>"{marker}"\n@exit /b 1\n')
+    env.update(TE_PYTHON="", PATH=os.pathsep.join((str(winapps), os.path.dirname(sys.executable))))
+    out = run(command, "{}")
+    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
+    assert not marker.exists()
+    env["PATH"] = str(winapps)
+    out = run(command, "{}")
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
+    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
+    alias.write_text(f'@"{sys.executable}" %*\n')
+    out = run(command, "{}")
+    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
+
+
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shell):
+    work = tmp_path / "work"
+    work.mkdir()
+    old = tmp_path / "old"
+    old.mkdir()
+    marker = tmp_path / "old_ran"
+    shim = old / "old.py"
+    shim.write_text(
+        "import runpy, sys\n"
+        "sys.argv.pop(0)\n"
+        "sys.version_info = (3, 9)\n"
+        "if '-c' in sys.argv:\n"
+        "    exec(sys.argv[sys.argv.index('-c') + 1])\n"
+        "else:\n"
+        f"    open({str(marker)!r}, 'w').close()\n"
+        "    runpy.run_path(sys.argv[0], run_name='__main__')\n",
+        encoding="utf-8")
+    (old / "python3.cmd").write_text(f'@"{sys.executable}" "{shim}" %*\n')
+    new = tmp_path / "new"
+    new.mkdir()
+    (new / "python.cmd").write_text(f'@"{sys.executable}" %*\n')
+    env = _hook_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
+                    PATH=os.pathsep.join((str(old), str(new))))
+    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "version-test",
+                          "cwd": str(work), "source": "new"})
+
+    def run():
+        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
+                               command], input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert list((tmp_path / "home" / "repos").glob("*/copilot/sessions/version-test.json"))
+    assert not marker.exists()
+    env["PATH"] = str(old)
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
+    marker.unlink()
+    env.update(PATH=str(new), TE_PYTHON=str(old / "python3.cmd"))
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
 
 
 def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
