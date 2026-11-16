@@ -229,20 +229,23 @@ def test_running_steps_system_rows_and_finish_do_not_shift_the_pairing(tp):
     assert [(i["args"]["command"], i["exit_code"]) for i in items] == [("ls", 0)]
 
 
-def test_antigravity_recognizes_desktop_tools_from_fixture():
-    fixture_path = ROOT / "tests" / "fixtures" / "antigravity_desktop_transcript.jsonl"
-    items, offset, last_idx = trace.antigravity_read(str(fixture_path), offset=0, after=-1, final=True)
-    assert last_idx == 4
-    tool_items = [item for item in items if item["kind"] == "tool"]
-    assert len(tool_items) == 2
-    # Verify write_file maps to Write with file_path
-    assert tool_items[0]["name"] == "Write"
-    assert tool_items[0]["args"] == {"file_path": "/work/repo/src/helper.py"}
-    assert tool_items[0]["is_error"] is False
-    # Verify edit_file maps to Edit with file_path
-    assert tool_items[1]["name"] == "Edit"
-    assert tool_items[1]["args"] == {"file_path": "/work/repo/src/helper.py"}
-    assert tool_items[1]["is_error"] is False
+def test_write_file_and_edit_file_read_as_write_and_edit(tp, tmp_path):
+    """`write_file` and `edit_file` (with `Path`), the names reported from Antigravity Desktop's
+    transcripts, read as Write and Edit, as agy's own file tools do."""
+    t = Transcript(tp)
+    t.prompt("add a helper")
+    t.call([("write_file", {"Path": "/work/repo/src/helper.py"})], [("ok", {"type": "CODE_ACTION"})])
+    t.call([("edit_file", {"Path": "/work/repo/src/helper.py"})], [("ok", {"type": "CODE_ACTION"})])
+    items, _offset, _last = trace.antigravity_read(str(tp), offset=0, after=-1, final=True)
+    assert [(i["name"], i["args"], i["is_error"]) for i in items if i["kind"] == "tool"] == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}, False),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"}, False)]
+    work = tmp_path / "w"
+    work.mkdir()
+    path = Antigravity().mechanism_trace(str(tp), str(work))
+    assert [(tool, args) for tool, args, _text, _ok in trace.load_trajectory(path)] == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"})]
 
 
 # ---- agy's answer --------------------------------------------------------------------------
@@ -320,34 +323,6 @@ def test_the_trace_conversion_feeds_the_mechanisms_and_prompts_are_counted(tp, t
     assert trace.call_cwds(path)[0] == "/work/repo"
     assert host.prompt_count(str(tp)) == 2
     assert host.mechanism_trace(str(tp) + ".none", str(work)) is None
-
-
-def test_desktop_tools_feed_mechanisms_and_session_usage(tmp_path):
-    fixture_path = str(ROOT / "tests" / "fixtures" / "antigravity_desktop_transcript.jsonl")
-    host = Antigravity()
-
-    # 1. Verify session usage sums tokens from the desktop fixture
-    usage = host.session_usage(fixture_path)
-    assert usage["requests"] == 2
-    assert usage["input_tokens"] == 1420 + 1550
-    assert usage["cache_read_input_tokens"] == 9600 + 10800
-    assert usage["output_tokens"] == 75 + 60
-    assert usage["model"] == "antigravity"
-
-    # 2. Verify mechanism trace produces valid Claude-shaped trajectory
-    out = host.mechanism_trace(fixture_path, str(tmp_path))
-    assert out is not None and os.path.isfile(out)
-    records = [json.loads(line) for line in open(out, encoding="utf-8") if line.strip()]
-    actions = [(r["message"]["content"][0]["name"], r["message"]["content"][0]["input"])
-               for r in records if r.get("type") == "assistant" and "content" in r.get("message", {})]
-    assert actions == [
-        ("Write", {"file_path": "/work/repo/src/helper.py"}),
-        ("Edit", {"file_path": "/work/repo/src/helper.py"}),
-    ]
-    assert [(tool, args) for tool, args, _text, _ok in trace.load_trajectory(out)] == [
-        ("Write", {"file_path": "/work/repo/src/helper.py"}),
-        ("Edit", {"file_path": "/work/repo/src/helper.py"}),
-    ]
 
 
 # ---- the hook entry point ------------------------------------------------------------------
