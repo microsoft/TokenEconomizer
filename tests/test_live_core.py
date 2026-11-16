@@ -699,6 +699,19 @@ from tokeneconomizer.loopguard import shell_edits, turn  # noqa: E402
     ("git -c core.autocrlf=false --no-pager apply fix.diff", ["(patch)"]),
     ("git -C repo checkout HEAD -- pkg/mod.py", ["mod.py"]),
     ("git --git-dir=.git --work-tree . restore pkg/mod.py", ["mod.py"]),
+    # a wrapper's own options and values before the command (`sudo -u bob`, `env -u VAR`)
+    ("env -u CURSOR_AGENT sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sudo -u bob sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sudo -Eu bob -- perl -pi -e 's/a/b/' src/a.rs", ["a.rs"]),
+    ("timeout 60 sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("timeout -k 5 --signal=KILL 1m git apply fix.diff", ["(patch)"]),
+    ("nice -n 10 sed -i 's/a/b/' x.py", ["x.py"]),
+    ("nice -5 tee -a setup.cfg", ["setup.cfg"]),
+    ("time -p sed -i 's/a/b/' x.py", ["x.py"]),
+    ("FOO=1 env -C sub -u X BAR=2 nice -n5 sed -i 's/a/b/' x.py", ["x.py"]),
+    ("sudo -E git checkout -- pkg/mod.py", ["mod.py"]),
+    ("env -u X sed -n '1,20p' pkg/mod.py", []),
+    ("timeout 60 python -m pytest -q > /tmp/out.txt", []),
     # not edits: output captures, scratch, reads, and operators inside quotes
     ("python -m pytest -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt", []),
     ("grep -n 'x' a.py > hits.txt", []),
@@ -732,6 +745,20 @@ def test_a_git_command_run_with_dash_c_still_counts_its_edit_and_its_revert():
     g.fold("Bash", {"command": revert}, "", 0)
     assert g.edits == 3
     assert g.whole.edit_counts == {"(patch)": 1, "mod.py": 2}
+
+
+def test_an_edit_run_through_a_wrapper_with_options_still_counts():
+    """`env -u VAR`, `sudo -u bob`, `timeout 60` and `nice -n 10` run the command after their
+    own options. Dropping only the wrapper's name left `-u` or `60` as the command, so the
+    `sed -i` was no edit and the `git checkout --` that put the file back was no revert."""
+    revert = "sudo -u bob git checkout -- pkg/mod.py"
+    assert shell_edits.shell_revert_targets(revert) == ["mod.py"]
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "env -u CURSOR_AGENT sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "timeout 60 sed -i 's/b/c/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": revert}, "", 0)
+    assert g.edits == 3
+    assert g.whole.edit_counts == {"mod.py": 3}
 
 
 def test_an_edit_after_a_here_string_is_counted():
