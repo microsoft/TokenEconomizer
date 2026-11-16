@@ -193,15 +193,16 @@ Requires Python >= 3.10 on PATH and Copilot signed in inside VS Code.
 See [VS Code's plugin installation guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
 GitHub CLI and standalone Copilot CLI are not needed for installation.
 
-**2. Configure.** Start a new Copilot chat in your project. To use model-free micro-skills
-without the standalone CLI, enter:
+**2. Optional: use without Copilot CLI.** Skip this step to keep your current settings.
+To enable model-free micro-skills without the standalone CLI, enter this in a new Copilot chat:
 
 ```text
 /tokeneconomizer:config set microskills=envfacts toolprune=off loopguard=off
 ```
 
-The model-based proposer and loop guard invoke the standalone CLI; tool pruning has not been
-verified in VS Code. These settings apply to this repository.
+This is not required for installation. It disables the model-based proposer and loop guard,
+which invoke the standalone CLI, and tool pruning, which has not been verified in VS Code.
+These settings apply to this repository.
 
 **3. Check it.** Enter `/tokeneconomizer:status` in chat and check that it reports the
 `copilot` host. If the command is missing, check **Chat: Open Customizations** > **Plugins**
