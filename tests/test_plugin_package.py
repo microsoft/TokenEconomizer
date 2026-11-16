@@ -137,6 +137,13 @@ def _run_hook(launcher, payload, env):
 WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
 
 
+# Where Windows PowerShell 5.1 finds its module analysis cache, where one is set: GitHub's Windows
+# image builds it ahead of time there. Without it, every launch analyzes each installed module
+# again before its first cmdlet (`Get-Content`, `Join-Path`): 12-18 s per launch on the runner,
+# against 0.4 s with it (measured in #238). pwsh starts as fast either way.
+POWERSHELL_ENV = ("PSMODULEANALYSISCACHEPATH",)
+
+
 def _hook_env(tmp_path, **extra):
     env = {k: os.environ[k] for k in WINDOWS_ENV if os.name == "nt" and k in os.environ}
     env.update({"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
@@ -145,48 +152,86 @@ def _hook_env(tmp_path, **extra):
     return env
 
 
+def _powershell_env(tmp_path, **extra):
+    """`_hook_env` plus where Windows PowerShell keeps its module analysis cache."""
+    env = _hook_env(tmp_path)
+    env.update({k: os.environ[k] for k in POWERSHELL_ENV if os.name == "nt" and k in os.environ})
+    env.update(extra)
+    return env
+
+
 POWERSHELLS = [p for p in (shutil.which("powershell"), shutil.which("pwsh")) if p]
 
 
-@pytest.mark.parametrize("shell", POWERSHELLS or [None])
-@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
-@pytest.mark.parametrize("policy", [None, "Restricted"])
-@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
-def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, event, policy):
+def _powershell_copilot(tmp_path, shell, policy):
+    """A Copilot plugin copy under a path with a quote and a space, its working folder, and a
+    `run(script, payload)` that runs PowerShell text there as the Copilot CLI does."""
     work = tmp_path / "work space \u00e9"
     work.mkdir()
     scripts = tmp_path / "plugin's copy" / "scripts"
     shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
                     ignore=shutil.ignore_patterns("__pycache__"))
-    env = _hook_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
-                    COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
+                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
     env["PATH"] = os.path.dirname(sys.executable)
-    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
 
     def run(script, payload=None):
         flags = ["-ExecutionPolicy", policy] if policy else []
         return subprocess.run([shell, "-NoProfile"] + flags + ["-Command", script],
                               input=payload, capture_output=True, encoding="utf-8",
                               env=env, cwd=work, timeout=60)
+    return work, env, run
 
+
+def _copilot_windows_hook():
+    return next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+
+
+def _powershell_block(name):
+    text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
+    return re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+@pytest.mark.parametrize("policy", [None, "Restricted"])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_hook_without_git_bash(tmp_path, shell, event, policy):
+    """Either event records the session and leaves the launch information (`bin/te.json`) the
+    slash commands read."""
+    work, _env, run = _powershell_copilot(tmp_path, shell, policy)
     payload = json.dumps({"hook_event_name": event, "session_id": "s",
                           "cwd": str(work), "source": "new"}, ensure_ascii=False)
-    out = run(command, payload)
+    out = run(_copilot_windows_hook(), payload)
     assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
     errors = tmp_path / "home" / "errors.log"
     assert not errors.exists(), errors.read_text(encoding="utf-8")
     sessions = list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
     assert sessions, (out.stdout, out.stderr)
     assert json.loads(sessions[0].read_text(encoding="utf-8"))["cwd"] == str(work)
-    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
-        text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
-        script = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
-        out = run(script.replace("$ARGUMENTS", ""))
-        assert out.returncode == 0 and out.stdout.strip(), (name, out.stderr)
     assert (tmp_path / "home" / "bin" / "te.json").exists()
-    config = open(os.path.join(PLUGIN, "slash-commands", "config.md"), encoding="utf-8").read()
-    script = re.search(r"```powershell\n(.*?)\n```", config, re.S).group(1)
-    out = run(script.replace("$ARGUMENTS", "set loopguard=off"))
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.parametrize("policy", [None, "Restricted"])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_slash_commands_without_git_bash(tmp_path, shell, policy):
+    """The slash commands run from the launch information a hook left, and the hook also takes
+    its payload from the pipeline and answers with no Python at all. None of this depends on
+    which event the hook saw (test_powershell_hook_without_git_bash covers both), so it runs
+    once per shell and policy: each line here is a PowerShell launch, seconds apiece on CI."""
+    work, env, run = _powershell_copilot(tmp_path, shell, policy)
+    command = _copilot_windows_hook()
+    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "s",
+                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
+    out = run(command, payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
+        out = run(_powershell_block(name).replace("$ARGUMENTS", ""))
+        assert out.returncode == 0 and out.stdout.strip(), (name, out.stderr)
+    out = run(_powershell_block("config").replace("$ARGUMENTS", "set loopguard=off"))
     assert out.returncode == 0, out.stderr
     settings = list((tmp_path / "home" / "repos").glob("*/config.json"))
     assert settings and json.loads(settings[0].read_text())["loopguard"] == "off"
@@ -198,6 +243,7 @@ def test_powershell_hook_and_slash_commands_without_git_bash(tmp_path, shell, ev
     assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
 
 
+@pytest.mark.powershell
 @pytest.mark.parametrize("shell", POWERSHELLS or [None])
 @pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
 def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_path, shell):
@@ -210,7 +256,8 @@ def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_
                     ignore=shutil.ignore_patterns("__pycache__"))
     (scripts / "te_bootstrap.py").write_text(
         "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\nsys.exit(7)\n")
-    env = _hook_env(tmp_path, TE_PYTHON=sys.executable, COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable,
+                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
     ensure_launcher(dict(env, TE_PLUGIN_ROOT=str(scripts.parent)))
 
     def run(command, payload=None):
@@ -246,6 +293,7 @@ def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_
     assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
 
 
+@pytest.mark.powershell
 @pytest.mark.parametrize("shell", POWERSHELLS or [None])
 @pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
 def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shell):
@@ -269,8 +317,8 @@ def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shel
     new = tmp_path / "new"
     new.mkdir()
     (new / "python.cmd").write_text(f'@"{sys.executable}" %*\n')
-    env = _hook_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
-                    PATH=os.pathsep.join((str(old), str(new))))
+    env = _powershell_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
+                          PATH=os.pathsep.join((str(old), str(new))))
     command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
     payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "version-test",
                           "cwd": str(work), "source": "new"})

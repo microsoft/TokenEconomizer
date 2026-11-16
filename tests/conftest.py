@@ -35,6 +35,8 @@ def symlink_or_skip(src, dst):
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_sidecalls: test the side-call functions themselves "
                                        "(their subprocess is faked inside the test)")
+    config.addinivalue_line("markers", "powershell: launches native Windows PowerShell; CI runs "
+                                       "these on one Python of the Windows matrix (tests.yml)")
 
 
 @pytest.fixture(autouse=True)
