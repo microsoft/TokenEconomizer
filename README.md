@@ -149,7 +149,7 @@ choose **Trust all and continue**. The hooks take effect from your next Codex se
 
 **GitHub Copilot in VS Code**
 
-See [VS Code setup on Windows](plugin/README.md#github-copilot-in-vs-code) for project hooks
+See [VS Code setup](plugin/README.md#github-copilot-in-vs-code) to install from the editor
 with the **Copilot** session target, without GitHub CLI or standalone Copilot CLI.
 
 **Copilot CLI**
