@@ -428,10 +428,14 @@ def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
     env = dict(_env(), OPENCODE_CONFIG_CONTENT=OPENCODE_CONFIG)
     exe = program(cli)
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        # The message goes on stdin, never on argv: Windows stops a command line at 32,767
+        # characters, and the proposer's prompt (eight task digests plus the facts) outgrows
+        # that -- CreateProcess failed with WinError 206 before a session existed. `opencode
+        # run` reads the message from stdin when it is given none (opencode 2.3.0).
         out = subprocess.run([*exe, "run", *opencode_flags(cli), "--format", "json",
-                              *model_args, prompt],
-                             capture_output=True, encoding="utf-8", errors="replace",
-                             timeout=timeout, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+                              *model_args],
+                             input=prompt, capture_output=True, encoding="utf-8",
+                             errors="replace", timeout=timeout, env=env, cwd=cwd)
         text, usage, sid = trace.opencode_run_reply(out.stdout)
         if sid:
             try:

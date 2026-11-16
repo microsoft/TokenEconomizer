@@ -643,12 +643,34 @@ def test_the_opencode_side_call_denies_tools_and_deletes_its_session(monkeypatch
     assert text == "pong" and eff
     run = next(c for c, _ in seen if "--format" in c)
     assert run[:2] == ["oc", "run"] and "--pure" in run and "--standalone" in run
-    assert run[-3:] == ["--model", "p/m", "is it stuck?"]
+    assert run[-2:] == ["--model", "p/m"]
     kw = next(k for c, k in seen if "--format" in c)
+    assert kw["input"] == "is it stuck?"
     assert kw["env"]["TE_SIDECALL"] == "1"
     perm = json.loads(kw["env"]["OPENCODE_CONFIG_CONTENT"])["permission"]
     assert perm["bash"] == "deny" and perm["edit"] == "deny"
     assert any(c[:3] == ["oc", "session", "delete"] and c[3] == "ses_x" for c, _ in seen)
+
+
+def test_a_long_opencode_prompt_goes_on_stdin_not_the_command_line(monkeypatch):
+    """Windows stops a command line at 32,767 characters, and the proposer's prompt (eight task
+    digests plus the facts) outgrows it: the call died with WinError 206 before a session
+    existed. `opencode run` reads the message from stdin when it is given none, so the prompt
+    must go there, never on argv."""
+    from tokeneconomizer.plugin import sidecall
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["kw"] = cmd, kw
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    sidecall._OC_FLAGS.clear()
+    prompt = "task digest " * 4_000        # 48,000 characters: past the limit
+    sidecall.opencode_call(prompt, model="", cli="oc")
+    assert prompt not in seen["cmd"]
+    assert max(len(part) for part in seen["cmd"]) < 200
+    assert seen["kw"]["input"] == prompt
 
 
 def test_the_opencode_side_call_adds_only_the_flags_its_cli_lists(monkeypatch):
@@ -1247,7 +1269,12 @@ def test_every_side_call_starts_its_cli_through_program(tmp_path, monkeypatch):
         seen.clear()
         call(prompt)
         assert seen and all(c[:2] == ["/n/node", f"/n/{cli}.js"] for c in seen), seen
-        assert any(prompt in c for c in seen)
+        if cli == "opencode":
+            # opencode is handed the prompt on stdin: Windows stops a command line at 32,767
+            # characters and the proposer's prompt outgrows it (see the long-prompt test).
+            assert prompt not in seen[0], seen[0]
+        else:
+            assert any(prompt in c for c in seen)
 
 
 # `pi --print --mode json` on Pi 1.2.0 through OpenRouter, trimmed: the header, the system and
