@@ -179,6 +179,13 @@ codex plugin add tokeneconomizer@tokeneconomizer
 
 To update it, rebuild the bundle and run `codex plugin add tokeneconomizer@tokeneconomizer` again.
 
+## GitHub Copilot in VS Code
+
+Use the [step-by-step Windows setup guide](../docs/VSCODE.md) with **Copilot** selected as the
+chat session target. It explains how to install project hooks, activate them in Copilot Chat,
+verify execution, and remove the configuration, without GitHub CLI or Copilot CLI.
+The guide also describes which capabilities have been verified in the editor.
+
 ## Copilot CLI
 
 **1. Install.**
