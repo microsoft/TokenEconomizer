@@ -181,10 +181,95 @@ To update it, rebuild the bundle and run `codex plugin add tokeneconomizer@token
 
 ## GitHub Copilot in VS Code
 
-Use the [step-by-step Windows setup guide](../docs/VSCODE.md) with **Copilot** selected as the
-chat session target. It explains how to install project hooks, activate them in Copilot Chat,
-verify execution, and remove the configuration, without GitHub CLI or Copilot CLI.
-The guide also describes which capabilities have been verified in the editor.
+On Windows, use project [hooks](https://code.visualstudio.com/docs/agent-customization/hooks)
+with **Copilot** selected as the chat session target. This setup needs Python >= 3.10,
+PowerShell 7, and Copilot signed in inside VS Code; neither `gh` nor `copilot` is required.
+It enables model-free micro-skills only. The older **Local** session target uses a different hook format.
+
+**1. Clone TokenEconomizer**, or use your existing checkout:
+
+```powershell
+git clone https://github.com/microsoft/TokenEconomizer.git C:/dev/TokenEconomizer
+```
+
+**2. Configure your project.** In PowerShell 7, edit the first two paths and run this block.
+Keep the checkout in place: the hooks reference it directly. Use this setup once per project;
+do not also enable the packaged TokenEconomizer plugin there.
+
+```powershell
+$teRoot = (Resolve-Path 'C:/dev/TokenEconomizer').Path
+$projectRoot = (Resolve-Path 'C:/work/my-project').Path
+$pythonExe = (Get-Command python -CommandType Application |
+    Where-Object Source -NotLike '*WindowsApps*' | Select-Object -First 1).Source
+if (-not $pythonExe) { throw 'Set $pythonExe to a real Python 3.10+ executable' }
+& $pythonExe --version # Must be a real Python 3.10+ installation.
+
+$bootstrap = Join-Path $teRoot 'plugin/scripts/te_bootstrap.py'
+$teState = Join-Path $projectRoot '.te-vscode-state'
+$hookDir = Join-Path $projectRoot '.github/hooks'
+$hookFile = Join-Path $hookDir 'tokeneconomizer-vscode.json'
+if (Test-Path -LiteralPath $hookFile) {
+    throw "TokenEconomizer hooks already exist: $hookFile"
+}
+
+$previousTeState = $env:TOKENECONOMIZER_HOME
+try {
+    $env:TOKENECONOMIZER_HOME = $teState
+    & $pythonExe $bootstrap cli --host copilot --cwd $projectRoot config set `
+        microskills=envfacts toolprune=off loopguard=off repomap=off history_import=off
+    if ($LASTEXITCODE -ne 0) { throw 'Could not configure TokenEconomizer' }
+} finally {
+    $env:TOKENECONOMIZER_HOME = $previousTeState
+}
+
+$quotedPython = "'" + $pythonExe.Replace("'", "''") + "'"
+$quotedBootstrap = "'" + $bootstrap.Replace("'", "''") + "'"
+$command = "& $quotedPython $quotedBootstrap hook --host copilot"
+$hooks = [ordered]@{}
+foreach ($event in @('SessionStart', 'UserPromptSubmit', 'PostToolUse',
+                    'PostToolUseFailure', 'Stop', 'SessionEnd')) {
+    $hooks[$event] = @(@{
+        type = 'command'
+        powershell = $command
+        timeoutSec = 60
+        env = @{ TOKENECONOMIZER_HOME = $teState; PYTHONUTF8 = '1' }
+    })
+}
+New-Item -ItemType Directory -Path $hookDir -Force | Out-Null
+@{ version = 1; hooks = $hooks } | ConvertTo-Json -Depth 8 |
+    Set-Content -LiteralPath $hookFile -Encoding utf8NoBOM
+```
+
+Add `/.te-vscode-state/` and `/.github/hooks/tokeneconomizer-vscode.json` to the project's
+local Git excludes (normally `.git/info/exclude`). They contain local state and absolute paths.
+
+**3. Check it.** Open that project in VS Code, select the **Copilot** session target and
+**Agent**, then open **Chat: Open Customizations** > **Hooks** to check the workspace hooks.
+Start a new chat and ask Copilot to read a project file. In the same PowerShell terminal:
+
+```powershell
+$previousTeState = $env:TOKENECONOMIZER_HOME
+try {
+    $env:TOKENECONOMIZER_HOME = $teState
+    & $pythonExe $bootstrap cli --host copilot --cwd $projectRoot status --explain
+} finally {
+    $env:TOKENECONOMIZER_HOME = $previousTeState
+}
+```
+
+Check for a session record under `.te-vscode-state/repos/<project-key>/copilot/sessions/`.
+After saving your work and closing that project's VS Code window, its record should eventually
+show `folded: true`. For hook errors, check `.te-vscode-state/errors.log`.
+
+Tested with VS Code 1.146.0 and the Copilot session target. Hooks, transcript processing, and
+context injection were verified; natural fact learning still needs validation. Model-based
+proposals, loop guard, and tool pruning stay disabled. This hook setup does not install slash commands.
+
+**Update.** Update the clone and start a new chat. If its path or the Python path changes,
+remove the hook file and repeat step 2.
+
+**Uninstall.** Remove only `.github/hooks/tokeneconomizer-vscode.json` and start a fresh chat.
+Keep `.te-vscode-state/` if you want to retain the learned state.
 
 ## Copilot CLI
 

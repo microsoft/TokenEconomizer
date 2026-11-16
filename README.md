@@ -149,10 +149,8 @@ choose **Trust all and continue**. The hooks take effect from your next Codex se
 
 **GitHub Copilot in VS Code**
 
-Follow the [step-by-step Windows setup guide](docs/VSCODE.md) to configure TokenEconomizer
-in your project with **Copilot** selected as the chat session target. It covers prerequisites,
-hook installation, activation, verification, and removal, without GitHub CLI or Copilot CLI.
-See the guide's feature scope for the capabilities verified in the editor.
+See [VS Code setup on Windows](plugin/README.md#github-copilot-in-vs-code) for project hooks
+with the **Copilot** session target, without GitHub CLI or standalone Copilot CLI.
 
 **Copilot CLI**
 
