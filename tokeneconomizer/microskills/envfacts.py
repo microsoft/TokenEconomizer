@@ -41,7 +41,7 @@ import re
 from collections import Counter
 
 from ..names import repo_filename
-from .lifecycle import Lifecycle
+from .lifecycle import Forgetting, Lifecycle, write_json_atomic
 from .observe import (DEFAULT_VOCAB, NETWORK_ERRORS, form_failed, form_worked, is_bare,
                       label_rule, observe_task)
 
@@ -243,7 +243,7 @@ def lint_ok(text):
 # --------------------------------------------------------------------------------------
 # the distiller
 # --------------------------------------------------------------------------------------
-class EnvFactsDistiller:
+class EnvFactsDistiller(Forgetting):
     """Learns and injects environment facts over a repository's task stream.
 
     Interface parity with `injection.Distiller`, so `PrefixStage` drives both the same way:
@@ -256,6 +256,8 @@ class EnvFactsDistiller:
     on top is told not to restate. `max_facts` / `max_tokens` cap the rendered block
     (default MAX_FACTS / MAX_TOKENS).
     """
+    FACT_CLS = EnvFact
+
     def __init__(self, repo, runner=None, model="agent", vocab=None, max_facts=None,
                  max_tokens=None):
         self.max_facts = int(max_facts or MAX_FACTS)
@@ -264,6 +266,7 @@ class EnvFactsDistiller:
         self.vocab = vocab or DEFAULT_VOCAB
         self.now = 0
         self.facts = {}                 # id -> EnvFact
+        self.forgotten = {}             # id -> {claim, record}: never learned again
         self.opt_tokens = 0.0           # invariant: LLM-free
         self.last_injected = set()      # fact ids rendered for the task now running
         self.last_digest = None         # the most recent per-task verdicts (telemetry)
@@ -577,6 +580,7 @@ class EnvFactsDistiller:
 
         self.last_digest = {"iid": iid, "resolved": resolved, "injected": sorted(injected),
                             "verdicts": verdicts, "n_calls": digest["n_calls"]}
+        self.drop_forgotten()
         self.last_injected = set()
         self.now += 1
 
@@ -588,10 +592,10 @@ class EnvFactsDistiller:
         return os.path.join(d, repo_filename(repo) + ".json")
 
     def save(self, root):
-        with open(self._path(root, self.repo), "w", encoding="utf-8") as fh:
-            json.dump({"repo": self.repo, "now": self.now, "opt_tokens": 0.0,
-                       "vocab": self.vocab.name,
-                       "facts": {k: f.to_dict() for k, f in self.facts.items()}}, fh, indent=2)
+        write_json_atomic(self._path(root, self.repo), {
+            "repo": self.repo, "now": self.now, "opt_tokens": 0.0, "vocab": self.vocab.name,
+            "facts": {k: f.to_dict() for k, f in self.facts.items()},
+            "forgotten": self.forgotten})
 
     @classmethod
     def load(cls, repo, root, runner=None, model="agent", vocab=None, max_facts=None,
@@ -604,6 +608,8 @@ class EnvFactsDistiller:
             d = json.load(fh)
         self.now = d.get("now", 0)
         self.facts = {k: EnvFact.from_dict(v) for k, v in d.get("facts", {}).items()}
+        self.forgotten = dict(d.get("forgotten") or {})
+        self.drop_forgotten()
         return self
 
     # ---- telemetry ---------------------------------------------------------------
