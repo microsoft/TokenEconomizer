@@ -325,7 +325,7 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
         if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
             text = item.get("text") or text
         elif ev.get("type") == "turn.completed":
-            usage = ev.get("usage") or usage
+            usage = _obj(ev.get("usage")) or usage
     if not text:
         _no_reply("codex", out)
     eff = None

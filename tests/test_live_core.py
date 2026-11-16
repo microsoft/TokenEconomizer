@@ -1514,7 +1514,8 @@ def test_the_side_calls_skip_json_lines_that_are_not_objects(monkeypatch, tmp_pa
             out = "\n".join(json.dumps(e) for e in (*junk, {
                 "type": "item.completed", "item": "x"},
                 {"type": "item.completed",
-                 "item": {"type": "agent_message", "text": "hi"}}))
+                 "item": {"type": "agent_message", "text": "hi"}},
+                {"type": "turn.completed", "usage": [1]}))
         else:
             out = "\n".join(json.dumps(e) for e in (*junk, {
                 "type": "assistant.message", "data": [1, 2]},
