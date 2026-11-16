@@ -570,8 +570,7 @@ log a warning for the empty section of a session with no facts.
 
 ## Antigravity CLI
 
-Experimental: **micro-skills' LLM-free facts**, written against `agy` 1.5.1 on macOS and Linux
-(agy runs hook commands through `cmd /c` on Windows, and the launcher is a POSIX shell script).
+Experimental: **micro-skills' LLM-free facts**, tested against `agy` 1.5.1 and 1.5.2 on Windows 11, macOS and Linux.
 
 **1. Install.** Build the self-contained plugin, which copies the package into it, and install the
 directory:
@@ -586,8 +585,10 @@ from `hooks.json` at the plugin root; the `hooks/hooks.json` beside it is Claude
 validator says it is never loaded.
 
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host antigravity status` in the
-repository. agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
-is off by default: `te --host antigravity config set microskills=envfacts`.
+repository (on Windows, `<plugin>\scripts\te.cmd --host antigravity status` in the repository;
+`<plugin>` is the folder above `scripts\te_bootstrap.py` in `%USERPROFILE%\.tokeneconomizer\bin\te.json`, which the first session writes).
+agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
+is off by default: `te --host antigravity config set microskills=envfacts` (on Windows: `<plugin>\scripts\te.cmd --host antigravity config set microskills=envfacts`).
 
 **How it works, and what it does not do.**
 
@@ -736,7 +737,7 @@ How to run them:
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
-| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` |
+| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
 
 `doctor`, `history`, `repomap` and `microskills forget`/`unforget` run from a terminal (or as `/te …` on

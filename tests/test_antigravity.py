@@ -9,6 +9,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -438,7 +439,114 @@ def test_the_plugin_declares_the_three_events_and_never_pretooluse():
     assert {e: h[0]["timeout"] for e, h in events.items()} == {
         "SessionStart": 15, "PreInvocation": 10, "Stop": 10}
     for event, (handler,) in events.items():
-        assert handler["command"] == f"./scripts/te-hook --host antigravity --event {event}"
+        expected = f"./scripts/te-hook --host antigravity --event {event} || scripts\\te-hook.cmd --host antigravity --event {event}"
+        assert handler["command"] == expected
     assert os.access(ROOT / "plugin/scripts/te-hook", os.X_OK)
+    assert (ROOT / "plugin/scripts/te-hook.cmd").is_file()
+    assert (ROOT / "plugin/scripts/te.cmd").is_file()
     # no other agent reads the root hook file: Claude Code's is `hooks/hooks.json`.
     assert "hooks" not in claude
+
+
+def test_windows_hook_launcher_fails_open_with_no_python():
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env.pop("TE_PYTHON", None)
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input="{}", text=True, capture_output=True, env=env)
+    assert p.returncode == 0
+    assert json.loads(p.stdout.strip()) == {}
+
+
+def test_windows_te_launcher_reports_missing_python():
+    cmd_script = ROOT / "plugin" / "scripts" / "te.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env.pop("TE_PYTHON", None)
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "status"],
+                       text=True, capture_output=True, env=env)
+    assert p.returncode == 1
+    assert "no python3 on PATH" in p.stderr
+
+
+def test_windows_hook_launcher_executes_with_valid_python(tmp_path):
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP") if k in os.environ}
+    env["PATH"] = f"{os.path.dirname(sys.executable)}{os.pathsep}{os.environ.get('PATH', '')}"
+    env["TOKENECONOMIZER_HOME"] = str(tmp_path / "home")
+    payload = {
+        "hook_event_name": "SessionStart",
+        "conversationId": CID,
+        "workspacePaths": [str(tmp_path)],
+        "transcriptPath": str(tmp_path / "transcript.jsonl"),
+        "modelName": "m",
+        "lastUserInput": "test",
+    }
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input=json.dumps(payload), text=True, capture_output=True, env=env)
+    assert p.returncode == 0
+    assert json.loads(p.stdout.strip()) == {}
+
+
+def test_windows_hook_launcher_passes_over_a_te_python_that_is_not_there():
+    """A stale TE_PYTHON is passed over for the probes, as the sh launchers do: the hook still
+    answers instead of failing with cmd's "is not recognized"."""
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env["TE_PYTHON"] = r"C:\no such folder (x86)\python.exe"
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input="{}", text=True, capture_output=True, env=env)
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout.strip()) == {}
+
+
+def test_windows_hook_launcher_runs_a_te_python_under_a_path_with_spaces(tmp_path):
+    """TE_PYTHON under "Program Files (x86)" runs as one word, and is the Python that runs."""
+    cmd_script = ROOT / "plugin" / "scripts" / "te-hook.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    folder = tmp_path / "Program Files (x86)" / "Python"
+    folder.mkdir(parents=True)
+    marker = tmp_path / "te_python_ran"
+    shim = folder / "python.cmd"
+    shim.write_text(f'@echo ran>"{marker}"\n@"{sys.executable}" %*\n')
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP") if k in os.environ}
+    env["PATH"] = f"{os.path.dirname(sys.executable)}{os.pathsep}{os.environ.get('PATH', '')}"
+    env["TOKENECONOMIZER_HOME"] = str(tmp_path / "home")
+    env["TE_PYTHON"] = str(shim)
+    payload = {
+        "hook_event_name": "SessionStart",
+        "conversationId": CID,
+        "workspacePaths": [str(tmp_path)],
+        "transcriptPath": str(tmp_path / "transcript.jsonl"),
+        "modelName": "m",
+        "lastUserInput": "test",
+    }
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "--event", "SessionStart"],
+                       input=json.dumps(payload), text=True, capture_output=True, env=env)
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout.strip()) == {}
+    assert marker.exists()
+
+
+def test_windows_te_launcher_passes_over_a_te_python_that_is_not_there():
+    cmd_script = ROOT / "plugin" / "scripts" / "te.cmd"
+    if os.name != "nt":
+        pytest.skip("Windows batch test")
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ}
+    env["PATH"] = ""
+    env["TE_PYTHON"] = r"C:\no such folder (x86)\python.exe"
+    p = subprocess.run([str(cmd_script), "--host", "antigravity", "status"],
+                       text=True, capture_output=True, env=env)
+    assert p.returncode == 1
+    assert "no python3 on PATH" in p.stderr

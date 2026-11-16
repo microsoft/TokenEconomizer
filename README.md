@@ -224,12 +224,11 @@ agy plugin install dist/marketplace/tokeneconomizer
 ```
 
 Start `agy` and send a prompt in a repository, then check with
-`~/.tokeneconomizer/bin/te --host antigravity status`. `agy` has no plugin commands, so the
+`~/.tokeneconomizer/bin/te --host antigravity status` (on Windows, `<plugin>\scripts\te.cmd --host antigravity status`, run in the repository; `<plugin>` is the folder above `scripts\te_bootstrap.py` in `%USERPROFILE%\.tokeneconomizer\bin\te.json`, which the first session writes). `agy` has no plugin commands, so the
 plugin's commands run from a terminal. The plugin makes no model call through `agy`, which has no
 option that runs a prompt with every tool off, so the paid proposer and the loop guard are off
-and tool pruning is not available. macOS and Linux only:
-on Windows `agy` runs hook commands through `cmd /c`, and this plugin's launcher is a POSIX shell
-script. See [its limits](plugin/README.md#antigravity-cli).
+and tool pruning is not available. Works across Windows, macOS, and Linux with native Windows batch launchers (`scripts\te-hook.cmd`, `scripts\te.cmd`). Tested on `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux.
+See [its limits](plugin/README.md#antigravity-cli).
 
 **opencode** (experimental)
 
@@ -288,7 +287,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
 | Hermes Agent (experimental) | 0.22.5 | not tested |
-| Antigravity CLI (experimental) | agy 1.5.1, macOS and Linux | not tested |
+| Antigravity CLI (experimental) | agy 1.5.1 and 1.5.2, Windows 11, macOS and Linux | not tested |
 | Factory Droid (experimental) | 0.233.0, macOS (below) | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
@@ -309,9 +308,10 @@ have not been tested yet.
 - **Grok Build** support is experimental: it was verified on 1.0.70 only, against its documented
   hook contract and live hook payloads. Learned facts reach the model with the session's first tool
   call, and tool pruning is not available. See [its limits](plugin/README.md#grok-build).
-- **Antigravity CLI** support is experimental: it was written against agy 1.5.1's hook contract
-  and transcript format, which are not a public interface, and only micro-skills' LLM-free facts
-  are supported: the plugin makes no model call through `agy`. See [its limits](plugin/README.md#antigravity-cli).
+- **Antigravity CLI** support is experimental: it was tested against agy 1.5.1 and 1.5.2 on Windows 11,
+  macOS, and Linux. It was written against agy's hook contract and transcript format, which are not a
+  public interface, and only micro-skills' LLM-free facts are supported: the plugin makes no model call
+  through `agy`. See [its limits](plugin/README.md#antigravity-cli).
 - **Hermes Agent** support is experimental: it was tested on 0.22.5 only, with a scripted local
   model and one free real model, on the classic CLI and one-shot runs only. Micro-skills and a
   redirect reaching a real model are verified there; the still-stuck notice reaching a person is
@@ -340,7 +340,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
 | Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
-| Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` |
+| Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` (e.g. `/tokeneconomizer-status`) |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 

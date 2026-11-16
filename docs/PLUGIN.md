@@ -838,14 +838,15 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
   runs, verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
-* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, written against
-  agy 1.5.1 and its own installed hook documentation; tool pruning is not implemented. The
-  plugin makes no model call through `agy`, which has no option that runs a prompt with every tool
-  off (`sidecall.NO_SIDE_CALLS`), so the paid proposer and the loop guard's judge never run. What
-  was captured live: hooks come from a `hooks.json` at the plugin root, run through `sh -c` in
-  that directory, with camelCase payloads that name no event (the hook file's command does,
-  `--event`) and leave out a zero (`invocationNum` 0, the first model call of a prompt). A
-  `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
+* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, tested against
+  `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux, using its installed hook documentation;
+  tool pruning is not implemented. The plugin makes no model call through `agy`, which has no
+  option that runs a prompt with every tool off (`sidecall.NO_SIDE_CALLS`), so the paid proposer
+  and the loop guard's judge never run. What was captured live: hooks come from a `hooks.json` at
+  the plugin root, invoking `./scripts/te-hook` on macOS/Linux and native batch launcher
+  `scripts\te-hook.cmd` on Windows, with camelCase payloads that name no event (the hook file's
+  command does, `--event`) and leave out a zero (`invocationNum` 0, the first model call of a
+  prompt). A `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
   `PostToolUse` carries no tool result and a matcher `"*"` never matches, so the results are read
   from the conversation's `transcript_full.jsonl` at the next `PreInvocation` and at `Stop`, where
   every result of the previous model call is already written (`trace/antigravity.py`). There is no
@@ -855,8 +856,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   `SessionStart`, an `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Calls a subagent
   makes are not in the transcript and are not seen. Transcript token fields are absent from older
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
-  on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
-  `cmd /c` on Windows, and the launcher is a POSIX shell script.
+  on the ledger's labelled fallback. Works across Windows, macOS, and Linux (tested on `agy` 1.5.1
+  and 1.5.2 on Windows 11, macOS, and Linux; on Windows, terminal commands run through the plugin's
+  `scripts\te.cmd`, in the repository).
 * **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
   (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
   calls are off until `droid_sidecall` is on; see `docs/DROID.md`.
