@@ -189,6 +189,16 @@ def test_argline_keeps_a_quoted_id_with_spaces_as_one_argument():
     assert _expand_argline(["status"]) == ["status"]
 
 
+def test_argline_keeps_backslashes_as_typed():
+    """A Windows path typed after `/te` on Pi is a value, not shell escapes."""
+    from tokeneconomizer.plugin.cli import _expand_argline
+    line = r"config set repomap_python=C:\Python312\python.exe"
+    assert _expand_argline(["--argline", line]) == [
+        "config", "set", r"repomap_python=C:\Python312\python.exe"]
+    assert _expand_argline(["--argline", r'microskills forget "C:\a b" x']) == [
+        "microskills", "forget", r"C:\a b", "x"]
+
+
 def test_an_unclosed_quote_in_argline_changes_nothing(te):  # noqa: F811
     from tokeneconomizer.plugin import cli
     assert cli.main(["--argline", 'microskills forget "unclosed']) == 2

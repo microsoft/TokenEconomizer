@@ -1063,15 +1063,26 @@ def _recent_host(cwd):
     return max(seen, key=seen.get) if seen else None
 
 
+def _split_argline(line):
+    """Split on whitespace and quotes as a POSIX shell would, but keep a backslash as typed:
+    on Windows `C:\\Python312\\python.exe` is a path, not two escapes. An unclosed quote
+    raises ValueError."""
+    lex = shlex.shlex(line, posix=True)
+    lex.whitespace_split = True
+    lex.escape = ""
+    lex.commenters = ""
+    return list(lex)
+
+
 def _expand_argline(argv):
-    """`--argline TEXT` stands for TEXT split as a POSIX shell would: a host's slash command
+    """`--argline TEXT` stands for TEXT split by `_split_argline`: a host's slash command
     (Pi's `/te ...`) hands over the line as typed, and a fact id may hold spaces and quotes."""
     argv = list(sys.argv[1:] if argv is None else argv)
     for i, a in enumerate(argv):
         if a == "--argline" and i + 1 < len(argv):
-            return argv[:i] + shlex.split(argv[i + 1]) + argv[i + 2:]
+            return argv[:i] + _split_argline(argv[i + 1]) + argv[i + 2:]
         if a.startswith("--argline="):
-            return argv[:i] + shlex.split(a.split("=", 1)[1]) + argv[i + 1:]
+            return argv[:i] + _split_argline(a.split("=", 1)[1]) + argv[i + 1:]
     return argv
 
 
