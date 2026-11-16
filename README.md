@@ -224,7 +224,7 @@ agy plugin install dist/marketplace/tokeneconomizer
 ```
 
 Start `agy` and send a prompt in a repository, then check with
-`~/.tokeneconomizer/bin/te --host antigravity status` (on Windows, run `scripts\te.cmd --host antigravity status` from the plugin directory). `agy` has no plugin commands, so the
+`~/.tokeneconomizer/bin/te --host antigravity status` (on Windows, `<plugin>\scripts\te.cmd --host antigravity status`, run in the repository; `<plugin>` is the folder above `scripts\te_bootstrap.py` in `%USERPROFILE%\.tokeneconomizer\bin\te.json`, which the first session writes). `agy` has no plugin commands, so the
 plugin's commands run from a terminal. The plugin makes no model call through `agy`, which has no
 option that runs a prompt with every tool off, so the paid proposer and the loop guard are off
 and tool pruning is not available. Works across Windows, macOS, and Linux with native Windows batch launchers (`scripts\te-hook.cmd`, `scripts\te.cmd`). Tested on `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux.
@@ -340,7 +340,7 @@ commands. They have the same names on every agent; only the way you type them di
 | Cursor Agent | from a terminal: `~/.tokeneconomizer/bin/te --host cursor <command>` |
 | Grok Build | from a terminal: `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
-| Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `scripts\te.cmd --host antigravity <command>` from the plugin directory, or `python -m tokeneconomizer.plugin.cli --host antigravity <command>`) |
+| Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` (e.g. `/tokeneconomizer-status`) |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
@@ -353,7 +353,7 @@ commands. They have the same names on every agent; only the way you type them di
 | `config` | every setting in effect |
 | `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
 
-Inside an agent, a command costs one model turn; from a terminal it is free. `~/.tokeneconomizer/bin/te` is a POSIX shell script; on Windows, run `scripts\te.cmd` from the plugin directory (or `python -m tokeneconomizer.plugin.cli`). The other commands
+Inside an agent, a command costs one model turn; from a terminal it is free. The other commands
 (`repos`, `doctor`, `config unset`, ...) and each agent's permission prompts are listed under
 [Commands](plugin/README.md#commands).
 

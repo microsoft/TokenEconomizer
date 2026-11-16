@@ -857,8 +857,8 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   makes are not in the transcript and are not seen. Transcript token fields are absent from older
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
   on the ledger's labelled fallback. Works across Windows, macOS, and Linux (tested on `agy` 1.5.1
-  and 1.5.2 on Windows 11, macOS, and Linux; on Windows, terminal commands run via `scripts\te.cmd`
-  from the plugin directory).
+  and 1.5.2 on Windows 11, macOS, and Linux; on Windows, terminal commands run through the plugin's
+  `scripts\te.cmd`, in the repository).
 * **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
   (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
   calls are off until `droid_sidecall` is on; see `docs/DROID.md`.

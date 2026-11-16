@@ -3,11 +3,24 @@ setlocal EnableDelayedExpansion
 set "DIR=%~dp0"
 set "PYTHONUTF8=1"
 
-:: 1. Explicit TE_PYTHON override runs as named
-if defined TE_PYTHON (
-    set "RUN_PY=%TE_PYTHON%"
+:: 1. TE_PYTHON is the person's own choice: it runs as named when it is there, as a file or as
+::    a command on PATH. One that is not there is passed over for the probes below, as the sh
+::    launchers do, so a stale setting cannot keep the hook from answering. The name is read with
+::    delayed expansion and run in quotes: a path with spaces or parentheses
+::    ("C:\Program Files (x86)\...") stays one word and cannot end an `if` block early.
+if not defined TE_PYTHON goto :probe
+set "TE_PY=%TE_PYTHON:"=%"
+if exist "!TE_PY!" (
+    set "RUN_PY="!TE_PY!""
     goto :run_hook
 )
+where /q "!TE_PY!" >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    set "RUN_PY="!TE_PY!""
+    goto :run_hook
+)
+
+:probe
 
 :: Probe script: exits 0 if >= 3.10, exits 1 if older
 set "PROBE=import sys; sys.exit(sys.version_info < (3, 10))"

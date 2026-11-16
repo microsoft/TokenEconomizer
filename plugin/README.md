@@ -562,9 +562,10 @@ from `hooks.json` at the plugin root; the `hooks/hooks.json` beside it is Claude
 validator says it is never loaded.
 
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host antigravity status` in the
-repository (on Windows, run `scripts\te.cmd --host antigravity status` from the plugin directory).
+repository (on Windows, `<plugin>\scripts\te.cmd --host antigravity status` in the repository;
+`<plugin>` is the folder above `scripts\te_bootstrap.py` in `%USERPROFILE%\.tokeneconomizer\bin\te.json`, which the first session writes).
 agy plugins load no slash commands, so every command runs from a terminal. Micro-skills
-is off by default: `te --host antigravity config set microskills=envfacts` (on Windows: `scripts\te.cmd --host antigravity config set microskills=envfacts`).
+is off by default: `te --host antigravity config set microskills=envfacts` (on Windows: `<plugin>\scripts\te.cmd --host antigravity config set microskills=envfacts`).
 
 **How it works, and what it does not do.**
 
@@ -711,7 +712,7 @@ How to run them:
 | opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 | Grok Build | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host grok <command>` |
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
-| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `scripts\te.cmd --host antigravity <command>` from the plugin directory) |
+| Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
 
 `doctor`, `history` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
@@ -723,9 +724,7 @@ writes outside Codex's sandbox: choose **Yes, proceed**. The Copilot CLI runs th
 its interactive mode only and asks before each: choose **Yes**.
 
 The launcher in `~/.tokeneconomizer/bin` is written by the first session; before that, use
-`/path/to/TokenEconomizer/plugin/scripts/te`. Note that `~/.tokeneconomizer/bin/te` is a POSIX
-shell script; on Windows, run `scripts\te.cmd` from the plugin directory (or `python -m tokeneconomizer.plugin.cli`).
-From a plain terminal, `--host` defaults to the
+`/path/to/TokenEconomizer/plugin/scripts/te`. From a plain terminal, `--host` defaults to the
 agent that last worked in the repository.
 
 ## Settings
@@ -741,7 +740,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Codex | `$tokeneconomizer:config set loopguard=off` |
 | Copilot CLI | `/tokeneconomizer:config set loopguard=off` (interactive mode) |
 | Pi | `/te config set loopguard=off` |
-| any agent, from a terminal | `~/.tokeneconomizer/bin/te config set loopguard=off` (on Windows: `scripts\te.cmd config set loopguard=off`) |
+| any agent, from a terminal | `~/.tokeneconomizer/bin/te config set loopguard=off` |
 
 **Turn a mechanism on or off:**
 
