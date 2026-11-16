@@ -25,10 +25,22 @@ silently mispriced.
     gpt-5.3-codex                    1.00     0.097       0.00        8.00
     gpt-5-codex (OpenAI direct)      1.00     0.10        1.00        8.00
 
+Anthropic bills a cache write by its lifetime: 1.25x for the 5-minute cache, 2x for the 1-hour
+one. A row that says how many of its cache-write tokens went to the 1-hour cache
+(`cache_creation_1h_input_tokens`, see cache_write_1h_tokens) has those priced at the table's
+`cache_write_1h`; a table without that entry, or a row without the field, prices every
+cache-write token at `cache_write` as before.
+
+Claude's cache-hit price is not uniform either: Anthropic bills a cache hit at 0.1x input, but at
+0.05x on Opus 5.5 and Sonnet 5.5 and at 0.025x on Fable and Mythos 5.1 and 5.2
+(`_CLAUDE_CACHE_READ`). Cache hits are 90% or more of an agent session's tokens, so a wrong ratio
+moves the whole figure.
+
 Callers may override with an explicit effective_tokens(rec, weights=...).
 When the per-task breakdown is absent (older runs), effective_tokens() falls back to
 `tokens_total` at full weight so nothing crashes — call has_breakdown() to detect this.
 """
+import re
 
 # ---------------------------------------------------------------------------
 # Per-model-id price ratios (fresh-input-token equivalents; input := 1.0).
@@ -46,14 +58,22 @@ When the per-task breakdown is absent (older runs), effective_tokens() falls bac
 # `codex` run bills sol.
 MODEL_WEIGHTS = {
     # --- per-model price snapshot (2026-07-27) ------------------------------
-    "claude-haiku-4-5":        dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-6":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-7":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-4-8":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-opus-5":           dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-4-5":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-4-6":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
-    "claude-sonnet-5":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "claude-haiku-4-5":        dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-6":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-7":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-4-8":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-opus-5":           dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-4-5":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-4-6":       dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
+    "claude-sonnet-5":         dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0,
+                                    cache_write_1h=2.0),
     "gemini-2.5-pro":          dict(input=1.0, cache_read=0.096,  cache_write=0.0,   output=8.0),
     "gemini-3-flash-preview":  dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
     "gemini-3.1-pro-preview":  dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
@@ -78,14 +98,33 @@ MODEL_WEIGHTS = {
     "gpt-5.2-codex":           dict(input=1.0, cache_read=0.10,   cache_write=1.0,   output=8.0),
     # codex-mini-latest: $1.50 in / $0.375 cached / $6.00 out  => cr 0.25, out 4.0
     "codex-mini-latest":       dict(input=1.0, cache_read=0.25,   cache_write=1.0,   output=4.0),
+    # --- added 2026-11-13 from the vendors' Standard-tier price pages (short context) ------
+    # OpenAI, https://developers.openai.com/api/docs/pricing. A cache write costs 1.25x input
+    # for the 30-minute cache and 2.5x for the 12-hour one; a Codex rollout does not say which
+    # lifetime a write used, so the 30-minute rate stands. gpt-6.1-sol and gpt-6.1-terra bill a
+    # cache hit at 0.05x input: $2.00 in / $0.10 cached / $10 out, and $1.00 / $0.05 / $5.
+    "gpt-6-astra":             dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6-luna":              dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6-sol":               dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
+    "gpt-6.1-sol":             dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    "gpt-6.1-terra":           dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    # Google, https://aistudio.google.com/docs/pricing. No cache-write charge. Gemini 4 bills a
+    # cache hit at 0.05x input ($2.00 in / $0.10 cached / $10 out for argon and carbon). The
+    # gemini-4-* prices rise on 2026-12-01 and gemini-3.8-flash's on 2027-01-01; the ratios stay.
+    "gemini-3.1-flash-lite":   dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=6.0),
+    "gemini-3.5-flash-lite":   dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=8.333),
+    "gemini-3.8-flash":        dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=5.0),
+    "gemini-4-argon":          dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
+    "gemini-4-carbon":         dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
+    "gemini-4-hydrogen":       dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
 }
 
 # Billed model id for an agent when a row does NOT pin one (rec['model'] is None).
-# Claude/Copilot agents map to None -> the Claude curve (their ratios are model-uniform
-# across Opus/Sonnet/Haiku, so an exact id is unnecessary). Codex maps to codex's built-in
-# default, gpt-5.6-sol (verified from codex's session rollout). Probed against the OpenAI
-# Platform on 2026-09-09: `gpt-5.6-sol` is both listed by /v1/models AND accepted by
-# /v1/responses (HTTP 200).
+# Claude/Copilot agents map to None -> the Claude curve (a row that names its Claude model is
+# priced by it, see _CLAUDE_CACHE_READ; one that names none gets the usual ratios). Codex maps
+# to codex's built-in default, gpt-5.6-sol (verified from codex's session rollout). Probed
+# against the OpenAI Platform on 2026-09-09: `gpt-5.6-sol` is both listed by /v1/models AND
+# accepted by /v1/responses (HTTP 200).
 #
 # The trap a catalog check alone will not catch: the `-codex` ALIASES are listed by
 # /v1/models and 404 on /v1/responses ("does not exist or you do not have access to it" for
@@ -95,13 +134,15 @@ AGENT_DEFAULT_MODEL = {
     "codex": "gpt-5.6-sol",
 }
 
-# Claude-family price ratios (Opus/Sonnet/Haiku share them). Used as the default when a
-# row has no resolvable model id (legacy rows, claude/copilot agents) so those stay
-# byte-identical to historical behavior. Also the value of the back-compat WEIGHTS alias.
+# Claude-family price ratios (Opus/Sonnet/Haiku share them, except the cache-hit ratio of a
+# few models: see _CLAUDE_CACHE_READ). Used as the default when a row has no resolvable model
+# id (legacy rows, claude/copilot agents) so those stay byte-identical to historical behavior.
+# Also the value of the back-compat WEIGHTS alias.
 WEIGHTS_CLAUDE = {
     "input": 1.0,         # input_tokens = fresh/uncached prompt tokens
     "cache_read": 0.10,   # cache_read_input_tokens
-    "cache_write": 1.25,  # cache_creation_input_tokens
+    "cache_write": 1.25,  # cache_creation_input_tokens (the 5-minute cache)
+    "cache_write_1h": 2.0,  # the part of them written to the 1-hour cache
     "output": 5.0,        # output_tokens (completion)
 }
 # Back-compat: modules that read pricing.WEIGHTS directly (figures, costmodel) were
@@ -109,8 +150,23 @@ WEIGHTS_CLAUDE = {
 # weights_for(); effective_tokens() applies it automatically.
 WEIGHTS = WEIGHTS_CLAUDE
 
-_BREAKDOWN_KEYS = ("input_tokens", "cache_read_input_tokens",
-                   "cache_creation_input_tokens", "output_tokens")
+# Claude models whose cache hits are not billed at 0.1x input (Anthropic's price list,
+# https://platform.claude.com/docs/en/about-claude/pricing). Every other ratio of the Claude
+# curve is the same on every model. Matched on the id with dots as dashes, so a router's
+# `claude-sonnet-5.5` and a dated snapshot match too.
+_CLAUDE_CACHE_READ = (
+    (re.compile(r"claude-(opus|sonnet)-5-5\b"), 0.05),
+    (re.compile(r"claude-(fable|mythos)-5-[12]\b"), 0.025),
+)
+
+
+def _claude_weights(key):
+    """The Claude curve for a lower-cased claude-* id, with the model's own cache-hit ratio."""
+    name = key.replace(".", "-")
+    for pattern, cache_read in _CLAUDE_CACHE_READ:
+        if pattern.search(name):
+            return dict(WEIGHTS_CLAUDE, cache_read=cache_read)
+    return WEIGHTS_CLAUDE
 
 
 def resolve_model(rec):
@@ -139,7 +195,8 @@ def weights_for(rec):
       * resolve the billed id (resolve_model) — explicit `model`, else agent default;
       * id in MODEL_WEIGHTS       -> that model's exact ratios;
       * id is a claude-* variant  -> Claude curve (covers dotted ids like claude-opus-4.8
-                                     not in the catalog snapshot; ratios are uniform);
+                                     not in the catalog snapshot), with the model's own
+                                     cache-hit ratio where it differs (_CLAUDE_CACHE_READ);
       * id present but UNPRICED   -> raise ValueError (hard-fail: a new/unknown model must
                                      be added to MODEL_WEIGHTS, never silently mispriced);
       * no resolvable id at all   -> Claude curve (legacy rows / claude / copilot: keeps
@@ -153,7 +210,7 @@ def weights_for(rec):
     if key in MODEL_WEIGHTS:
         return MODEL_WEIGHTS[key]
     if "claude" in key:
-        return WEIGHTS_CLAUDE
+        return _claude_weights(key)
     raise ValueError(
         f"pricing: no weight entry for billed model {mid!r} "
         f"(agent={rec.get('agent')!r}). Add it to pricing.MODEL_WEIGHTS "
@@ -166,11 +223,32 @@ def has_breakdown(rec):
     return isinstance(rec, dict) and rec.get("input_tokens") is not None
 
 
+def cache_write_1h_tokens(usage):
+    """How many of a usage breakdown's cache-write tokens went to the 1-hour cache.
+
+    Reads the flat `cache_creation_1h_input_tokens` a session reader records, else the
+    `cache_creation.ephemeral_1h_input_tokens` of an Anthropic `usage` object as it arrives.
+    Never more than `cache_creation_input_tokens`, of which it is a part; 0 when neither says."""
+    if not isinstance(usage, dict):
+        return 0
+    n = usage.get("cache_creation_1h_input_tokens")
+    if n is None:
+        split = usage.get("cache_creation")
+        n = split.get("ephemeral_1h_input_tokens") if isinstance(split, dict) else None
+    try:
+        n = int(n or 0)
+        total = int(usage.get("cache_creation_input_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(n, total))
+
+
 def effective_tokens(rec, weights=None):
     """Cache-aware effective cost of one task, in fresh-input-token equivalents.
 
     Uses the token breakdown (input / cache_read / cache_creation / output) when
-    present; otherwise falls back to `tokens_total` at full weight (legacy rows).
+    present, with the 1-hour share of the cache writes at its own price where the row
+    and the weight table both name it; otherwise falls back to `tokens_total` at full weight (legacy rows).
     The weight table is chosen per row (weights_for) from its agent/model unless an
     explicit `weights=` is passed. Returns 0 when neither breakdown nor total exists.
     """
@@ -180,8 +258,10 @@ def effective_tokens(rec, weights=None):
         cr = rec.get("cache_read_input_tokens") or 0
         cw = rec.get("cache_creation_input_tokens") or 0
         ot = rec.get("output_tokens") or 0
+        cw1h = cache_write_1h_tokens(rec)
         return (it * w["input"] + cr * w["cache_read"]
-                + cw * w["cache_write"] + ot * w["output"])
+                + (cw - cw1h) * w["cache_write"]
+                + cw1h * w.get("cache_write_1h", w["cache_write"]) + ot * w["output"])
     tt = rec.get("tokens_total") if isinstance(rec, dict) else None
     return tt if isinstance(tt, (int, float)) else 0
 

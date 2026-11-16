@@ -32,10 +32,24 @@ so no extra API key is needed and the call is billed where the session is:
   * opencode: `opencode run --format json` in a throwaway directory, on the person's default
     model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
     1.x, `--standalone` on 2.x) and its session deleted afterwards.
+  * Grok: `grok -p <prompt> --output-format json` in a throwaway directory, on the person's default
+    model, with only the read-only `read_file` tool allowed (`--tools read_file`), grok's MCP
+    dispatchers removed (`--disallowed-tools`) and the shell, edit, write, web and subagent
+    tools denied (`--deny`); no approval flag is passed. It leaves a session under
+    `~/.grok/sessions/`, which no hook tracks (they do nothing under `TE_SIDECALL`).
+  * Antigravity: none. `agy` has no option that runs a turn without tools, and a side call's
+    prompt holds text a repository controls, so its micro-skills keep to the LLM-free facts and
+    its loop guard never asks a judge (`NO_SIDE_CALLS`).
   * Hermes: `hermes chat -Q --oneshot --source tool --ignore-rules --max-turns 1 -t bot_room` on
     the person's default model. Never `hermes -z`, which auto-approves dangerous commands: a side
     call's prompt holds text a repository controls, and this form offers it no tool. See
     `hermes_call` for why `TE_SIDECALL` is not how it avoids the plugin's hooks.
+  * Factory Droid: `droid exec --output-format json --disable-builtin-skills --only-tools Read`,
+    in a throwaway directory at Droid's default read-only autonomy, on the person's default
+    model, with only the read-only `Read` tool allowed. OFF unless `droid_sidecall` is on (or
+    `TE_DROID_SIDECALL=1`): Droid writes a session log of its own for the call, and cannot be
+    left with no tool at all. Its usage is read from the call's result or from the settings file
+    beside that log.
 
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
@@ -50,10 +64,18 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from .. import trace
 from . import accounting
+
+
+def _obj(v):
+    """`v` when it is a dict, else {}: agent CLI output is not schema-bound,
+    so a nested non-object where an object is expected must be skipped, not
+    trusted (#182)."""
+    return v if isinstance(v, dict) else {}
 
 TIMEOUT_S = 180
 
@@ -67,6 +89,42 @@ def _env():
 _SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed) in")
 
 
+def _log(text):
+    """One entry in the plugin's errors.log, which `te doctor` shows."""
+    import time
+    from .paths import state_root
+    try:
+        root = state_root()
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
+            fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} {text}")
+    except OSError:
+        pass
+
+
+def _noted(host, call):
+    """`call`, with a side call that raises noted in errors.log before it propagates. Both
+    callers catch it -- the judge records a short `runner-error`, the proposer skips its tick --
+    so without this note a CLI that keeps failing would leave no trace of why. One line, and
+    never the command: most hosts take the prompt on argv, a `TimeoutExpired` names its whole
+    command, and `te doctor` prints this file's tail."""
+    def run(prompt, model="agent"):
+        try:
+            return call(prompt, model)
+        except subprocess.TimeoutExpired as e:
+            _log(f"sidecall {host}: no reply (timed out after {e.timeout:g}s)\n")
+            raise
+        except subprocess.CalledProcessError as e:
+            _log(f"sidecall {host}: no reply (exit {e.returncode})\n")
+            raise
+        except Exception as e:
+            what = " ".join(str(e).split())[:200]
+            _log(f"sidecall {host}: failed ({type(e).__name__}: {what})\n")
+            raise
+    run.__wrapped__ = call
+    return run
+
+
 def _no_reply(host, out):
     """Note a side call that came back empty, which nothing else would show -- as under
     Copilot's BYOK, which does not pass the provider's variables to the hooks that start it.
@@ -76,12 +134,9 @@ def _no_reply(host, out):
     stderr = getattr(out, "stderr", "") or ""
     # Hermes says why on stdout, with a non-zero exit.
     tail = " ".join((stderr + " " + (getattr(out, "stdout", "") or "")).split())[-300:]
+    _log(f"sidecall {host}: no reply (exit {getattr(out, 'returncode', '?')}) {tail}\n")
     try:
         root = state_root()
-        os.makedirs(root, exist_ok=True)
-        with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
-            fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} sidecall {host}: no reply "
-                     f"(exit {getattr(out, 'returncode', '?')}) {tail}\n")
         if _SIGNED_OUT_RE.search(stderr + (getattr(out, "stdout", "") or "")):
             path = _pause_path(host, root)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -219,32 +274,51 @@ def claude_no_mcp(cli, cwd):
     return ["--strict-mcp-config", "--mcp-config", path]
 
 
-def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S):
+def claude_json(stdout):
+    """The result object of a `claude -p --output-format json` run, {} when there is none. With
+    `"verbose": true` in the person's settings (or `--verbose`), Claude Code prints the whole
+    event list instead -- `system`, `assistant`, ..., `result` -- and its `result` event carries
+    the fields the object would (#131). Taking the event, rather than passing
+    `--settings '{"verbose":false}'`, needs no probe of which flags this Claude Code has."""
+    try:
+        data = json.loads(stdout or "{}")
+    except ValueError:
+        return {}
+    if isinstance(data, list):
+        data = next((ev for ev in reversed(data)
+                     if isinstance(ev, dict) and ev.get("type") == "result"), {})
+    return data if isinstance(data, dict) else {}
+
+
+def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S, effort=""):
     cli = cli or claude_cli()
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         # `--mcp-config` takes several values, so an option follows it, never a bare argument.
         cmd = ([cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", ""]
-               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli))
+               + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli)
+               + (["--effort", effort] if effort and "--effort" in _claude_help(cli) else []))
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
                              cwd=cwd)
-    try:
-        data = json.loads(out.stdout or "{}")
-    except ValueError:
-        data = {}
-    if not data.get("result"):
+    data = claude_json(out.stdout)
+    # An error result carries its message as `result` ("... Please run /login"): not a reply,
+    # and a signed-out one pauses the host's side calls.
+    failed = data.get("is_error") or not data.get("result")
+    if failed:
         _no_reply("claude", out)
     usage = dict(data.get("usage") or {})
     usage["model"] = next(iter(data.get("modelUsage") or {}), None) or (model or "claude")
     eff, _ = accounting.effective(usage)
-    return data.get("result") or "", eff
+    return "" if failed else data["result"], eff
 
 
-def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
+def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S, effort=""):
     cmd = [*program(cli), "exec", "--json", "--disable", "hooks", "--ephemeral", "-s",
            "read-only", "--skip-git-repo-check"]
     if model:
         cmd += ["-m", model]
+    if effort:
+        cmd += ["-c", f'model_reasoning_effort="{effort}"']
     cmd.append(prompt)
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
         out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
@@ -255,11 +329,13 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
             ev = json.loads(line)
         except ValueError:
             continue
-        item = ev.get("item") or {}
+        if not isinstance(ev, dict):
+            continue
+        item = _obj(ev.get("item"))
         if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
-            text = ev["item"].get("text") or text
+            text = item.get("text") or text
         elif ev.get("type") == "turn.completed":
-            usage = ev.get("usage") or usage
+            usage = _obj(ev.get("usage")) or usage
     if not text:
         _no_reply("codex", out)
     eff = None
@@ -394,6 +470,42 @@ def cursor_call(prompt, model="", cli="cursor-agent", timeout=TIMEOUT_S):
     if not text:
         _no_reply("cursor", out)
     return text or "", None
+
+
+# A Grok side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. An allowlist fails closed where a deny list does not: `grok -p` runs in `auto`
+# permission mode, and a deny list naming a tool by a wrong name removes nothing (grok 1.0.70 ran
+# a shell command with `--disallowed-tools run_terminal_cmd`; its shell is `run_terminal_command`)
+# -- nor does `--tools ""`, which grok reads as no filter at all. `--tools` cannot be empty, so it
+# keeps the one read-only tool; `use_tool` / `search_tool`, the MCP dispatchers grok adds to any
+# allowlist, are removed, and deny rules back the shell and writers in case a tool is renamed.
+# Verified on 1.0.70: the session's tool_definitions.json lists only `read_file`, and a prompt
+# asking for a shell command and a file write leaves the directory untouched.
+GROK_TOOLS = "read_file"
+GROK_REMOVED = "use_tool,search_tool"
+GROK_DENY_RULES = ("Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task")
+
+
+def grok_call(prompt, model="", cli="grok", timeout=TIMEOUT_S):
+    """A side call through `grok -p --output-format json` in an empty throwaway directory, on the
+    person's default model unless `model` names one. Grok reports input without the cached
+    reads, as the ledger does."""
+    cmd = [*program(cli), "-p", prompt, "--output-format", "json", "--no-auto-update",
+           "--tools", GROK_TOOLS, "--disallowed-tools", GROK_REMOVED,
+           *(a for rule in GROK_DENY_RULES for a in ("--deny", rule))]
+    if model:
+        cmd += ["--model", model]
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+    text, usage = trace.grok_json_reply(out.stdout)
+    if not text:
+        _no_reply("grok", out)
+    eff = None
+    if usage:
+        usage["model"] = usage.get("model") or model or "grok"
+        eff, _ = accounting.effective(usage)
+    return text, eff
 
 
 HERMES_SOURCE = "tool"
@@ -630,8 +742,10 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
             ev = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
         if ev.get("type") == "assistant.message":
-            text = (ev.get("data") or {}).get("content") or text
+            text = _obj(ev.get("data")).get("content") or text
         elif ev.get("type") == "result":
             sid = ev.get("sessionId") or sid
     if not text:
@@ -646,9 +760,221 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
     return text, eff
 
 
+# Hosts the plugin makes no model call for: their CLI cannot run a prompt with every tool off.
+NO_SIDE_CALLS = frozenset({"antigravity"})
+
+
+# ---- an on-device model for some side calls (`local_model`, `local_roles`) -------------------
+# Apple's Foundation Models CLI, `/usr/bin/fm` on macOS 27 with Apple Intelligence on. It runs a
+# ~3B model on the Neural Engine and GPU with a 4,096-token window, needs no login or key, and
+# takes the prompt on stdin. `--schema` constrains its decoding to a JSON schema, which is what
+# makes the judge usable: in free text it often wraps or contradicts its verdict, under a schema
+# it returns the object every time. A call it cannot make returns None, and the caller falls back
+# to the agent's own CLI, so turning this on never costs a verdict.
+
+# Apple's Foundation Models CLI: macOS 27 ships it here, so it is run by this path, never looked
+# up on PATH, and only on macOS.
+FM_CLI = "/usr/bin/fm"
+FM_TIMEOUT_S = 60
+# The judge's verdict, as `loopguard.judge.llm_stuck_judge` parses it.
+JUDGE_SCHEMA = {
+    "title": "Verdict", "type": "object", "additionalProperties": False,
+    "x-order": ["stuck", "confidence", "reason"], "required": ["stuck", "confidence", "reason"],
+    "properties": {
+        "stuck": {"type": "boolean"},
+        "confidence": {"type": "number", "description": "0.0 to 1.0"},
+        "reason": {"type": "string", "description": "short leakage-safe justification"}}}
+ROLE_SCHEMAS = {"judge": JUDGE_SCHEMA}
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_fm_ok = {}
+
+
+def _macos():
+    return sys.platform == "darwin"
+
+
+def local_routes(role, config):
+    """Whether `local_model` sends `role`'s side call on-device: the settings and the platform
+    alone, no subprocess, so a hook can ask on every tool call. Whether the model answers is
+    `fm_available`'s to say, in the judge's own job."""
+    return (_macos() and getattr(config, "local_model", "off") == "fm"
+            and role in (getattr(config, "local_roles", None) or ()))
+
+
+def fm_available(cli=FM_CLI):
+    """Whether `fm` is installed (macOS only) and reports its on-device model available (once
+    per process)."""
+    if cli not in _fm_ok:
+        ok = False
+        if _macos() and os.access(cli, os.X_OK):
+            try:
+                out = subprocess.run([cli, "available"], capture_output=True, encoding="utf-8",
+                                     errors="replace", timeout=30, env=_env(),
+                                     stdin=subprocess.DEVNULL)
+                ok = out.returncode == 0 and "unavailable" not in (out.stdout or "").lower()
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+        _fm_ok[cli] = ok
+    return _fm_ok[cli]
+
+
+def fm_call(prompt, schema=None, cli=FM_CLI, timeout=FM_TIMEOUT_S):
+    """(text, 0) from the on-device model, or (None, 0) when it gave no usable reply. Greedy
+    decoding, so the same digest gets the same verdict; `schema` (a JSON schema dict) constrains
+    the output. A prompt over the model's window fails here and falls back."""
+    with tempfile.TemporaryDirectory(prefix="te-fm-", ignore_cleanup_errors=True) as tmp:
+        cmd = [cli, "respond", "--no-stream", "--greedy"]
+        if schema:
+            path = os.path.join(tmp, "schema.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(schema, fh)
+            cmd += ["--schema", path]
+        try:
+            out = subprocess.run(cmd, input=prompt, capture_output=True, encoding="utf-8",
+                                 errors="replace", timeout=timeout, env=_env(), cwd=tmp)
+        except (OSError, subprocess.SubprocessError) as e:
+            _log(f"sidecall fm: no reply ({type(e).__name__})\n")
+            return None, 0
+    text = _ANSI_RE.sub("", out.stdout or "").strip()
+    if out.returncode != 0 or not text or text.startswith("Error:"):
+        err = _ANSI_RE.sub("", (out.stderr or out.stdout or "").strip())[:200]
+        _log(f"sidecall fm: no reply (exit {out.returncode}): {err}\n")
+        return None, 0
+    return text, 0
+
+
+def local_runner(role, config, fallback=None):
+    """The side-call runner for `role` when `local_model` routes it on-device, else None. On a
+    failed local call the runner tries `fallback` (the agent's own runner), so a turned-on local
+    model never loses a verdict; with no fallback (a host in `NO_SIDE_CALLS`) it returns ''."""
+    if not local_routes(role, config) or not fm_available():
+        return None
+    schema = ROLE_SCHEMAS.get(role)
+
+    def run(prompt, model="agent"):
+        text, eff = fm_call(prompt, schema=schema)
+        run.answered_locally = text is not None
+        if text is not None:
+            return text, eff
+        return fallback(prompt, model) if fallback is not None else ("", 0)
+    run.local = "fm"
+    run.answered_locally = False
+    return run
+
+
+def droid_enabled(env=None):
+    """Whether `TE_DROID_SIDECALL` allows Droid side calls. The `droid_sidecall` setting does
+    the same from the config file, which is the only way from the desktop app. They are OFF by
+    default: `droid exec` writes a session log of its own under `~/.factory/sessions`, so a
+    person enables them knowingly."""
+    env = os.environ if env is None else env
+    return str(env.get("TE_DROID_SIDECALL") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _droid_sessions_root():
+    return os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
+        os.path.expanduser("~"), ".factory", "sessions")
+
+
+def _droid_usage(d):
+    """A Droid usage object (camelCase from its settings, snake_case from `exec`) as the
+    breakdown `accounting.effective` reads."""
+    if not isinstance(d, dict):
+        return None
+
+    def key(camel, snake):
+        return d.get(snake, d.get(camel))
+    usage = {"input_tokens": key("inputTokens", "input_tokens"),
+             "cache_read_input_tokens": key("cacheReadTokens", "cache_read_input_tokens"),
+             "cache_creation_input_tokens": key("cacheCreationTokens",
+                                                "cache_creation_input_tokens"),
+             "output_tokens": key("outputTokens", "output_tokens"),
+             "model": d.get("model")}
+    return usage if usage["input_tokens"] is not None else None
+
+
+def _droid_settings_usage(sid):
+    """The usage Droid wrote beside a side call's own session log, or None."""
+    if not sid:
+        return None
+    root = _droid_sessions_root()
+    try:
+        folders = os.listdir(root)
+    except OSError:
+        return None
+    for folder in folders:
+        path = os.path.join(root, folder, f"{sid}.settings.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        return _droid_usage(dict(data.get("tokenUsage") or {}, model=data.get("model")))
+    return None
+
+
+# A Droid side call only answers, and its prompt quotes commands the session ran, so it must not
+# be able to act. Droid's default read-only autonomy still lists `Execute`, the web tools and every
+# MCP tool as allowed (0.233.0, `droid exec --list-tools`), so the call names its tools with
+# `--only-tools`, an allowlist. It cannot be empty -- `--only-tools ""` reads as no filter, and a
+# name droid does not know is refused -- so it keeps the one read-only tool, as Grok's does.
+# Verified on 0.233.0: with the call's own flags, `--list-tools` reports `Read` as the only
+# tool allowed, MCP tools included.
+DROID_TOOLS = "Read"
+
+
+def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
+    """A text-only completion through `droid exec`, in a throwaway directory, with only the
+    read-only `Read` tool allowed (`--only-tools`, see `DROID_TOOLS`).
+
+    Droid cannot be left with no tool at all, and `droid exec` writes a session log of its own,
+    so this is off unless the person turns it on (`droid_enabled`, or the `droid_sidecall`
+    setting). `TE_SIDECALL=1` makes this plugin's own hooks no-ops inside the nested session, so
+    a side call cannot recurse. Its own usage is read from the `exec` result or from the
+    settings file beside the session it wrote, so the call is charged rather than guessed."""
+    cmd = [*program(cli), "exec", "--output-format", "json", "--disable-builtin-skills",
+           "--only-tools", DROID_TOOLS, "--append-system-prompt",
+           "Answer with text only. Do not call any tool. Your entire reply is the answer."]
+    if model:
+        cmd += ["--model", model]
+    cmd.append(prompt)
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=timeout, env=_env(), cwd=cwd,
+                             stdin=subprocess.DEVNULL)
+    text, sid, usage = "", "", None
+    for line in (out.stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        sid = ev.get("session_id") or sid
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        usage = _droid_usage(ev.get("usage")) or _droid_usage(data.get("usage")) or usage
+        for key in ("result", "text", "message"):
+            if isinstance(ev.get(key), str) and ev[key].strip():
+                text = ev[key]
+        for key in ("content", "result", "text"):
+            if isinstance(data.get(key), str) and data[key].strip():
+                text = data[key]
+    if not text and (out.stdout or "").strip():
+        # `--output-format json` that answers plain text (an older build): take it as-is.
+        text = out.stdout.strip()
+    if not text:
+        _no_reply("droid", out)
+    eff = None
+    usage = usage or _droid_settings_usage(sid)
+    if usage:
+        usage.setdefault("model", model or None)
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
-_CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
-          "hermes": "hermes chat"}
+_CALLS = {"codex": "codex exec", "droid": "droid exec", "opencode": "opencode run",
+          "cursor": "cursor-agent -p", "hermes": "hermes chat"}
 
 
 def call_name(host_name):
@@ -656,11 +982,30 @@ def call_name(host_name):
     return _CALLS.get(host_name, f"{host_name} -p")
 
 
-def runner_for(host_name, config):
+def runner_for(host_name, config, role=None):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
-    when micro-skills is on, the loop guard's judge when the guard is."""
-    model = config.paid_model
+    when micro-skills is on, the loop guard's judge when the guard is. None for a host in
+    `NO_SIDE_CALLS`. A call that raises is noted in errors.log (`_noted`).
+
+    `role` (`judge`, `nudge`, `proposer`) lets `local_model` run that call on-device instead
+    (`local_runner`), falling back to the host's CLI when the local call fails; on a host in
+    `NO_SIDE_CALLS` the local model is the only runner."""
+    call = _host_call(host_name, config)
+    host = None if call is None else _noted(host_name, call)
+    if role is not None:
+        local = local_runner(role, config, fallback=host)
+        if local is not None:
+            return local
+    return host
+
+
+def _host_call(host_name, config):
+    if host_name in NO_SIDE_CALLS:
+        return None
+    model = getattr(config, f"{host_name}_paid_model", "") or config.paid_model
+    effort = getattr(config, f"{host_name}_paid_effort", "")
+    kw = {"effort": effort} if effort else {}
     if host_name == "pi":
         cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"
         extensions = list(config.pi_extensions)
@@ -670,11 +1015,20 @@ def runner_for(host_name, config):
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "cursor":
         return lambda prompt, _m="agent": cursor_call(prompt, model=model)
+    if host_name == "grok":
+        return lambda prompt, _m="agent": grok_call(prompt, model=model)
     if host_name == "hermes":
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
     if host_name == "codex":
-        return lambda prompt, _m="agent": codex_call(prompt, model=model)
+        return lambda prompt, _m="agent": codex_call(prompt, model=model, **kw)
     if host_name == "copilot":
         return lambda prompt, _m="agent": copilot_call(prompt, model=model)
-    return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku")
+    if host_name == "droid":
+        # Off unless the person turned it on, by the setting or the variable: see
+        # `droid_enabled`. No runner means the free layer still learns; only the paid proposer
+        # and the judge wait.
+        if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
+            return None
+        return lambda prompt, _m="agent": droid_call(prompt, model=model)
+    return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku", **kw)

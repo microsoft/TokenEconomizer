@@ -8,7 +8,7 @@ readers already handle, so no mechanism needs a Pi branch.
 
 Usage, per pi-ai's own type: `input` excludes the cache fields, `output` already includes
 reasoning, and `cacheWrite1h` is a subset of `cacheWrite` -- so the mapping to the ledger's four
-fields is direct.
+fields is direct, and `cacheWrite1h` is their 1-hour share (`cache_creation_1h_input_tokens`).
 """
 import json
 import os
@@ -55,6 +55,7 @@ def _pi_usage(u):
             "cache_read_input_tokens": int(u.get("cacheRead") or 0),
             "cache_creation_input_tokens": int(u.get("cacheWrite") or 0),
             "output_tokens": int(u.get("output") or 0),
+            "cache_creation_1h_input_tokens": int(u.get("cacheWrite1h") or 0),
             "cost_usd": float((u.get("cost") or {}).get("total") or 0)}
 
 
@@ -139,7 +140,8 @@ def pi_json_reply(stdout):
 def pi_session_usage(path):
     """Token breakdown of a Pi session's active branch, plus Pi's own cost estimate."""
     totals = {"input_tokens": 0, "cache_read_input_tokens": 0,
-              "cache_creation_input_tokens": 0, "output_tokens": 0}
+              "cache_creation_input_tokens": 0, "output_tokens": 0,
+              "cache_creation_1h_input_tokens": 0}
     cost, requests, models = 0.0, 0, {}
     for e in pi_active_branch(_pi_entries(path)):
         u = None

@@ -74,6 +74,8 @@ def response_text(resp, cap=RESULT_CAP):
         return "\n".join(x.get("text", "") if isinstance(x, dict) else str(x)
                          for x in resp)[:cap]
     if isinstance(resp, dict):
+        if "structuredPatch" in resp:
+            return ""
         parts = []
         for k in _RESPONSE_KEYS:
             v = resp.get(k)
@@ -81,9 +83,7 @@ def response_text(resp, cap=RESULT_CAP):
                 parts.append(v)
             elif isinstance(v, list):
                 parts.append("\n".join(x.get("text", "") for x in v if isinstance(x, dict)))
-        if parts:
-            return "\n".join(parts)[:cap]
-        return json.dumps(resp, sort_keys=True)[:cap]
+        return "\n".join(parts)[:cap]
     return str(resp)[:cap]
 
 
@@ -228,6 +228,31 @@ class Host:
         [{"session_id", "folder", "path", "mtime", "size"}]. Nothing, where the agent keeps none
         the plugin reads."""
         return []
+
+    # -- the session-log details the history import reads ---------------------------------
+    def log_head(self, path):
+        """`{cwd, started, entrypoint?}` for a session log: the header the import filters on."""
+        return trace.claude_log_head(path)
+
+    def safe_session_id(self, sid):
+        return trace.claude_safe_session_id(sid)
+
+    def prompt_turns(self, path):
+        return trace.claude_prompt_turns(path)
+
+    def turn_calls(self, turn_lines):
+        return trace.claude_calls(turn_lines)
+
+    def turn_interrupted(self, turn_lines):
+        return trace.claude_turn_interrupted(turn_lines)
+
+    def turn_answered(self, turn_lines):
+        return trace.claude_turn_answered(turn_lines)
+
+    def folder_matches(self, root, folder):
+        """Does a log's folder name this repository's root, when the log's cwd is gone?"""
+        return folder in {trace.claude_project_folder(root),
+                          trace.claude_project_folder(os.path.realpath(root))}
 
 
 def _failure_response(p):
@@ -773,6 +798,333 @@ class Hermes(Host):
         return trace.hermes_session_usage(transcript_path)
 
 
+class Antigravity(Host):
+    """Antigravity CLI (`agy`), through the plugin's `hooks.json` (verified on 1.5.1).
+
+    agy's hook contract differs from the shared one, so this adapter translates both ways:
+
+      * Payloads are camelCase and name no event; the hook file's command names it (`--event`).
+        `SessionStart`, `PreInvocation` (before every model call) and `Stop` are the events used.
+        A `PreToolUse` hook is never registered: one that prints `{}` makes agy deny the tool.
+        `PostToolUse` is not needed -- its payload holds no tool result, and the transcript, which
+        has every result of the previous model call by the next `PreInvocation`, does.
+      * There is no prompt event either. `PreInvocation` with `invocationNum` 0 (a number protojson
+        leaves out of the payload) is the first model call of a prompt, with the prompt in
+        `lastUserInput`. `expand` turns one agy call into the controller's events: the results the
+        transcript gained since the last call become `PostToolUse` events (those of a turn that
+        just ended before the new prompt's `UserPromptSubmit`), and `Stop` closes the turn.
+      * Output is `injectSteps`: a persistent `systemMessage` step at `SessionStart`, an
+        `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Nothing reaches the
+        person from a hook, so a notice goes through the model (`relay`), as on Cursor.
+      * There is no `SessionEnd`: a conversation is folded by the next session start in its
+        repository once its transcript has been quiet for `fold.STALE_S`.
+
+    The cursor into the transcript, the turn counter and nothing else are kept per conversation
+    in `<state root>/antigravity-sessions/`. Tool pruning is not supported, and subagents' calls
+    are not in the transcript, so they are not seen.
+    """
+    name = "antigravity"
+    # The only prompt-time channel is the ephemeral message, which agy drops after the turn: the
+    # repository map goes in at SessionStart, where it persists.
+    prompt_context = False
+    relays_notices = True
+    interrupt = "Press Esc to cancel the turn."
+    end_run = "Press Ctrl+C to end the run."
+    STATE_DIR = "antigravity-sessions"
+    STATE_KEEP_S = 30 * 86400
+
+    def session_id(self, p):
+        return str(p.get("session_id") or p.get("conversationId") or "")
+
+    def transcript(self, p):
+        return p.get("transcript_path") or p.get("transcriptPath") or ""
+
+    def cwd(self, p, env):
+        roots = p.get("workspacePaths")
+        root = roots[0] if isinstance(roots, list) and roots else ""
+        return p.get("cwd") or root or os.getcwd()
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def context(self, event, text):
+        return {"additionalContext": text}
+
+    def notice(self, text):
+        return {"additionalContext": self.relay(text)}
+
+    def stopped_normally(self, p):
+        return (p or {}).get("terminationReason") == "NO_TOOL_CALL"
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        resp = p.get("tool_response")
+        if code is None and isinstance(resp, dict) and resp.get("isError"):
+            code = 1                # a step agy marks as failed, whatever it printed
+        return name, args, text, code
+
+    # -- one agy hook call -> the controller's events -------------------------------------
+    def _state_path(self, env, cid):
+        from .paths import state_root
+        return os.path.join(state_root(env), self.STATE_DIR, cid + ".json")
+
+    def _load(self, env, cid):
+        try:
+            with open(self._state_path(env, cid), encoding="utf-8") as fh:
+                st = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return st if isinstance(st, dict) else None
+
+    def _save(self, env, cid, st):
+        path = self._state_path(env, cid)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(st, fh)
+        os.replace(tmp, path)
+
+    def _prune(self, env):
+        """Forget cursors of conversations nobody has used for `STATE_KEEP_S`."""
+        folder = os.path.dirname(self._state_path(env, "x"))
+        try:
+            for name in os.listdir(folder):
+                path = os.path.join(folder, name)
+                if time.time() - os.path.getmtime(path) > self.STATE_KEEP_S:
+                    os.remove(path)
+        except OSError:
+            pass
+
+    def expand(self, payload, env):
+        """The controller events one agy hook call stands for, in order; see the class."""
+        event = payload.get("hook_event_name")
+        cid = trace.claude_safe_session_id(self.session_id(payload))
+        if event not in ("SessionStart", "PreInvocation", "Stop") or not cid:
+            return []
+        base = {"session_id": cid, "cwd": self.cwd(payload, env),
+                "transcript_path": self.transcript(payload)}
+        if event == "SessionStart":
+            self._prune(env)
+            if self._load(env, cid) is None:
+                self._save(env, cid, self._fresh(base["transcript_path"]))
+            return [dict(base, hook_event_name="SessionStart", source="startup")]
+        # The first call of a prompt carries no `invocationNum` (protojson drops a zero).
+        first = event == "PreInvocation" and not payload.get("invocationNum")
+        st = self._load(env, cid)
+        path = base["transcript_path"]
+        out, items = [], []
+        if st is None:
+            st = self._fresh(path)
+        else:
+            items, st["offset"], st["last_step_index"] = trace.antigravity_read(
+                path, int(st.get("offset") or 0), int(st.get("last_step_index", -1)),
+                final=first or event == "Stop")
+        key = f"{cid}:{st['turn_seq']}"
+        for item in (i for i in items if i["kind"] == "tool"):
+            out.append(dict(base, hook_event_name="PostToolUse", prompt_id=key,
+                            tool_name=item["name"], tool_input=item["args"],
+                            tool_response={"content": item["content"][:RESULT_CAP],
+                                           "exit_code": item["exit_code"],
+                                           "isError": item["is_error"]}))
+        if first:
+            st["turn_seq"] = int(st.get("turn_seq") or 0) + 1
+            out.append(dict(base, hook_event_name="UserPromptSubmit",
+                            prompt=str(payload.get("lastUserInput") or ""),
+                            prompt_id=f"{cid}:{st['turn_seq']}"))
+        elif event == "Stop":
+            out.append(dict(base, hook_event_name="Stop",
+                            terminationReason=payload.get("terminationReason")))
+        self._save(env, cid, st)
+        return out
+
+    @staticmethod
+    def _fresh(path):
+        """The state of a conversation first seen now. Reading starts at the transcript's current
+        end, so a resumed conversation's earlier steps are not replayed as if they just happened."""
+        try:
+            size = os.path.getsize(path)
+        except (OSError, TypeError):
+            size = 0
+        return {"offset": size, "last_step_index": -1, "turn_seq": 0}
+
+    def render(self, payload, out, ctx=None):
+        """agy's answer to this hook call, from the controller's merged output."""
+        event = payload.get("hook_event_name")
+        hso = out.get("hookSpecificOutput")
+        parts = [hso.get("additionalContext") if isinstance(hso, dict) else None,
+                 out.get("additionalContext"), out.get("systemMessage")]
+        text = "\n\n".join(t for t in parts if t)
+        if not text or event == "Stop":
+            return {}
+        if event == "SessionStart":
+            return {"injectSteps": [{"systemMessage": {"systemMessage": text}}]}
+        return {"injectSteps": [{"ephemeralMessage": text}]}
+
+    # -- the finished session, in the shapes the mechanisms read --------------------------
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "antigravity_trace.jsonl")
+        n = trace.antigravity_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.antigravity_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.antigravity_session_usage(transcript_path)
+
+
+class Grok(Host):
+    """The Grok Build CLI (`grok`, xAI), verified on 1.0.70.
+
+    grok runs Claude Code plugins, hooks included, so the Claude hook file reaches it with no
+    `--host`; `detect` recognises it by what only grok sends. Every payload carries both
+    spellings of each field -- grok's camelCase (`hookEventName` = `post_tool_use`, `sessionId`,
+    `toolName`, `toolResult`, `promptId`) and Claude's aliases -- and `prepare` settles on the
+    aliases, so the controller sees Claude's shape. What differs:
+
+      * The model hears only a `PostToolUse` / `PostToolUseFailure` hook's
+        `hookSpecificOutput.additionalContext`. `SessionStart` reads only a top-level
+        `systemMessage`, which the person sees and the model does not, and an allowing
+        `UserPromptSubmit` hook's output is discarded. So the start context is set aside at
+        SessionStart and added to the session's first tool result (`render`); its reminder is a
+        message in the saved conversation, which a resumed session loads again
+        (`keeps_start_context`).
+      * `promptId` is on `UserPromptSubmit` and `Stop` but not on tool events, so the turn stays
+        open from the prompt to the Stop whatever the tool events say.
+      * At the end of a session grok fires a second, observe-only `Stop` (reason `shutdown`, no
+        `promptId`); only a `Stop` with reason `end_turn` is a turn's end. `StopCancelled`
+        (interrupt, declined permission, turn limit) and `StopFailure` (an API error) stand for
+        a turn that did not stop normally. The Claude hook file registers neither, so a turn
+        like that is closed by the next prompt, as on Claude Code.
+      * A shell result's `output` is a list of byte values; `trace.grok_result` reads the text
+        grok showed the model (`output_for_prompt`) and the `exit_code`.
+      * A hook's `systemMessage` is documented as shown only for `SessionStart`, so a notice
+        that must reach the person on a tool event also goes through the model.
+    """
+    name = "grok"
+    prompt_context = False             # an allowing UserPromptSubmit hook's output is discarded
+    relays_notices = True
+    interrupt = "Press Ctrl+C to cancel the turn (Esc does not cancel it)."
+    end_run = "Press Ctrl+C to end the run."
+    CONTEXT_CAP = 10000                # grok clips a hook's additionalContext here
+
+    _EVENTS = {"session_start": "SessionStart", "user_prompt_submit": "UserPromptSubmit",
+               "post_tool_use": "PostToolUse", "post_tool_use_failure": "PostToolUseFailure",
+               "stop": "Stop", "stop_cancelled": "StopCancelled", "stop_failure": "StopFailure",
+               "session_end": "SessionEnd", **{e: e for e in (
+                   "SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure",
+                   "Stop", "StopCancelled", "StopFailure", "SessionEnd")}}
+
+    def env_session_id(self, env):
+        return str(env.get("TE_SESSION_ID") or env.get("GROK_SESSION_ID") or "")
+
+    def turn_key(self, p):
+        return str(p.get("promptId") or p.get("prompt_id") or "")
+
+    def is_subagent(self, p):
+        return bool(p.get("subagentType") or p.get("agent_id"))
+
+    def prepare(self, payload, env):
+        p = dict(payload or {})
+        event = self._EVENTS.get(str(p.get("hookEventName") or p.get("hook_event_name") or ""), "")
+        for alias, own in (("session_id", "sessionId"), ("transcript_path", "transcriptPath"),
+                           ("tool_name", "toolName"), ("tool_input", "toolInput"),
+                           ("tool_response", "toolResult"), ("prompt_id", "promptId")):
+            if p.get(alias) in (None, ""):
+                p[alias] = p.get(own)
+        if not p.get("session_id"):
+            p["session_id"] = env.get("GROK_SESSION_ID") or ""
+        if event == "Stop":
+            if p.get("reason") != "end_turn" or not p.get("prompt_id"):
+                event = ""             # the observe-only Stop at session end
+        elif event in ("StopCancelled", "StopFailure"):
+            p["reason"] = "api_error" if event == "StopFailure" else str(
+                p.get("reason") or "cancelled")
+            event = "Stop"
+        p["hook_event_name"] = event
+        return p
+
+    def stopped_normally(self, p):
+        return (p or {}).get("reason") == "end_turn"
+
+    def tool_call(self, p):
+        name, args = trace.grok_tool(str(p.get("tool_name") or ""), p.get("tool_input"))
+        resp = _failure_response(p) or p.get("tool_response")
+        parsed = trace.grok_result(resp)
+        if parsed is None:             # a plain-text result, or a failure's error text
+            return name, args, response_text(resp), _exit_code(resp)
+        return name, args, parsed[0][:RESULT_CAP], parsed[1]
+
+    # -- the start context, set aside at SessionStart and added to the first tool result ------
+    def _spool(self, payload, env):
+        from .paths import state_root
+        return os.path.join(state_root(env), "grok-start",
+                            re.sub(r"[^\w.-]", "_", self.session_id(payload)) + ".txt")
+
+    def render(self, payload, out, ctx):
+        """`out`, the controller's answer, as grok reads it: SessionStart's context (grok ignores
+        it there) is saved, and the session's first PostToolUse / PostToolUseFailure delivers it
+        once, ahead of that call's own context, within grok's cap. A failure to save it leaves
+        the session without it, as any hook failure does."""
+        event = payload.get("hook_event_name")
+        if not self.session_id(payload) or event not in (
+                "SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"):
+            return out
+        path = self._spool(payload, ctx.env)
+        if event == "SessionStart":
+            hso = out.get("hookSpecificOutput")
+            text = hso.pop("additionalContext", "") if isinstance(hso, dict) else ""
+            if isinstance(hso, dict) and not set(hso) - {"hookEventName"}:
+                out.pop("hookSpecificOutput")
+            try:
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                if text:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(text)
+                    os.chmod(path, 0o600)
+                else:
+                    os.remove(path)
+            except OSError:
+                pass
+            return out
+        if event == "SessionEnd" or self.is_subagent(payload):
+            if event == "SessionEnd":
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return out
+        claimed = f"{path}.{os.getpid()}"      # a rename is atomic: parallel hooks deliver once
+        try:
+            os.replace(path, claimed)
+            with open(claimed, encoding="utf-8") as fh:
+                start = fh.read()
+            os.remove(claimed)
+        except OSError:
+            return out
+        hso = out.setdefault("hookSpecificOutput", {})
+        rest = hso.get("additionalContext") or ""
+        if start.strip():
+            room = max(0, self.CONTEXT_CAP - len(rest) - (2 if rest else 0))
+            hso.update(hookEventName=event,
+                       additionalContext=start[:room] + ("\n\n" + rest if rest else ""))
+        elif not hso:
+            out.pop("hookSpecificOutput")
+        return out
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "grok_trace.jsonl")
+        n = trace.grok_session_to_claude(transcript_path, out) if transcript_path else None
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.grok_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.grok_session_usage(transcript_path)
+
+
 def copilot_home(env=None):
     env = os.environ if env is None else env
     return env.get("COPILOT_HOME") or os.path.join(os.path.expanduser("~"), ".copilot")
@@ -864,8 +1216,110 @@ def _ancestor_args(limit=4):
     return out
 
 
-HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
-         "pi": Pi, "cursor": Cursor, "hermes": Hermes}
+_DROID_SHELL = {"execute", "script"}
+_DROID_EDIT = {"edit", "multiedit", "str_replace"}
+_DROID_CREATE = {"create", "write"}
+
+
+class Droid(Host):
+    """Factory Droid, through `plugin/.factory-plugin/` and its `hooks/hooks.json`.
+
+    Droid runs the Claude-shaped hook contract (`session_id`, `transcript_path`, `cwd`,
+    `hook_event_name`) with its own tool names, and documents the same context channels:
+    `hookSpecificOutput.additionalContext` from SessionStart, `additionalContext` from
+    UserPromptSubmit and PostToolUse. It documents no `systemMessage` and no
+    `PostToolUseFailure`: a failed tool is a `tool_result.is_error` block in the session log,
+    and a hook message is only visible in Droid's detailed transcript view. Notices therefore
+    go through the model (`relays_notices`), never into the person's context as plugin chatter.
+
+    The session log is `~/.factory/sessions/<workspace>/<session-id>.jsonl`; its blocks are
+    Claude Code's, so `trace.droid_session_to_claude` unwraps the message records and the
+    existing readers take it from there. Usage lives beside it in `<session id>.settings.json`
+    (`trace.droid_session_usage`), so a folded session is priced like any other.
+
+    The TUI has no persistent per-tool setting (`droid exec --only-tools` has no interactive
+    equivalent; Factory issue #65), so tool pruning is not available here: `denylist.supports`
+    says so and the controller writes nothing.
+    """
+    name = "droid"
+    # Droid documents no interrupt key beyond its own UI; this is the generic instruction.
+    interrupt = "Interrupt the agent to stop it."
+    prompt_context = True              # documented: UserPromptSubmit additionalContext
+    relays_notices = True
+    keeps_history = True
+
+    def notice(self, text):
+        # No `systemMessage` in Droid's contract; stdout of a hook is only in the detailed
+        # transcript view. The controller relays an abort through the model when
+        # `relays_notices` is set, so this stays empty rather than adding plugin chatter.
+        return {}
+
+    def env_session_id(self, env):
+        return str(env.get("TE_SESSION_ID") or env.get("FACTORY_SESSION_ID") or "")
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        low = name.lower()
+        if low in _DROID_SHELL:
+            cmd = args.get("command", args.get("script", ""))
+            return "bash", {"command": str(cmd or "")}, text, code
+        if low in _DROID_CREATE or low in _DROID_EDIT:
+            path = args.get("file_path") or args.get("path") or ""
+            return ("create" if low in _DROID_CREATE else "edit"), dict(args, path=path), text, code
+        if low in ("applypatch", "apply_patch"):
+            patch = next((v for v in (args.get("input"), args.get("patch"), args.get("command"))
+                          if isinstance(v, str)), "")
+            paths = _PATCH_FILE_RE.findall(patch)
+            return "edit", {"path": paths[0] if paths else "", "paths": paths}, text, code
+        return name, args, text, code
+
+    def headless(self, env, transcript=None):
+        # Droid does not publish a mode marker on the hook's environment; a TUI session is the
+        # default, and the wrong guess only changes the wording of an abort notice.
+        return False
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "droid_trace.jsonl")
+        n = trace.droid_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def session_usage(self, transcript_path):
+        return trace.droid_session_usage(transcript_path)
+
+    def prompt_count(self, transcript_path):
+        return trace.droid_prompt_count(transcript_path)
+
+    # -- the history import --------------------------------------------------------------
+    def history(self, env, extra_dirs=()):
+        """Every top-level session under `$DROID_SESSIONS_DIR` (else `~/.factory/sessions`),
+        newest last. Subagent sessions are left out: they carry `callingSessionId` and are part
+        of the session that launched them."""
+        rows = []
+        for row in trace.droid_sessions(None, env):
+            if row.get("parent"):
+                continue
+            rows.append({"session_id": row["id"], "folder": row.get("folder"),
+                         "path": row["path"], "mtime": row["mtime"], "size": row["size"]})
+        return rows
+
+    def log_head(self, path):
+        return trace.droid_log_head(path)
+
+    def safe_session_id(self, sid):
+        return trace.droid_safe_session_id(sid)
+
+    def prompt_turns(self, path):
+        return trace.droid_prompt_turns(path)
+
+    def folder_matches(self, root, folder):
+        # Droid files a session under its workspace path with every separator written as `-`:
+        # `/Users/me/repo` becomes `-Users-me-repo`. Only asked when the recorded cwd is gone.
+        return folder == os.path.abspath(root).replace("\\", "-").replace("/", "-")
+
+
+HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
+         "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
+         "antigravity": Antigravity}
 
 
 def default_host(env=None, recent=None):
@@ -882,6 +1336,12 @@ def default_host(env=None, recent=None):
         return "copilot"
     if env.get("CURSOR_AGENT") or env.get("CURSOR_PROJECT_DIR"):
         return "cursor"
+    if env.get("GROK_SESSION_ID"):
+        return "grok"
+    # Droid marks its shell with the session it runs; checked last, so an agent started from
+    # inside Droid is read as its own host.
+    if env.get("FACTORY_SESSION_ID") or env.get("DROID_PLUGIN_ROOT"):
+        return "droid"
     return recent if recent in HOSTS else "claude"
 
 
@@ -889,14 +1349,29 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
-    if "turn_id" in (payload or {}):
-        return Codex()
+    if (payload or {}).get("conversationId") and "/antigravity" in str(
+            payload.get("transcriptPath") or "").replace("\\", "/"):
+        return Antigravity()
     tp = str((payload or {}).get("transcript_path") or "")
     sp = tp.replace("\\", "/")              # a Windows path, with either separator
+    # grok runs Claude Code's plugin hooks, with no `--host`, so it is told from Claude Code
+    # first: it alone sends `hookEventName` and keeps its sessions under `~/.grok/sessions`. Its
+    # environment names it too, but hooks inherit the parent's environment (a Claude Code
+    # started from a grok shell), so the environment decides only where no transcript says.
+    if ("hookEventName" in (payload or {}) or "/.grok/sessions/" in sp
+            or (not tp and any((env or {}).get(k) for k in ("GROK_HOOK_EVENT", "GROK_SESSION_ID")))):
+        return Grok()
+    if "turn_id" in (payload or {}):
+        return Codex()
     if sp.rsplit("/", 1)[-1].startswith("rollout-") or "/.codex/" in sp:
         return Codex()
     if "/session-state/" in sp and tp.endswith("events.jsonl"):
         return Copilot()
+    # Droid's sessions live under `.factory/sessions/<workspace>/<id>.jsonl`; its plugin hooks
+    # also mark the environment. The transcript test comes first, so a Droid session started
+    # from inside another agent is still Droid's.
+    if "/.factory/sessions/" in sp or (not tp and (env or {}).get("DROID_PLUGIN_ROOT")):
+        return Droid()
     # Claude Code always sends a transcript path; Copilot sends none before Stop, and marks its
     # hook processes. (Hooks inherit the parent's environment, so the marker alone would also
     # tag a Claude Code session started from inside Copilot -- hence the transcript test first.)

@@ -155,14 +155,13 @@ def _identity(cwd, env, cache):
 
 def is_this_repository(ctx, folder, cwd, cache=None):
     """Is a log filed under `folder` that names `cwd` a session of this repository? Its recorded
-    directory decides, keyed as a live session's is; only where that directory is gone, an
-    exact match of the folder with the one Claude Code derives from the repository's root."""
+    directory decides, keyed as a live session's is; only where that directory is gone, the
+    host's own folder rule decides (Claude Code's derived project folder, Droid's encoded
+    workspace name)."""
     cache = {} if cache is None else cache
     if cwd and os.path.isdir(cwd):
         return _identity(cwd, ctx.env, cache) == ctx.repo.key
-    root = ctx.repo.root
-    names = {trace.claude_project_folder(root), trace.claude_project_folder(os.path.realpath(root))}
-    return folder in names
+    return ctx.host.folder_matches(ctx.repo.root, folder)
 
 
 def _headless(head, prompts):
@@ -184,10 +183,10 @@ def plan(ctx, now=None):
     def skip(why):
         skipped[why] = skipped.get(why, 0) + 1
     for log in ctx.host.history(ctx.env, cfg.history_dirs):
-        head = trace.claude_log_head(log["path"])
+        head = ctx.host.log_head(log["path"])
         if not is_this_repository(ctx, log["folder"], head.get("cwd"), cache):
             continue
-        sid = trace.claude_safe_session_id(log["session_id"])
+        sid = ctx.host.safe_session_id(log["session_id"])
         mtime, size = log["mtime"], log["size"]
         if sid is None:
             skip("unsafe_id")
@@ -202,7 +201,7 @@ def plan(ctx, now=None):
         elif os.path.exists(ctx.store.path("sessions", f"{sid}.json")):
             skip("recorded_live")
         else:
-            prompts = trace.claude_prompt_count(log["path"])
+            prompts = ctx.host.prompt_count(log["path"]) or 0
             if prompts <= 0:
                 skip("no_prompt")
             elif _headless(head, prompts):
@@ -217,7 +216,7 @@ def plan(ctx, now=None):
 
 def _still_eligible(ctx, item):
     """Why a planned session is no longer to be imported (a resumed plan), or None."""
-    sid = trace.claude_safe_session_id(item.get("id")) if isinstance(item, dict) else None
+    sid = ctx.host.safe_session_id(item.get("id")) if isinstance(item, dict) else None
     path = item.get("path") if isinstance(item, dict) else None
     if sid is None or not isinstance(path, str) or os.path.basename(path) != f"{sid}.jsonl":
         return "unsafe_id"
@@ -250,12 +249,12 @@ def replay_envelope(ctx, transcript_path):
     level, overrides = cfg.loopguard_aggr, cfg.loopguard_thresholds
     thr = loopguard.base_thresholds(level, overrides)
     recorded = 0
-    turns = trace.claude_prompt_turns(transcript_path)
+    turns = ctx.host.prompt_turns(transcript_path)
     turn = next(turns, None)
     while turn is not None:
         following = next(turns, None)
         guard = loopguard.TurnGuard()
-        for name, args, result, ok, _cwd in trace.claude_calls(turn):
+        for name, args, result, ok, _cwd in ctx.host.turn_calls(turn):
             result = (result or "")[:RESULT_CAP]
             if ok:
                 code = claude_success_code(name, args)
@@ -264,8 +263,8 @@ def replay_envelope(ctx, transcript_path):
                 code = int(m.group(1)) if m else None
             guard.fold(name, args if isinstance(args, dict) else {}, result, code,
                        envelope=None, thr=thr, judge=None)
-        normal = not trace.claude_turn_interrupted(turn) and (
-            following is not None or trace.claude_turn_answered(turn))
+        normal = not ctx.host.turn_interrupted(turn) and (
+            following is not None or ctx.host.turn_answered(turn))
         if guard.cum_turns and normal:
             loopguard.record_turn(ctx.store, guard, level=level, overrides=overrides)
             recorded += 1
@@ -496,7 +495,7 @@ def notice(ctx):
     if _update(ctx, mark, timeout=HISTORY_LOCK_S) is None or not out.get("n"):
         return None
     return (f"TokenEconomizer read {out['n']} earlier session(s) of {ctx.repo.label} from "
-            f"Claude Code's history.")
+            f"{HOST_LABEL.get(ctx.host.name, 'Claude Code')}'s history.")
 
 
 def summary(ctx):
@@ -510,16 +509,23 @@ def summary(ctx):
     return out
 
 
-def describe(doc):
+# The agent's name as a person reads it, for the lines that name whose logs were read.
+HOST_LABEL = {"claude": "Claude Code", "codex": "Codex", "copilot": "Copilot CLI", "pi": "Pi",
+              "opencode": "opencode", "cursor": "Cursor", "hermes": "Hermes Agent",
+              "droid": "Droid"}
+
+
+def describe(doc, host="claude"):
     """One line for `te status`: what the import did here."""
     if not doc:
         return None
     state = doc.get("state")
     n = int(_num(doc.get("imported")))
+    who = HOST_LABEL.get(str(host or "claude"), "Claude Code")
     if state == "done":
-        return f"read {n} earlier session(s) from Claude Code's history"
+        return f"read {n} earlier session(s) from {who}'s history"
     if state in fold.HISTORY_BLOCKING:
-        return (f"reading Claude Code's history: {n} session(s) so far, {doc.get('left', '?')} "
+        return (f"reading {who}'s history: {n} session(s) so far, {doc.get('left', '?')} "
                 f"to go; sessions ending meanwhile are folded after it")
     if state == "skipped":
         return f"not read ({doc.get('reason') or 'skipped'})"

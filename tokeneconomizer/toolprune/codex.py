@@ -35,32 +35,6 @@ from tokeneconomizer.names import repo_filename
 # ===========================================================================
 # Transcript capability detection (which Codex packages a trace item exercises)
 # ===========================================================================
-CAPABILITY_DESCRIPTIONS = {
-    "collaboration": (
-        "Spawn, message, wait for, or close sub-agents. The benchmark runs one sealed "
-        "agent process and provides no useful parallel-agent workflow."),
-    "goals": (
-        "Create, inspect, and update long-lived product goals. These are orchestration "
-        "metadata rather than repository read/edit/test operations."),
-    "image_media": (
-        "View or transport image/audio/generated-media blocks. SWE-bench repair tasks "
-        "operate on a checked-out source repository and text test output."),
-    "interactive_guidance": (
-        "Persona, writing-style, commentary-channel and answer-formatting guidance for an "
-        "interactive chat session. A detached, single-turn run has no user reading "
-        "commentary and its final message is not graded."),
-    "planning": (
-        "Maintain a structured todo/update_plan list. This can help some long repairs but "
-        "is optional because the agent can reason and report progress without the tool."),
-    "web": (
-        "Search/open the public web and query online services."),
-    "request_user_input": (
-        "Pause for interactive human input. Runs are detached, autonomous, and have no "
-        "human available inside a task."),
-}
-
-CAPABILITIES = tuple(sorted(CAPABILITY_DESCRIPTIONS))
-
 _ITEM_TYPES_BY_CAPABILITY = {
     "collaboration": frozenset((
         "spawn_agent", "send_input", "send_message", "followup_task",
@@ -138,9 +112,6 @@ _SKILL_USE = re.compile(
     re.I,
 )
 _FAILED_STATUSES = frozenset(("failed", "error", "cancelled"))
-
-_HINT_BASE_RELAY = (
-    "deferred_wait", "image_media", "request_user_input", "skills", "web")
 
 
 def task_hints(problem_statement):
@@ -605,11 +576,3 @@ class CodexUntoolProfile:
         self.save()
         self._pending = None
         return record
-
-    def debug_state(self):
-        state = copy.deepcopy(self.state)
-        state["next_logical_mask"] = list(state.get("current_pruned") or ())
-        state["next_relay_mask"] = relay_capabilities(state.get("current_pruned") or ())
-        state["core_capabilities"] = list(CORE_CAPABILITIES)
-        state["state_path"] = self.path
-        return state

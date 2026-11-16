@@ -1,0 +1,57 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${DROID_PLUGIN_ROOT}/scripts/te-hook\" --host droid",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${DROID_PLUGIN_ROOT}/scripts/te-hook\" --host droid",
+          "timeout": 20
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${DROID_PLUGIN_ROOT}/scripts/te-hook\" --host droid",
+          "timeout": 60
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${DROID_PLUGIN_ROOT}/scripts/te-hook\" --host droid",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${DROID_PLUGIN_ROOT}/scripts/te-hook\" --host droid",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

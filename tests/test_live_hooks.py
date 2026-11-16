@@ -332,6 +332,11 @@ def _stuck(host, n=40):
     if host in ("claude", "codex"):
         return stuck_calls(n, host if host == "codex" else None)
     fail = "FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2"
+    if host == "droid":
+        return [("Edit", {"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"},
+                 {"output": "ok", "exitCode": 0}) if k % 2 == 0 else
+                ("Execute", {"command": "pytest -q"}, {"output": fail, "exitCode": 1})
+                for k in range(n)]
     if host == "pi":
         return [("edit", {"path": "/r/pkg/a.py", "oldText": "x", "newText": "y"}, {"content": "ok"})
                 if k % 2 == 0 else ("bash", {"command": "pytest -q"},
@@ -345,7 +350,7 @@ def _stuck(host, n=40):
             for k in range(n)]
 
 
-@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi"])
+@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi", "droid"])
 @pytest.mark.parametrize("mode", ["interactive", "headless"])
 @pytest.mark.parametrize("setting", ["nudge", "stop"])
 def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
@@ -363,10 +368,18 @@ def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
         lambda o: o.get("systemMessage") or "")
     to_model = [ctx_key(o) for o in outs if ctx_key(o)]
     stuck = [shown(o) for o in outs if "still looks stuck" in shown(o)]
+    assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
+    if host == "droid":
+        # Droid documents no `systemMessage`: the notice is relayed through the model's reply,
+        # the channel it actually shows.
+        assert stuck == []
+        relay = [t for t in to_model if t and "still looks stuck" in t]
+        assert len(relay) == 1 and "it does not change your task" in relay[0]
+        assert any("Process check (automated)" in (t or "") for t in to_model)
+        return
     assert len(stuck) == 1                                             # one notice
     hint = hosts.HOSTS[host]().stop_hint(mode == "headless")
     assert stuck[0].endswith(hint)
-    assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
     if host == "claude":
         # Claude Code keeps hook messages out of the main view, so the notice also goes to the
         # model, word for word, to pass on in its reply; the redirect comes first.
@@ -726,6 +739,47 @@ def test_by_default_a_deny_list_waits_until_the_repositorys_sessions_have_been_i
     assert "removed 3 tool(s)" in start("n2")["systemMessage"]
 
 
+def test_a_protected_codex_package_in_a_committed_or_unreadable_config_stays(
+        env, repo, tmp_path, codex_accepts, monkeypatch):
+    """Giving a package back never edits a config the repository
+    commits, and a config it cannot read leaves the fold to finish."""
+    st = store_for(env, repo, "codex")
+    denylist.apply(repo, ["collaboration"], st, host="codex")
+    path = denylist.settings_path(repo, "codex")
+    before = open(path).read()
+    monkeypatch.setattr(denylist, "_git_tracked", lambda root, rel: True)   # committed since
+    env = dict(env, TE_TOOLPRUNE="propose", TE_TOOLPRUNE_PROTECT="collaboration")
+    run_session(env, repo, "cx0", codex_rollout(str(tmp_path / "rollout-0.jsonl"), repo, 0),
+                host="codex")
+    assert open(path).read() == before
+    monkeypatch.setattr(denylist, "_git_tracked", lambda root, rel: False)
+
+    def unreadable(*a, **k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(denylist, "restore", unreadable)
+    run_session(env, repo, "cx1", codex_rollout(str(tmp_path / "rollout-1.jsonl"), repo, 1),
+                host="codex")
+    assert st.read("untool.json")["sessions"] == 2                 # the fold finished
+
+
+def test_copilot_server_lists_are_not_filtered_as_tool_names(env, repo):
+    """`sql` is a protected Copilot tool and also a valid MCP server name in its lists."""
+    ctx = LiveContext.build(hosts.Copilot(), repo, env)
+    assert fold.unprotected(ctx, ["sql", "github-mcp-server"]) == ["sql", "github-mcp-server"]
+
+
+def test_a_tool_protected_after_the_list_formed_is_not_written(env, repo, tmp_path):
+    """A pending list, and the proposal `toolprune apply` reads, are
+    checked against the protection in force when they are used, not when they formed."""
+    from tokeneconomizer.plugin import cli
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    assert ctx.config.set("toolprune_protect", "Workflow,Share*")
+    assert cli._proposal(ctx, {"proposal": ["CronCreate", "Workflow"]}) == ["CronCreate"]
+    assert fold.apply_pending(ctx, now=time.time() + 3700) is None
+    assert _deny(repo) == ["CronCreate"]
+    assert ctx.store.read("untool.json")["proposal"] == []      # applied, or protected now
+
+
 def test_a_session_still_writing_its_log_keeps_the_deny_list_waiting(env, repo, tmp_path):
     """Activity is a hook call or a line in the session's own log: a session can go an hour
     without a hook (one long answer, or the loop guard off) and still have a warm cache."""
@@ -864,8 +918,9 @@ def test_each_session_is_folded_once_and_priced(env, repo, tmp_path):
     ledger = store_for(env, repo).read_lines("ledger.jsonl")
     assert len(ledger) == 1
     rec = ledger[0]
-    # 3 requests x (10 fresh + 0.1 x 1000 cached + 1.25 x 100 written + 5 x 50 output)
-    assert rec["requests"] == 3 and rec["effective_tokens"] == pytest.approx(3 * 485.0)
+    # 3 requests x (10 fresh + 0.05 x 1000 cached + 1.25 x 100 written + 5 x 50 output); the
+    # session's model, Opus 5.5, bills a cache hit at 0.05x input, not the usual 0.1x
+    assert rec["requests"] == 3 and rec["effective_tokens"] == pytest.approx(3 * 435.0)
     assert rec["priced_by"] == "model" and set(rec["overhead"]) == {
         "optimizer_tokens", "spiral_judge_tokens", "spiral_nudge_writer_tokens"}
 
@@ -1269,6 +1324,41 @@ def test_codex_proposes_capabilities_it_never_saw_used(env, repo, tmp_path):
     assert not os.path.exists(denylist.settings_path(repo, "codex"))      # nothing written yet
 
 
+def test_codex_never_proposes_a_protected_capability(env, repo, tmp_path):
+    """`toolprune_protect` covers Codex's capability packages too, by
+    name or pattern, as it covers single tools on the other agents, from the next fold on."""
+    env = dict(env, TE_TOOLPRUNE="propose")
+    for i in range(5):                   # thirty prompts: enough for image_media as well
+        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, prompts=6)
+        run_session(env, repo, f"cx{i}", t, host="codex")
+    unt = store_for(env, repo, "codex").read
+    assert unt("untool.json")["proposal"] == ["collaboration", "goals", "image_media"]
+    env = dict(env, TE_TOOLPRUNE_PROTECT="collab*,image_media")
+    run_session(env, repo, "cx5", codex_rollout(str(tmp_path / "rollout-5.jsonl"), repo, 5),
+                host="codex")
+    assert unt("untool.json")["proposal"] == ["goals"]
+
+
+def test_a_codex_package_applied_before_it_was_protected_comes_back(env, repo, tmp_path,
+                                                                     codex_accepts):
+    """The plugin's own line for a newly protected package is removed at
+    the next fold; the other packages it wrote stay."""
+    st = store_for(env, repo, "codex")
+    assert denylist.apply(repo, ["collaboration", "goals"], st, host="codex") == [
+        "collaboration", "goals"]
+    env = dict(env, TE_TOOLPRUNE="propose", TE_TOOLPRUNE_PROTECT="collab*")
+    run_session(env, repo, "cx0", codex_rollout(str(tmp_path / "rollout-0.jsonl"), repo, 0),
+                host="codex")
+    assert denylist.applied_for(st, repo, "codex") == ["goals"]
+    text = open(denylist.settings_path(repo, "codex")).read()
+    assert "[agents]" not in text and "include_collaboration_mode_instructions" not in text
+    assert "goals = false  # tokeneconomizer:goals" in text
+    # The session ran with it switched off, so it is no evidence that the package went unused.
+    caps = st.read("untool.json")["capabilities"]
+    assert caps["collaboration"]["loaded_sessions"] == 0
+    assert caps["image_media"]["loaded_sessions"] == 1
+
+
 def test_codex_needs_the_full_evidence_before_proposing(env, repo, tmp_path):
     """The experiments' controller demotes collaboration after ONE unused task; a person's
     sessions need `toolprune_evidence` prompts of it, however they split into sessions."""
@@ -1407,6 +1497,20 @@ def test_codex_never_overrides_a_key_the_user_set(tmp_path):
     assert kept == "[agents]  # t\nmax_threads = 4\n"
 
 
+def test_codex_apply_does_not_record_a_capability_the_user_already_set(repo, tmp_path,
+                                                                     codex_accepts):
+    st = Store(str(tmp_path / "st"))
+    path = denylist.settings_path(repo, "codex")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("[features]\ngoals = true\n")
+    assert denylist.apply(repo, ["goals"], st, host="codex") == []
+    assert denylist.applied(st) == []
+    assert open(path, encoding="utf-8").read() == "[features]\ngoals = true\n"
+    assert denylist.apply(repo, ["goals", "image_media"], st, host="codex") == ["image_media"]
+    assert denylist.applied(st) == ["image_media"]
+
+
 def test_codex_trust_is_read_from_the_users_config(tmp_path, repo):
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -1417,6 +1521,29 @@ def test_codex_trust_is_read_from_the_users_config(tmp_path, repo):
     (home / "config.toml").write_text(f'[projects."{repo}/sub"]\ntrust_level = "trusted"\n'
                                       f'[projects."{repo}"]\ntrust_level = "untrusted"\n')
     assert denylist.codex_project_trusted(repo, env) is False
+
+
+def test_codex_trust_of_a_linked_worktree_is_its_clones(tmp_path, repo):
+    # Codex looks a linked worktree's trust up under the clone it was made from, unless the
+    # worktree has an entry of its own.
+    wt_git = os.path.join(repo, ".git", "worktrees", "feature")
+    os.makedirs(wt_git)
+    with open(os.path.join(wt_git, "commondir"), "w") as fh:
+        fh.write("../..")
+    wt = str(tmp_path / "feature")
+    os.makedirs(wt)
+    with open(os.path.join(wt, ".git"), "w") as fh:
+        fh.write(f"gitdir: {wt_git}\n")
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    env = {"CODEX_HOME": str(home)}
+    (home / "config.toml").write_text(f"[projects.'{repo}']\ntrust_level = \"trusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is True
+    (home / "config.toml").write_text(f"[projects.'{repo}']\ntrust_level = \"trusted\"\n"
+                                      f"[projects.'{wt}']\ntrust_level = \"untrusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is False
+    (home / "config.toml").write_text(f"[projects.'{tmp_path}']\ntrust_level = \"trusted\"\n")
+    assert denylist.codex_project_trusted(wt, env) is False
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows paths are case-insensitive")

@@ -113,6 +113,28 @@ def test_clones_and_worktrees_share_one_key_whatever_their_folder_names(tmp_path
     assert rl.key == repos.legacy_key(local, env)
 
 
+def test_an_scp_remote_whose_owner_starts_with_a_digit_shares_the_https_key(tmp_path, env):
+    ssh = git_repo(str(tmp_path / "ssh"), "git@github.com:42wim/Widget.git")
+    https = git_repo(str(tmp_path / "https"), "https://github.com/42wim/widget")
+    rs, rh = paths.repo_identity(ssh, env), paths.repo_identity(https, env)
+    assert rs.key == rh.key == f"widget-{paths.digest('github.com/42wim/widget')}"
+    assert rs.label == rh.label == "42wim/widget"
+    # After a scheme, digits after the colon are still a port.
+    assert paths.normalize_remote("ssh://git@example.com:2222/o/r.git") == "example.com:2222/o/r"
+    # State the ssh checkout learned under its earlier key is carried over to the new one.
+    old = f"widget-{paths.digest('github.com:42wim/widget')}"
+    st = state(env, old)
+    legacy_session(st, "s1", transcript(tmp_path / "s1.jsonl", ssh))
+    st.write("injection.json", {"rendered": "- a fact", "sessions": 1})
+    root = env["TOKENECONOMIZER_HOME"]
+    Store(root).write(repos.INDEX, {"layout": repos.LAYOUT, "checkouts": {
+        os.path.realpath(ssh): {"key": old, "seen": 1.0}}})
+    repos.adopt(root, rs, env)
+    new = state(env, rs.key)
+    assert new.read("injection.json")["rendered"] == "- a fact"
+    assert "s1" in new.read("folded.json")
+
+
 # ---- one session, one repository, on every agent ------------------------------------------------
 def _payloads(host, sid, cwd, n):
     base = {"session_id": sid, "cwd": cwd}
@@ -371,6 +393,22 @@ def test_te_repos_lists_merges_and_says_what_it_did(tmp_path, env, monkeypatch, 
     assert "merged orphan-0000000000 into a-" in out and "claude 1 session(s)" in out
     assert "s0" in state(env, paths.repo_identity(a, env).key).read("folded.json")
     assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", "nope"]) == 2
+
+
+def test_te_repos_merge_refuses_a_key_that_is_not_one_state_directory(tmp_path, env,
+                                                                      monkeypatch, capsys):
+    # `.` or "" (an unset shell variable) joined to `repos/` is `repos/` itself: merging it
+    # would set every repository's state aside under `merged/`.
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a}, "claude")
+    key = paths.repo_identity(a, env).key
+    for keys in (["."], [""], [".."], [f"{key}/claude"], [key, "."], [key, ""]):
+        assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", *keys]) == 2
+    assert "not a state directory key" in capsys.readouterr().out
+    assert os.listdir(repos.repos_dir(paths.state_root(env))) == [key]
+    assert not os.path.exists(os.path.join(paths.state_root(env), "merged"))
 
 
 # ---- deny lists are per checkout --------------------------------------------------------------

@@ -1,0 +1,10 @@
+{
+  "name": "tokeneconomizer",
+  "version": "0.1.0",
+  "description": "Learn repository facts and redirect coding-agent turns that appear stuck.",
+  "author": {
+    "name": "TokenEconomizer authors"
+  },
+  "repository": "https://github.com/microsoft/TokenEconomizer",
+  "license": "Apache-2.0"
+}

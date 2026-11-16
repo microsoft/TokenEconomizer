@@ -24,7 +24,12 @@
  *                                                      10 minutes
  *
  * The module's one export is the default object below: opencode 1.x reads its `server`, 2.x its
- * `setup`, and 1.x would call a second export as another plugin.
+ * `setup`, and 1.x would call a second export as another plugin. The two entries map the same
+ * dispatcher events: on 2.x that is `ctx.session.hook("prompt")` for UserPromptSubmit,
+ * `ctx.session.hook("context")` for the manual's injection, `ctx.tool.hook("execute.after")`
+ * for PostToolUse, and the public event stream (`ctx.event.subscribe()`) for the rest --
+ * `session.execution.{succeeded,failed,interrupted}` ends a turn where those events exist, and
+ * the documented `session.idle` ends it where they do not.
  *
  * Like the hooks on the other agents it fails open: a dispatcher that is missing, slow or
  * broken answers "no change". It does nothing under TE_SIDECALL=1 (the plugin's own side calls)
@@ -311,6 +316,11 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
  * entry records the session itself from its events -- prompts, tool calls and results, each
  * step's tokens and cost -- and writes the same JSON shape `trace/opencode.py` reads. Where that
  * copy holds no prompt, the fold reads 2.x's `opencode session export` instead.
+ *
+ * A turn's end is signalled two ways across 2.x releases: the `session.execution.*` events and
+ * the documented `session.idle`. Each settles the session's open turn, and the first one to
+ * arrive closes it, so either style alone keeps the guard and the fold fed. The subscription is
+ * aborted from the cleanup function `setup` returns.
  */
 const textOf = (content: any): string =>
   typeof content === "string"
@@ -325,6 +335,7 @@ const textOf = (content: any): string =>
 const setupV2 = async (ctx: any) => {
   const directory: string = ctx.location?.directory ?? ctx.location?.path ?? process.cwd();
   const open = new Set<string>();
+  const unsettled = new Set<string>();          // sessions whose turn awaits its end signal
   const manuals = new Map<string, string>();
   const prompts = new Map<string, number>();
   const turns = new Map<string, string>();
@@ -374,6 +385,20 @@ const setupV2 = async (ctx: any) => {
     if (!open.delete(id)) return;
     await hook({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason });
   };
+  /** A turn's end, however 2.x signals it. `session.execution.*` and `session.idle` both arrive
+   * per turn on releases that emit both; the first settles the turn and the second is a no-op.
+   * A turn the plugin never saw open (a plugin reload mid-turn) is closed by the next prompt's
+   * hook in the dispatcher instead. */
+  const closeTurn = async (id: string) => {
+    if (!unsettled.delete(id)) return;
+    await hook({
+      ...base(id, writeExport(id)),
+      hook_event_name: "Stop",
+      prompt_id: turns.get(id) ?? "",
+      stop_hook_active: false,
+    });
+    if (mode() === "run") await end(id, "run");
+  };
   process.once("exit", () => {
     for (const id of open)
       hookSync({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason: "exit" });
@@ -391,68 +416,77 @@ const setupV2 = async (ctx: any) => {
   };
   const toolPart = (m: any, callID: string) => m.parts.find((p: any) => p.callID === callID);
 
-  await ctx.session.hook("prompt", async (e: any) => {
-    const id: string = e.sessionID;
-    await start(id);
-    const n = (prompts.get(id) ?? 0) + 1;
-    prompts.set(id, n);
-    const turn = `${id}:${n}`;
-    turns.set(id, turn);
-    const text: string = e.prompt?.text ?? "";
-    records.get(id)?.push({
-      info: { id: String(e.messageID ?? turn), role: "user" },
-      parts: [{ type: "text", text }],
+  // Each registration is its own attempt: a 2.x release that lacks one hook still loads the rest.
+  try {
+    await ctx.session.hook("prompt", async (e: any) => {
+      const id: string = e.sessionID;
+      await start(id);
+      const n = (prompts.get(id) ?? 0) + 1;
+      prompts.set(id, n);
+      const turn = `${id}:${n}`;
+      turns.set(id, turn);
+      unsettled.add(id);
+      const text: string = e.prompt?.text ?? "";
+      records.get(id)?.push({
+        info: { id: String(e.messageID ?? turn), role: "user" },
+        parts: [{ type: "text", text }],
+      });
+      const out = await hook({
+        ...base(id),
+        hook_event_name: "UserPromptSubmit",
+        prompt_id: turn,
+        prompt: text,
+      });
+      const extra = out?.hookSpecificOutput?.additionalContext;
+      if (extra) manuals.set(id, manuals.get(id) ? `${manuals.get(id)}\n\n${extra}` : extra);
+      notify(out?.systemMessage);
     });
-    const out = await hook({
-      ...base(id),
-      hook_event_name: "UserPromptSubmit",
-      prompt_id: turn,
-      prompt: text,
+  } catch { /* no session.hook("prompt") on this release */ }
+
+  try {
+    await ctx.session.hook("context", (e: any) => {
+      const manual = manuals.get(e.sessionID);
+      if (manual && Array.isArray(e.system)) e.system.push({ type: "text", text: manual });
     });
-    const extra = out?.hookSpecificOutput?.additionalContext;
-    if (extra) manuals.set(id, manuals.get(id) ? `${manuals.get(id)}\n\n${extra}` : extra);
-    notify(out?.systemMessage);
-  });
+  } catch { /* no session.hook("context") on this release */ }
 
-  await ctx.session.hook("context", (e: any) => {
-    const manual = manuals.get(e.sessionID);
-    if (manual && Array.isArray(e.system)) e.system.push({ type: "text", text: manual });
-  });
-
-  await ctx.tool.hook("execute.after", async (e: any) => {
-    const id: string = e.sessionID;
-    const ok = e.status === "completed";
-    const result = ok ? e.result : undefined;
-    const text = ok
-      ? textOf(result?.content) || String(result?.output ?? "")
-      : String(e.error?.message ?? e.error ?? "");
-    const exit = typeof result?.metadata?.exit === "number" ? result.metadata.exit : undefined;
-    const out = await hook({
-      ...base(id),
-      hook_event_name: "PostToolUse",
-      prompt_id: turns.get(id) ?? "",
-      tool_name: e.tool,
-      tool_use_id: e.id,
-      tool_input: e.input ?? {},
-      tool_response: {
-        content: text,
-        isError: !ok || (exit !== undefined && exit !== 0),
-        exit_code: exit,
-      },
+  try {
+    await ctx.tool.hook("execute.after", async (e: any) => {
+      const id: string = e.sessionID;
+      const ok = e.status === "completed";
+      const result = ok ? e.result : undefined;
+      const text = ok
+        ? textOf(result?.content) || String(result?.output ?? "")
+        : String(e.error?.message ?? e.error ?? "");
+      const exit = typeof result?.metadata?.exit === "number" ? result.metadata.exit : undefined;
+      const out = await hook({
+        ...base(id),
+        hook_event_name: "PostToolUse",
+        prompt_id: turns.get(id) ?? "",
+        tool_name: e.tool,
+        tool_use_id: e.id,
+        tool_input: e.input ?? {},
+        tool_response: {
+          content: text,
+          isError: !ok || (exit !== undefined && exit !== 0),
+          exit_code: exit,
+        },
+      });
+      const nudge = out?.hookSpecificOutput?.additionalContext;
+      if (nudge && ok && result) {
+        if (typeof result.content === "string") result.content = `${result.content}\n\n${nudge}`;
+        else if (Array.isArray(result.content))
+          result.content = [...result.content, { type: "text", text: nudge }];
+        else result.content = nudge;
+      }
+      notify(out?.systemMessage);
     });
-    const nudge = out?.hookSpecificOutput?.additionalContext;
-    if (nudge && ok && result) {
-      if (typeof result.content === "string") result.content = `${result.content}\n\n${nudge}`;
-      else if (Array.isArray(result.content))
-        result.content = [...result.content, { type: "text", text: nudge }];
-      else result.content = nudge;
-    }
-    notify(out?.systemMessage);
-  });
+  } catch { /* no tool.hook("execute.after") on this release */ }
 
+  const controller = new AbortController();
   (async () => {
     try {
-      for await (const ev of ctx.event.subscribe()) {
+      for await (const ev of ctx.event.subscribe({ signal: controller.signal })) {
         const t: string = ev?.type;
         const p = ev?.properties ?? ev?.data ?? ev;
         if (!t?.startsWith("session.")) continue;
@@ -485,14 +519,9 @@ const setupV2 = async (ctx: any) => {
                   error: String(p.error?.message ?? textOf(p.content) ?? "") };
           }
         } else if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(t)) {
-          // A turn is over: export, and send the path with `Stop`.
-          await hook({
-            ...base(id, writeExport(id)),
-            hook_event_name: "Stop",
-            prompt_id: turns.get(id) ?? "",
-            stop_hook_active: false,
-          });
-          if (mode() === "run") await end(id, "run");
+          await closeTurn(id);
+        } else if (t === "session.idle") {
+          await closeTurn(id);
         } else if (t === "session.deleted") {
           await end(id, "deleted");
         }
@@ -500,6 +529,8 @@ const setupV2 = async (ctx: any) => {
     } catch (e) {
     }
   })();
+
+  return () => controller.abort();
 };
 
 // One default export for both: v1 reads `server`, v2 reads `setup`.

@@ -1,0 +1,5 @@
+# Definitions scripts/dead_code.py must neither report nor delete, one `path::name` per line,
+# each with the reason it is used although nothing in the repository names it.
+
+# Hermes Agent loads the plugin and calls `register(ctx)` by that name.
+plugin/hermes/__init__.py::register

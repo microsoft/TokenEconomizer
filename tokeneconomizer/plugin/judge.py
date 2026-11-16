@@ -67,19 +67,35 @@ def run_job(ctx, session_id, job_id):
     req = ctx.store.read(REQUEST.format(sid=session_id)) or {}
     if req.get("id") != job_id:                       # superseded by a newer request
         return None
-    runner = (None if sidecall.paused(ctx.host.name, ctx.root)
-              else sidecall.runner_for(ctx.host.name, ctx.config))
+    paused = sidecall.paused(ctx.host.name, ctx.root)
+    # Each call asks for its own runner: `local_roles` may put the judge on-device and leave
+    # the redirect on the agent's CLI, or the other way round. A paused host's CLI is skipped,
+    # but a local runner (which needs no login) still answers.
+    runner = sidecall.runner_for(ctx.host.name, ctx.config, role="judge") if not paused \
+        else sidecall.local_runner("judge", ctx.config)
+    writer = sidecall.runner_for(ctx.host.name, ctx.config, role="nudge") if not paused \
+        else sidecall.local_runner("nudge", ctx.config)
     verdict, written = None, None
     if runner is not None:
         try:
             verdict = loop_judge.llm_stuck_judge(req.get("digest") or "", runner, model="agent")
         except Exception:
             verdict = None
+        if verdict and getattr(runner, "answered_locally", False):
+            # The local model's confidences are coarse and high: a stuck verdict counts only at
+            # its own calibrated floor (`local_judge_confidence`); below it the turn is spared.
+            verdict["local"] = getattr(runner, "local", "local")
+            floor = float(getattr(ctx.config, "local_judge_confidence", 0.9) or 0)
+            if verdict.get("stuck") and float(verdict.get("confidence") or 0) < floor:
+                verdict["stuck"] = False
+                verdict["reason"] = ("below local_judge_confidence: "
+                                     + str(verdict.get("reason") or ""))[:160]
         conf = float((verdict or {}).get("confidence") or 0)
         if verdict and verdict.get("stuck") and conf >= float(req.get("threshold") or 0):
             try:
-                written = loop_judge.llm_nudge_writer(req.get("digest") or "", runner,
-                                                      model="agent")
+                written = (loop_judge.llm_nudge_writer(req.get("digest") or "", writer,
+                                                       model="agent")
+                           if writer is not None else None)
             except Exception:
                 written = None
             if written and (written.get("text") or "").strip():

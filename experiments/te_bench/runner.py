@@ -33,11 +33,6 @@ The row/transcript contract the mechanisms read:
 from typing import Optional, Protocol, Tuple, runtime_checkable
 
 
-# The optimizer-call signature the mechanisms invoke: (prompt, model) -> (text, eff_tokens)
-# where eff_tokens is the effective (cache-aware) token cost of the call, or None.
-OptimizerRunner = "Callable[[str, str], Tuple[str, Optional[float]]]"
-
-
 @runtime_checkable
 class AgentRunner(Protocol):
     """Everything the economizer needs from the task-execution harness."""

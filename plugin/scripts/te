@@ -8,17 +8,51 @@ fi
 dir=$(CDPATH= cd -- "${self%/*}" && pwd)
 # Session logs are UTF-8; without this, Python on Windows reads them in the ANSI code page.
 export PYTHONUTF8=1
-for py in "${TE_PYTHON:-}" python3 python py; do
-  [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
-  if [ "${OS:-}" = Windows_NT ]; then
-    case $(command -v "$py") in
-      *WindowsApps*) "$py" -c "" </dev/null >/dev/null 2>&1 || continue ;;
-    esac
+outside_windowsapps() {
+  set -f; _ifs=$IFS; IFS=:
+  for _d in $PATH; do
+    case $_d in ''|*WindowsApps*) continue ;; esac
+    for _f in "$_d/$1.exe" "$_d/$1"; do
+      if [ -f "$_f" ] && [ -x "$_f" ]; then IFS=$_ifs; set +f; printf '%s\n' "$_f"; return 0; fi
+    done
+  done
+  IFS=$_ifs; set +f; return 1
+}
+if [ "${OS:-}" = Windows_NT ]; then
+  for py in "${TE_PYTHON:-}" python3 python py; do
+    [ -n "$py" ] && p=$(command -v "$py" 2>/dev/null) || continue
+    case $p in *WindowsApps*) p=$(outside_windowsapps "$py") || continue ;; esac
+    [ "$py" = py ] && exec "$p" -3 "$dir/te_bootstrap.py" cli "$@"
+    exec "$p" "$dir/te_bootstrap.py" cli "$@"
+  done
+  for py in "${TE_PYTHON:-}" python3 python py; do
+    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -c "" </dev/null >/dev/null 2>&1 || continue
     [ "$py" = py ] && exec py -3 "$dir/te_bootstrap.py" cli "$@"
-  elif [ "$py" = py ]; then
-    continue                    # Python's `py` launcher is Windows-only; elsewhere it is not Python
+    exec "$py" "$dir/te_bootstrap.py" cli "$@"
+  done
+else
+  # TE_PYTHON is the person's own choice: it runs as named. Otherwise the first python3 on PATH
+  # can be older than the bootstrap's minimum (macOS /usr/bin/python3 is 3.9, and an agent's
+  # hook PATH is often not a login shell's), which would make the plugin a silent no-op with a
+  # newer Python installed: take the first one new enough. With none, run the first one too old
+  # (the probe exits 1), so the bootstrap still fails open / says what it needs; a name that
+  # runs no Python (a pyenv shim with no version set exits 127) is passed over. The probe
+  # skips `site` (-E -S).
+  if [ -n "${TE_PYTHON:-}" ] && command -v "$TE_PYTHON" >/dev/null 2>&1; then
+    exec "$TE_PYTHON" "$dir/te_bootstrap.py" cli "$@"
   fi
-  exec "$py" "$dir/te_bootstrap.py" cli "$@"
-done
+  probe='import sys; sys.exit(sys.version_info < (3, 10))'
+  old=
+  for py in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -E -S -c "$probe" </dev/null >/dev/null 2>&1
+    case $? in
+      0) exec "$py" "$dir/te_bootstrap.py" cli "$@" ;;
+      1) [ -n "$old" ] || old=$py ;;
+    esac
+  done
+  [ -n "$old" ] && exec "$old" "$dir/te_bootstrap.py" cli "$@"
+fi
 echo "te: no python3 on PATH (set TE_PYTHON)" >&2
 exit 1

@@ -79,6 +79,8 @@ def load_calls(fp):
             d = json.loads(line)
         except Exception:
             continue
+        if not isinstance(d, dict):
+            continue
         m = d.get("message")
         if not isinstance(m, dict) or d.get("type", "assistant") not in CONVERSATION:
             continue
@@ -88,16 +90,23 @@ def load_calls(fp):
         for b in c:
             if not isinstance(b, dict):
                 continue
-            if b.get("type") == "tool_use" and b.get("id") not in uses:
-                uses[b.get("id")] = (b.get("name", ""), b.get("input") or {})
-                order.append(b.get("id"))
+            tid = b.get("id") if b.get("type") == "tool_use" else b.get("tool_use_id")
+            if not isinstance(tid, str):
+                continue
+            if b.get("type") == "tool_use" and tid not in uses:
+                name = b.get("name")
+                inp = b.get("input")
+                uses[tid] = (name if isinstance(name, str) else "",
+                             inp if isinstance(inp, dict) else {})
+                order.append(tid)
             elif b.get("type") == "tool_result":
                 cont = b.get("content")
                 if isinstance(cont, list):
-                    txt = "\n".join(x.get("text", "") for x in cont if isinstance(x, dict))
+                    txt = "\n".join(x.get("text") for x in cont
+                                    if isinstance(x, dict) and isinstance(x.get("text"), str))
                 else:
                     txt = cont if isinstance(cont, str) else json.dumps(cont)
-                res[b.get("tool_use_id")] = txt
+                res[tid] = txt
     return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
 
 
@@ -544,10 +553,12 @@ def _detector_fields_ok(det):
 
 
 def _reparse_cmds(dg):
-    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize)."""
+    """Recover [(cmd,out)] from a digest's stashed blobs (for retro-featurize). The blobs no
+    longer say which output came from which command, so the whole output rides on the first
+    command: pairing them line by line would drop every output line past the command count."""
     cmds = dg.get("_cmd_blob", "").split("\n")
-    outs = dg.get("_out_blob", "").split("\n")
-    return list(zip(cmds, outs + [""] * (len(cmds) - len(outs))))
+    out = dg.get("_out_blob", "")
+    return [(c, out if i == 0 else "") for i, c in enumerate(cmds)]
 
 
 # ---- distiller -------------------------------------------------------------
@@ -636,7 +647,14 @@ class Distiller:
                                        {i: f.claim for i, f in self.facts.items()},
                                        set(self.extractors), excerpts, external=external,
                                        generic=self.generic)
-        raw, eff = self.runner(prompt, self.model)
+        # A side call that fails (a CLI error, a timeout) skips this tick instead of aborting the
+        # fold, as the loop guard's judge does (#131). It still counts as the tick: a runner
+        # that keeps failing is tried every PROPOSE_EVERY sessions, not at every fold.
+        try:
+            raw, eff = self.runner(prompt, self.model)
+        except Exception:
+            self.last_propose = self.now
+            return
         if eff is not None:
             self.opt_tokens += eff
         exts, facts = parse_payload(raw)

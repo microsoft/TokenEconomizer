@@ -407,12 +407,6 @@ SWEBENCH_ADDED: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Every added id is outside SWE-bench_Verified (both repos' Verified rows were already
-# fully consumed by the published streams), so provisioning must read the FULL test split
-# for these -- exactly like SWEBENCH_FULL_SPLIT_ONLY above.
-SWEBENCH_ADDED_FULL_SPLIT_ONLY: frozenset[str] = frozenset(
-    i for ids in SWEBENCH_ADDED.values() for i in ids)
-
 
 def runnable_instances(domain, group=None):
     """Canonical instances PLUS SWEBENCH_ADDED MINUS SWEBENCH_EXCLUDED — what a NEW

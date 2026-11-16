@@ -39,36 +39,3 @@ def effective_exec(row):
     """Cache-aware effective execution cost of a task (pricing.effective_tokens)."""
     return pricing.effective_tokens(row)
 
-
-class CostLedger:
-    """Accumulates the amortized cost over a stream. Thin wrapper over the two canonical
-    functions above -- used by tests and any caller that wants a running total without
-    re-deriving the math. The aggregation scripts share these definitions via
-    OVERHEAD_KEYS / overhead()."""
-
-    def __init__(self):
-        self.cum_exec = 0.0
-        self.cum_overhead = 0.0
-        self.n = 0
-
-    def add(self, row, exec_cost=None):
-        """Fold one stream row. `exec_cost` overrides the effective exec (e.g. a
-        breakdown-resolved record); defaults to this row's effective exec."""
-        ec = effective_exec(row) if exec_cost is None else exec_cost
-        oh = overhead(row)
-        self.cum_exec += ec
-        self.cum_overhead += oh
-        self.n += 1
-        return ec + oh
-
-    @property
-    def cum_total(self):
-        return self.cum_exec + self.cum_overhead
-
-    @property
-    def amortized_per_task(self):
-        return (self.cum_total / self.n) if self.n else 0.0
-
-    @property
-    def overhead_frac(self):
-        return (self.cum_overhead / self.cum_total) if self.cum_total else 0.0

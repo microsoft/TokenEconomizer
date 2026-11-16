@@ -111,7 +111,6 @@ def test_added_does_not_move_the_published_record():
 def test_added_ids_need_the_full_split():
     """Both repos' Verified rows were already spent, so every addition is full-split-only."""
     added = {i for ids in workloads.SWEBENCH_ADDED.values() for i in ids}
-    assert workloads.SWEBENCH_ADDED_FULL_SPLIT_ONLY == added
     assert not (added & workloads.SWEBENCH_FULL_SPLIT_ONLY)
 
 

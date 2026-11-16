@@ -1,5 +1,7 @@
-"""On Windows `os.replace` raises PermissionError while another process holds the target open;
-`Store.write` retries it briefly there, and only there, so the state write is not lost."""
+"""On Windows `os.replace` and `open` raise PermissionError while another process holds or is
+replacing the file; `Store.write` and `Store.read` retry briefly there, and only there, so a state
+write is not lost and a blocked read is not taken for a missing document."""
+import builtins
 import os
 import threading
 
@@ -53,6 +55,62 @@ def test_posix_does_not_retry(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         Store(tmp_path).write("state.json", {"new": True})
     assert len(calls) == 1
+
+
+def _flaky_open(monkeypatch, store, failures):
+    """`open` that refuses the state file `failures` times; returns the list of tries."""
+    real, calls = builtins.open, []
+    target = store.path("state.json")
+
+    def fake(path, *a, **k):
+        if path == target:
+            calls.append(path)
+            if len(calls) <= failures:
+                raise PermissionError(13, "The process cannot access the file", path)
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(store_mod, "open", fake, raising=False)
+    monkeypatch.setattr(store_mod.time, "sleep", lambda s: None)
+    return calls
+
+
+def test_windows_retries_a_read_blocked_by_another_process(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_mod, "_WINDOWS", True)
+    store = Store(tmp_path)
+    store.write("state.json", {"old": True})
+    calls = _flaky_open(monkeypatch, store, failures=2)
+    assert store.read("state.json", {}) == {"old": True}
+    assert len(calls) == 3
+
+
+def test_a_read_that_stays_blocked_raises_rather_than_reads_as_empty(tmp_path, monkeypatch):
+    """Taken for a missing document, the block would hand the caller a fresh state, and its next
+    write would replace the real one."""
+    monkeypatch.setattr(store_mod, "_WINDOWS", True)
+    store = Store(tmp_path)
+    store.write("state.json", {"old": True})
+    calls = _flaky_open(monkeypatch, store, failures=10 ** 6)
+    with pytest.raises(PermissionError):
+        store.read("state.json", {})
+    assert len(calls) == len(store_mod._REPLACE_BACKOFF) + 1
+
+
+def test_posix_does_not_retry_a_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_mod, "_WINDOWS", False)
+    store = Store(tmp_path)
+    store.write("state.json", {"old": True})
+    calls = _flaky_open(monkeypatch, store, failures=1)
+    with pytest.raises(PermissionError):
+        store.read("state.json", {})
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("content", [None, b"{not json", b"\xff\xfe"],
+                         ids=["missing", "not JSON", "not text"])
+def test_a_missing_or_broken_document_reads_as_the_default(tmp_path, content):
+    if content is not None:
+        (tmp_path / "state.json").write_bytes(content)
+    assert Store(tmp_path).read("state.json", {"default": True}) == {"default": True}
 
 
 @pytest.mark.skipif(os.name != "nt",

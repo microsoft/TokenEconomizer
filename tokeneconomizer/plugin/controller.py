@@ -28,7 +28,7 @@ import time
 import traceback
 
 from .. import loopguard
-from . import denylist, fold, history, repomap, repos, sidecall
+from . import denylist, fold, history, hookqueue, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -43,6 +43,7 @@ class LiveController:
         self.store = ctx.store
         self.cfg = ctx.config
         self.sid = self.host.session_id(self.p)
+        self.replaying = False      # a queued event applied later: no one reads its answer
 
     # ---- plumbing -----------------------------------------------------------------------
     def _sess_name(self):
@@ -80,6 +81,12 @@ class LiveController:
         self.store.append("events.jsonl", dict(
             fields, kind=kind, at=time.time(), session_id=self.sid, shadow=self.cfg.shadow))
 
+    def handler(self, event):
+        # PostToolUseFailure: Copilot reports a failed tool there, not in PostToolUse.
+        return {"SessionStart": self.session_start, "UserPromptSubmit": self.user_prompt,
+                "PostToolUse": self.post_tool, "PostToolUseFailure": self.post_tool,
+                "Stop": self.stop, "SessionEnd": self.session_end}.get(event)
+
     def handle(self):
         # A payload without a session id is not a hook call any host makes; recording it would
         # leave an "unknown" session behind.
@@ -88,19 +95,17 @@ class LiveController:
         self.ctx.settle()
         self.cfg = self.ctx.config
         event = self.p.get("hook_event_name") or ""
-        # PostToolUseFailure: Copilot reports a failed tool there, not in PostToolUse.
-        handler = {"SessionStart": self.session_start, "UserPromptSubmit": self.user_prompt,
-                   "PostToolUse": self.post_tool, "PostToolUseFailure": self.post_tool,
-                   "Stop": self.stop, "SessionEnd": self.session_end}.get(event)
-        return (handler() or {}) if handler else {}
+        if event in ("SessionStart", "UserPromptSubmit"):
+            try:
+                ensure_launcher(self.ctx.env)
+            except OSError:
+                self._record_error()
+        handler = self.handler(event)
+        return hookqueue.run(self, event, handler) if handler else {}
 
     # ---- SessionStart -----------------------------------------------------------------
     def session_start(self):
         source = self.p.get("source") or "startup"
-        try:
-            ensure_launcher(self.ctx.env)
-        except OSError:
-            pass
         s = self._session()
         s["source"] = source
         s.setdefault("cwd", self.host.cwd(self.p, self.ctx.env))
@@ -270,6 +275,8 @@ class LiveController:
         if not data:
             return None
         g = loopguard.TurnGuard(data=data)
+        if g.held:                  # reached on a queued call; the turn ended before the next one
+            self._log("undelivered", action=g.held[0], reason=g.held[1])
         summary = g.summary(stopped_normally)
         if g.cum_turns and stopped_normally:
             loopguard.record_turn(self.store, g, level=self.cfg.loopguard_aggr,
@@ -320,12 +327,19 @@ class LiveController:
 
         None before this repository has an envelope -- the guard does not act on a repository
         whose usual turns it has not learned (the rule fallback never acts without one either).
-        While this agent's model calls are paused, a judge that never answers: the turn is
-        spared, as a missing verdict is, rather than redirected on the rule alone."""
+        While this agent's model calls are paused, or it has none (`sidecall.NO_SIDE_CALLS`),
+        a judge that never answers: the turn is spared, as a missing verdict is, rather than
+        redirected on the rule alone."""
         from .judge import AsyncJudge, NoVerdict
         if envelope is None:
             return None
-        if sidecall.paused(self.host.name, self.ctx.root):
+        if self.host.name in sidecall.NO_SIDE_CALLS:
+            return NoVerdict()
+        # A local judge (`local_model`) needs no login, so it still answers while the host's
+        # CLI is paused (signed out). Only the settings are read here, as this runs on every
+        # tool call; the job checks that the model answers, and with none spares the turn.
+        if (sidecall.paused(self.host.name, self.ctx.root)
+                and not sidecall.local_routes("judge", self.ctx.config)):
             return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 
@@ -357,6 +371,14 @@ class LiveController:
         decision = g.fold(name, args, text, code, envelope=envelope, thr=thr,
                           judge=self._judge(thr, envelope),
                           nudge_budget=self.cfg.loopguard_nudges)
+        # A queued call's hook has already answered, so a decision reached on it waits, untouched
+        # and uncounted, for the turn's next call: acting on it here would spend the turn's redirect
+        # on an answer no one reads.
+        if self.replaying:
+            g.held = g.held or decision
+            decision = None
+        elif g.held:
+            decision, g.held = g.held, None
         out = {}
         if decision:
             action, reason = decision
