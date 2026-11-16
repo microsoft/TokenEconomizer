@@ -780,6 +780,24 @@ def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
     assert "C:" not in g.st.recent_digest()
 
 
+def test_a_patch_that_changes_several_files_counts_each_of_them():
+    """One `apply_patch` call can change several files; the hosts pass them all as `paths`.
+    Each counts as an edit, as it does when the same patch goes through the shell."""
+    patch = ("*** Begin Patch\n*** Update File: pkg/a.py\n@@\n-x\n+y\n"
+             "*** Update File: pkg/b.py\n@@\n-x\n+y\n*** Add File: tests/test_c.py\n+z\n"
+             "*** End Patch")
+    name, args, text, code = hosts.Codex().tool_call(
+        {"tool_name": "apply_patch", "tool_input": {"input": patch}, "tool_response": "ok"})
+    tool = guard.TurnGuard(turn_key="t")
+    tool.fold(name, args, text, code)
+    shell = guard.TurnGuard(turn_key="t")
+    shell.fold("Bash", {"command": f"apply_patch <<'PATCH'\n{patch}\nPATCH"}, "ok", 0)
+    want = {"a.py": 1, "b.py": 1, "test_c.py": 1}
+    assert tool.whole.edit_counts == shell.whole.edit_counts == want
+    assert tool.whole.distinct_edit_files == 3
+    assert "edit a.py, b.py, test_c.py" in tool.st.recent_digest()
+
+
 def test_reading_a_file_full_of_asserts_is_not_a_failure():
     """A test file read back is full of `assert` and `Error`: reading it, three times over, is
     no failure and no repeated failure, and opens no gate to the judge."""
