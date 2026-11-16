@@ -191,6 +191,17 @@ copilot plugin list       # tokeneconomizer@tokeneconomizer ... (enabled)
 
 Copilot loads the plugin from the clone directly, without copying it.
 
+On Windows, its hooks and slash commands invoke Python directly from PowerShell commands;
+Git Bash is not required. They work under `Restricted` without changing execution policy or
+using `-ExecutionPolicy Bypass`. Copilot's normal command approval still applies;
+application-control policies that block Python still apply too.
+From a PowerShell terminal in the clone, use a Python >= 3.10 executable, for example:
+`python -X utf8 .\plugin\scripts\te_bootstrap.py cli --host copilot status`.
+The hooks run `TE_PYTHON` as named when set. Otherwise they try `python3`, `python`, and `py`,
+selecting Python >= 3.10 and preferring
+interpreters outside WindowsApps. If only an older Python exists, the bootstrap still handles
+the refusal. The slash commands reuse the interpreter selected by the hook.
+
 **2. Check it.** In Copilot's interactive mode, type `/tokeneconomizer:status`. Each slash command
 is a model turn, and Copilot asks before running the plugin's script; choose **Yes**. Slash
 commands work only in interactive mode; the plugin's notices also appear under `copilot -p`.
@@ -212,7 +223,19 @@ start says so. `/tokeneconomizer:toolprune restore` turns the server back on, an
 `toolprune measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
-launcher appears after the first session). A turn that is still stuck after the loop guard's
+launcher appears after the first session). In PowerShell, read the launch paths as data and
+invoke Python directly, replacing `status` with the command you want:
+
+```powershell
+$root = if ($env:TOKENECONOMIZER_HOME) { $env:TOKENECONOMIZER_HOME } else { Join-Path $HOME '.tokeneconomizer' }
+$launcher = Get-Content -LiteralPath (Join-Path $root 'bin\te.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+& $launcher.python -X utf8 $launcher.bootstrap cli --host copilot --cwd (Get-Location).Path status
+```
+
+Session-start and prompt hooks create or repair the launchers and `te.json`, so an open session
+picks up the native launch paths on its next prompt after updating.
+A turn that is still stuck after the loop guard's
 redirect shows "● TokenEconomizer: …" in the conversation (and on stdout under `copilot -p`); press
 **Esc** twice to interrupt it, or Ctrl+C to end a `copilot -p` run.
 
@@ -845,6 +868,9 @@ first session there ends.
 | `paid_model` | `""` | model for the plugin's own calls on every agent; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `<agent>_paid_model` | `""` | the same for one agent (`claude`, `codex`, `copilot`, `pi`, `opencode`, `cursor`, `grok`, `hermes`), over `paid_model` |
 | `claude_paid_effort`, `codex_paid_effort` | `""` | the reasoning effort of those calls: Claude Code `low` to `max`, Codex `none` to `max`; which values a model takes is the CLI's to say; empty: the CLI's default |
+| `local_model` | `off` | `fm`: run the side calls `local_roles` names on Apple's on-device Foundation Models CLI (`/usr/bin/fm`, macOS 27 with Apple Intelligence) instead of the agent's CLI; see [On-device side calls](#on-device-side-calls-macos) |
+| `local_roles` | `judge` | which side calls `local_model` takes: `judge`, `nudge` (the redirect writer), `proposer`, separated by commas |
+| `local_judge_confidence` | `0.9` | how sure a stuck verdict from the on-device judge must be to count; below it the turn is spared |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
 | `shadow` | `false` | decide and log everything, act on nothing |
@@ -951,6 +977,28 @@ that it is not signed in, that agent's calls are also paused (the loop guard the
 at its backstop), the next session start says so once, and `config set microskills=on` (or
 `loopguard=on`) tries again. `toolprune measure` on Claude Code makes its two calls the same way,
 and only when you run it.
+
+## On-device side calls (macOS)
+
+With `local_model=fm`, the side calls `local_roles` names (by default the loop guard's judge) run
+on the Foundation Models CLI that macOS 27 ships at `/usr/bin/fm` when Apple Intelligence is on:
+a model on the Mac itself, with no login, key or network. The plugin sends it the same prompt it
+would send the agent's CLI, on stdin, with greedy decoding; the judge's call also passes a JSON
+schema for its verdict (`fm respond --schema`), which constrains what the model can return. Its
+window is 4,096 tokens, enough for the judge's and the redirect writer's prompts.
+
+The ledger charges an on-device call 0 tokens. Without `/usr/bin/fm`, or with its model not ready,
+the call goes to the agent's CLI as before; a call `fm` cannot answer (a prompt over its window, no
+reply) leaves a line in `errors.log` and goes there too, so turning this on never leaves the guard
+without its judge. While that CLI is paused (signed out), the on-device judge still answers. On any
+system but macOS the setting does nothing. A stuck verdict from the on-device judge counts only at
+`local_judge_confidence` (0.9) or above: its confidences come in a few coarse steps, most of them
+above the guard's own `judge_confidence` (0.7).
+
+```text
+~/.tokeneconomizer/bin/te config set local_model=fm
+~/.tokeneconomizer/bin/te config set local_roles=judge,nudge     # also the redirect writer
+```
 
 ## Troubleshooting
 

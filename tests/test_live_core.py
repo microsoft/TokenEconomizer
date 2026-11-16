@@ -699,6 +699,19 @@ from tokeneconomizer.loopguard import shell_edits, turn  # noqa: E402
     ("git -c core.autocrlf=false --no-pager apply fix.diff", ["(patch)"]),
     ("git -C repo checkout HEAD -- pkg/mod.py", ["mod.py"]),
     ("git --git-dir=.git --work-tree . restore pkg/mod.py", ["mod.py"]),
+    # a wrapper's own options and values before the command (`sudo -u bob`, `env -u VAR`)
+    ("env -u CURSOR_AGENT sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sudo -u bob sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("sudo -Eu bob -- perl -pi -e 's/a/b/' src/a.rs", ["a.rs"]),
+    ("timeout 60 sed -i 's/a/b/' pkg/mod.py", ["mod.py"]),
+    ("timeout -k 5 --signal=KILL 1m git apply fix.diff", ["(patch)"]),
+    ("nice -n 10 sed -i 's/a/b/' x.py", ["x.py"]),
+    ("nice -5 tee -a setup.cfg", ["setup.cfg"]),
+    ("time -p sed -i 's/a/b/' x.py", ["x.py"]),
+    ("FOO=1 env -C sub -u X BAR=2 nice -n5 sed -i 's/a/b/' x.py", ["x.py"]),
+    ("sudo -E git checkout -- pkg/mod.py", ["mod.py"]),
+    ("env -u X sed -n '1,20p' pkg/mod.py", []),
+    ("timeout 60 python -m pytest -q > /tmp/out.txt", []),
     # not edits: output captures, scratch, reads, and operators inside quotes
     ("python -m pytest -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt", []),
     ("grep -n 'x' a.py > hits.txt", []),
@@ -732,6 +745,20 @@ def test_a_git_command_run_with_dash_c_still_counts_its_edit_and_its_revert():
     g.fold("Bash", {"command": revert}, "", 0)
     assert g.edits == 3
     assert g.whole.edit_counts == {"(patch)": 1, "mod.py": 2}
+
+
+def test_an_edit_run_through_a_wrapper_with_options_still_counts():
+    """`env -u VAR`, `sudo -u bob`, `timeout 60` and `nice -n 10` run the command after their
+    own options. Dropping only the wrapper's name left `-u` or `60` as the command, so the
+    `sed -i` was no edit and the `git checkout --` that put the file back was no revert."""
+    revert = "sudo -u bob git checkout -- pkg/mod.py"
+    assert shell_edits.shell_revert_targets(revert) == ["mod.py"]
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "env -u CURSOR_AGENT sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": "timeout 60 sed -i 's/b/c/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": revert}, "", 0)
+    assert g.edits == 3
+    assert g.whole.edit_counts == {"mod.py": 3}
 
 
 def test_an_edit_after_a_here_string_is_counted():
@@ -778,6 +805,24 @@ def test_an_edit_named_by_a_windows_path_counts_by_its_basename():
     assert g.whole.edit_counts == {"mod.py": 3}
     assert g.whole.distinct_edit_files == 1
     assert "C:" not in g.st.recent_digest()
+
+
+def test_a_patch_that_changes_several_files_counts_each_of_them():
+    """One `apply_patch` call can change several files; the hosts pass them all as `paths`.
+    Each counts as an edit, as it does when the same patch goes through the shell."""
+    patch = ("*** Begin Patch\n*** Update File: pkg/a.py\n@@\n-x\n+y\n"
+             "*** Update File: pkg/b.py\n@@\n-x\n+y\n*** Add File: tests/test_c.py\n+z\n"
+             "*** End Patch")
+    name, args, text, code = hosts.Codex().tool_call(
+        {"tool_name": "apply_patch", "tool_input": {"input": patch}, "tool_response": "ok"})
+    tool = guard.TurnGuard(turn_key="t")
+    tool.fold(name, args, text, code)
+    shell = guard.TurnGuard(turn_key="t")
+    shell.fold("Bash", {"command": f"apply_patch <<'PATCH'\n{patch}\nPATCH"}, "ok", 0)
+    want = {"a.py": 1, "b.py": 1, "test_c.py": 1}
+    assert tool.whole.edit_counts == shell.whole.edit_counts == want
+    assert tool.whole.distinct_edit_files == 3
+    assert "edit a.py, b.py, test_c.py" in tool.st.recent_digest()
 
 
 def test_reading_a_file_full_of_asserts_is_not_a_failure():
@@ -1231,6 +1276,7 @@ def test_a_pi_reply_is_read_from_its_json_run():
     assert text == "- use python -m pytest"
     assert usage == {"input_tokens": 745, "cache_read_input_tokens": 0,
                      "cache_creation_input_tokens": 0, "output_tokens": 298,
+                     "cache_creation_1h_input_tokens": 0,
                      "cost_usd": 0.002235, "model": "anthropic/claude-haiku-4.5"}
     assert trace.pi_json_reply("") == ("", None)
 
@@ -1442,6 +1488,30 @@ def test_a_runner_behind_env_or_nice_options_counts_as_a_verification(cmd):
                                         ("nice pytest -q", "own")])
 def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
     assert turn.status_of_tests(cmd) == status
+
+
+@pytest.mark.parametrize("cmd", ["python -W error -m pytest -q", "python3 -Werror -m pytest",
+                                 "python -X dev -m pytest tests",
+                                 "python3.12 -Xfaulthandler -m pytest",
+                                 "python -u -m unittest discover", "python -bb -B -m pytest",
+                                 "python -I -m unittest -v", ".venv/bin/python -W error -m pytest",
+                                 "python -W error::DeprecationWarning manage.py test",
+                                 "python -u tests/runtests.py"])
+def test_a_runner_behind_pythons_own_options_counts_as_a_verification(cmd):
+    """`python -W error -m pytest` and `python -X dev -m pytest` put the interpreter's options
+    before `-m`. Only `python -m` was read, so the run was no verification and a failing one after
+    the last edit left the turn green."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["python -W error repro.py", "python -X dev -c 'import a'",
+                                 "python -u -m pip install -e .", "python -m pytest --version"])
+def test_pythons_own_options_leave_what_it_runs_to_decide(cmd):
+    assert turn.status_of_tests(cmd) is None
 
 
 @pytest.mark.parametrize("cmd", ["ruby test/ledger_test.rb", "ruby -w -Ilib test/slugify_test.rb",
@@ -1716,3 +1786,72 @@ def test_sidecalls_ignore_cleanup_errors(monkeypatch):
         created.clear()
         caller("prompt")
         assert created and all(getattr(td, "_ignore_cleanup_errors", False) for td in created), caller
+
+
+@pytest.mark.real_sidecalls
+def test_the_side_calls_skip_json_lines_that_are_not_objects(monkeypatch, tmp_path):
+    """Anything sharing the CLI's stdout can print a line that parses but is not an object
+    (null, a bare string, a number, an array); the reply behind it must still be read, not an
+    AttributeError that loses the whole call (issue #182)."""
+    import subprocess
+    from tokeneconomizer.plugin import probe, sidecall
+    junk = (None, [1, 2], "text", 42)
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
+    copilot_events(str(tmp_path / "cp" / "session-state" / "side1" / "events.jsonl"), [])
+
+    def fake_run(cmd, **kw):
+        if "codex" in (cmd[0] or ""):
+            out = "\n".join(json.dumps(e) for e in (*junk, {
+                "type": "item.completed", "item": "x"},
+                {"type": "item.completed",
+                 "item": {"type": "agent_message", "text": "hi"}},
+                {"type": "turn.completed", "usage": [1]}))
+        else:
+            out = "\n".join(json.dumps(e) for e in (*junk, {
+                "type": "assistant.message", "data": [1, 2]},
+                {"type": "assistant.message", "data": {"content": "- use python -m pytest"}},
+                {"type": "result", "sessionId": "side1", "exitCode": 0}))
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    assert sidecall.codex_call("say hi")[0] == "hi"
+    text, eff = sidecall.copilot_call("propose facts")
+    assert text == "- use python -m pytest" and eff and eff > 0
+    sid, answer, _err = probe.run_session(str(tmp_path), {}, str(tmp_path), "")
+    assert sid == "side1" and answer == "- use python -m pytest"
+
+
+@pytest.mark.real_sidecalls
+def test_inspect_session_skips_hook_lines_that_do_not_parse(tmp_path, monkeypatch):
+    """The hook.end prefilter lets a corrupt or truncated line through; one such line must not
+    kill the whole inspection (issue #182)."""
+    from tokeneconomizer.plugin import probe
+    home = tmp_path / "cp"
+    log = home / "session-state" / "s1" / "events.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('{"type": "session.start", "data": {"context": {"cwd": "/r"}}}\n'
+                   '"hook.end sessionStart"\n'                       # parses, not an object
+                   '{"type": "hook.end", "data": ["x"], "hookType": "sessionStart"}\n'
+                   '{broken "hook.end" "sessionStart"\n'            # does not parse at all
+                   '{"type": "session.shutdown", "data": {}}\n')    # so `settle` need not wait
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    report = probe.inspect_session("s1")
+    assert report["session"] == "s1" and report["injected"] is False
+
+
+def test_inspect_session_reads_the_context_its_session_start_hook_returned(tmp_path, monkeypatch):
+    """The context sits under the hook.end event's `data.output`; a line beside it that parses
+    but is not an object changes nothing."""
+    from tokeneconomizer.plugin import probe
+    home = tmp_path / "cp"
+    log = home / "session-state" / "s1" / "events.jsonl"
+    log.parent.mkdir(parents=True)
+    hook_end = {"type": "hook.end", "data": {"hookType": "sessionStart", "output": {
+        "additionalContext": "In this repository, pytest fails here: use unittest."}}}
+    log.write_text('"hook.end sessionStart"\n' + json.dumps(hook_end) + "\n"
+                   + json.dumps({"type": "session.shutdown", "data": {}}) + "\n")
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    assert probe.inspect_session("s1")["injected"] is True

@@ -88,6 +88,29 @@ def test_cursor_events_reconstruct_tool_results_and_count_prompts(tmp_path):
     ]
 
 
+def test_cursor_readers_skip_json_lines_that_are_not_objects(tmp_path):
+    """A spool line that parses but is not an object is skipped, not a crash (issue #180).
+
+    #150 added the isinstance check to the other trace readers; the two cursor readers
+    kept calling .get on whatever json.loads returned, so one `null` line discarded the
+    whole session's trace.
+    """
+    source, target = tmp_path / "events.jsonl", tmp_path / "trace.jsonl"
+    rows = [
+        None, [1, 2], "str", 42,
+        {"hook_event_name": "UserPromptSubmit", "prompt": "Fix the bug"},
+        {"hook_event_name": "PostToolUse", "tool_use_id": "t1", "tool_name": "Shell",
+         "tool_input": {"command": "pytest"},
+         "tool_response": {"content": "3 passed", "exit_code": 0}},
+    ]
+    source.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    assert trace.cursor_prompt_count(str(source)) == 1
+    assert trace.cursor_events_to_claude(str(source), str(target)) == 3
+    assert [(name, args) for name, args, _result, _ok in
+            trace.load_trajectory(str(target))] == [("Bash", {"command": "pytest"})]
+
+
 @pytest.fixture
 def cursor_env(tmp_path):
     repo = tmp_path / "repo"

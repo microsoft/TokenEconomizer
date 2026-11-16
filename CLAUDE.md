@@ -39,7 +39,7 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
 - On-disk state names (`injection.json`, `untool.json`, `envelope.json`, event kinds) are a
   compatibility surface; renaming them strands what users have learned.
 - Settings keep their earlier names as aliases (`inject`, `untool`, `spiral`, ...; see
-  `plugin/config.py`); write new code against the current names.
+  `tokeneconomizer/plugin/config.py`); write new code against the current names.
 - No run outputs in the repository: transcripts, rows, streams, figures rendered from runs and
   tables derived from them stay out of git (`.gitignore`). The one exception is the paper's
   headline results in `README.md` (the line under the badges, the Results section, and the

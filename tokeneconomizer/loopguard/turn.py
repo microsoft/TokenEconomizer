@@ -34,9 +34,13 @@ _SLOTS = SpiralState.__slots__
 # is often named by path (`python tests/runtests.py`, `.venv/bin/pytest`, `./node_modules/.bin/
 # jest`): without the optional directories those turns showed no verification at all, so a turn
 # whose last test run failed still counted as ended green and fed the envelope.
+# `python` with the interpreter's own options before what it runs (`python -W error -m pytest`,
+# `python -X dev -m pytest`, `python -u tests/runtests.py`); they are case-sensitive.
+_PYTHON = (r"python\d?(?:\.\d+)?"
+           r"(?-i:(?:\s+(?:-[bBdEiIOPqsSuvx]+|-[WX]\s*[^\s\-]\S*))*)")
 VERIFY_RE = re.compile(
-    r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*python\d?(?:\.\d+)?\s+)?"
-    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|python\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)|"
+    r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
+    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|" + _PYTHON + r"\s+-m\s+(?:pytest|unittest)|"
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
