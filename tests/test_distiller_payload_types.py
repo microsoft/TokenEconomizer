@@ -21,8 +21,11 @@ MALFORMED = [
     '{"extractors": null, "facts": null}',
     _payload(extractors=[{"name": ["a"], "pattern": "x"}], facts=[]),
     _payload(extractors=[{"name": {"x": 1}, "pattern": "x"}], facts=[]),
-    _payload(extractors=[], facts=[{"id": ["a"], "detector": {}}]),
-    _payload(extractors=[], facts=[{"id": {"x": 1}, "detector": {}}]),
+    '{"extractors": true, "facts": []}',
+    '{"extractors": [], "facts": 7}',
+    _payload(extractors=[{"name": "a", "pattern": ""}], facts=[{"id": "f", "detector": {}}]),
+    _payload(extractors=[], facts=[{"id": ["a"], "detector": {"scope": "ran_tests"}}]),
+    _payload(extractors=[], facts=[{"id": {"x": 1}, "detector": {"scope": "ran_tests"}}]),
     _payload(extractors=[], facts=[{"id": "f", "detector": {"scope": ["bad"]}}]),
     _payload(extractors=[], facts=[{"id": "f", "detector": {"scope": {"a": 1}}}]),
     _payload(extractors=[], facts=[{"id": "f", "detector": {"scope": "ran_tests", "fired": 5}}]),
@@ -42,7 +45,7 @@ def test_parse_payload_drops_wrongly_typed_fields(raw):
 def test_parse_payload_keeps_valid_entries_next_to_malformed():
     raw = _payload(
         extractors=[{"name": ["a"], "pattern": "x"}, {"name": "ok", "pattern": "x"}],
-        facts=[{"id": {"x": 1}, "detector": {}},
+        facts=[{"id": {"x": 1}, "detector": {"scope": "ran_tests"}},
                {"id": "good", "detector": {"scope": "ran_tests", "confirm": "passed"}}])
     exts, facts = parse_payload(raw)
     assert [e["name"] for e in exts] == ["ok"]
@@ -78,7 +81,7 @@ def test_update_survives_malformed_proposer_reply(tmp_path, raw):
 def test_valid_fact_admitted_alongside_malformed_ones(tmp_path):
     raw = _payload(
         extractors=[{"name": ["bad"], "pattern": "x"}],
-        facts=[{"id": ["bad"], "detector": {}},
+        facts=[{"id": ["bad"], "detector": {"scope": "ran_tests"}},
                {"id": "use-pytest", "claim": "pytest is canonical", "injection": "run pytest",
                 "detector": {"scope": "ran_tests", "confirm": "passed", "fired": "ran_tests"},
                 "cite": ["w-0", "w-1"]}])
@@ -93,4 +96,25 @@ def test_valid_fact_admitted_alongside_malformed_ones(tmp_path):
     finally:
         dist.PROPOSE_EVERY = saved
     assert "use-pytest" in d.facts
+    assert set(d.facts) == {"use-pytest"}
+
+
+def test_empty_detectors_do_not_crowd_out_a_valid_fact(tmp_path):
+    """An empty detector never grounds; it must not take one of the MAX_CANDS slots."""
+    raw = _payload(
+        extractors=[],
+        facts=[*({"id": f"empty-{i}", "detector": {}} for i in range(4)),
+               {"id": "use-pytest", "claim": "pytest is canonical", "injection": "run pytest",
+                "detector": {"scope": "ran_tests", "confirm": "passed", "fired": "ran_tests"},
+                "cite": ["w-0", "w-1"]}])
+    d = Distiller("acme/widget", runner=_runner(raw))
+    d.last_propose = -1
+    saved, dist.PROPOSE_EVERY = dist.PROPOSE_EVERY, 1
+    try:
+        for i in range(2):
+            tr = str(tmp_path / f"t{i}.jsonl")
+            write_claude_transcript(tr, [("bash", {"command": "pytest"}, "1 passed")])
+            d.update(tr, iid=f"w-{i}", resolved=True)
+    finally:
+        dist.PROPOSE_EVERY = saved
     assert set(d.facts) == {"use-pytest"}

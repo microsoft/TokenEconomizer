@@ -526,12 +526,14 @@ def parse_payload(raw):
         obj = json.loads(m.group(0))
     except Exception:
         return [], []
-    exts = [e for e in (obj.get("extractors") or [])
+    exts, facts = obj.get("extractors"), obj.get("facts")
+    exts = [e for e in (exts if isinstance(exts, list) else [])
             if isinstance(e, dict) and isinstance(e.get("name"), str) and e.get("name")
-            and isinstance(e.get("pattern"), str)]
-    facts = [f for f in (obj.get("facts") or [])
+            and isinstance(e.get("pattern"), str) and e.get("pattern")]
+    facts = [f for f in (facts if isinstance(facts, list) else [])
              if isinstance(f, dict) and isinstance(f.get("id"), str) and f.get("id")
-             and isinstance(f.get("detector"), dict) and _detector_fields_ok(f["detector"])
+             and isinstance(f.get("detector"), dict) and f.get("detector")
+             and _detector_fields_ok(f["detector"])
              and (f.get("cite") is None or isinstance(f.get("cite"), list))]
     return exts, facts
 
