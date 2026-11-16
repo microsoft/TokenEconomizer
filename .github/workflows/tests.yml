@@ -39,6 +39,10 @@ jobs:
           }
         env:
           COLUMNS: "200"
+          # The PowerShell tests (marker `powershell`) check the hook's and the slash commands'
+          # PowerShell text, and each launches PowerShell several times: one Python of the
+          # Windows matrix runs them.
+          PYTEST_ADDOPTS: ${{ matrix.os == 'windows-latest' && matrix.python == '3.10' && '-m "not powershell"' || '' }}
 
   codex:
     # The plugin installed and run by a real Codex CLI (tests/test_codex_cli.py): its install
