@@ -230,6 +230,25 @@ def test_running_steps_system_rows_and_finish_do_not_shift_the_pairing(tp):
     assert [(i["args"]["command"], i["exit_code"]) for i in items] == [("ls", 0)]
 
 
+def test_write_file_and_edit_file_read_as_write_and_edit(tp, tmp_path):
+    """`write_file` and `edit_file` (with `Path`), the names reported from Antigravity Desktop's
+    transcripts, read as Write and Edit, as agy's own file tools do."""
+    t = Transcript(tp)
+    t.prompt("add a helper")
+    t.call([("write_file", {"Path": "/work/repo/src/helper.py"})], [("ok", {"type": "CODE_ACTION"})])
+    t.call([("edit_file", {"Path": "/work/repo/src/helper.py"})], [("ok", {"type": "CODE_ACTION"})])
+    items, _offset, _last = trace.antigravity_read(str(tp), offset=0, after=-1, final=True)
+    assert [(i["name"], i["args"], i["is_error"]) for i in items if i["kind"] == "tool"] == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}, False),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"}, False)]
+    work = tmp_path / "w"
+    work.mkdir()
+    path = Antigravity().mechanism_trace(str(tp), str(work))
+    assert [(tool, args) for tool, args, _text, _ok in trace.load_trajectory(path)] == [
+        ("Write", {"file_path": "/work/repo/src/helper.py"}),
+        ("Edit", {"file_path": "/work/repo/src/helper.py"})]
+
+
 # ---- agy's answer --------------------------------------------------------------------------
 def test_render_answers_each_event_in_agys_terms():
     host = Antigravity()

@@ -849,7 +849,10 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   prompt). A `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
   `PostToolUse` carries no tool result and a matcher `"*"` never matches, so the results are read
   from the conversation's `transcript_full.jsonl` at the next `PreInvocation` and at `Stop`, where
-  every result of the previous model call is already written (`trace/antigravity.py`). There is no
+  every result of the previous model call is already written (`trace/antigravity.py`). The reader
+  also takes `write_file` and `edit_file` (with `Path`), the names reported from Antigravity
+  Desktop's transcripts, as Write and Edit; the plugin has not been run with Antigravity Desktop.
+  There is no
   prompt event and no `SessionEnd`: a prompt is the `PreInvocation` with `invocationNum` 0, and a
   conversation is folded by the next session start in its repository once its transcript has been
   quiet for ten minutes. Context goes back as `injectSteps`: a persistent `systemMessage` at
