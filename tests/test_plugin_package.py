@@ -637,6 +637,61 @@ console.log(JSON.stringify([
     assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
 
 
+def test_pi_completes_te_as_its_parser_declares_it():
+    """`/te` completes the `te` command line from a table that must match `build_parser()`: every
+    subcommand a Pi user runs, its actions and its options. It completes a word at a time, the
+    item restating what was typed, since Pi replaces the typed arguments with the item's value."""
+    import argparse
+    from tokeneconomizer.plugin.cli import build_parser
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    (sub,) = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)]
+    expected, seen = {}, set()
+    for name, p in sub.choices.items():          # a name first, then its aliases
+        if id(p) in seen or name in ("fold", "judge", "probe"):
+            seen.add(id(p))
+            continue
+        seen.add(id(p))
+        expected[name] = {
+            "actions": [c for a in p._actions if a.dest == "action" for c in a.choices],
+            "flags": [s for a in p._actions if a.option_strings and a.help != argparse.SUPPRESS
+                      and a.dest not in ("help", "cwd", "host") for s in a.option_strings],
+        }
+    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
+    script = """
+const { pathToFileURL } = await import("node:url");
+const { TE_COMMANDS, completeTe } = await import(pathToFileURL(process.argv[1]).href);
+const values = (p) => completeTe(p)?.map((i) => i.value) ?? null;
+console.log(JSON.stringify({
+  table: TE_COMMANDS,
+  cases: ["", "mi", "microskills ", "microskills f", "status --", "status --json --",
+          "history import ", "config --global ", "nope ", "doctor x"].map(values),
+}));
+"""
+    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
+                          "--input-type=module", "-e", script, ext],
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert out["table"] == expected
+    assert out["cases"] == [
+        [f"{name} " for name in expected],
+        ["microskills "],
+        ["microskills show ", "microskills forget ", "microskills unforget "],
+        ["microskills forget "],
+        ["status --json ", "status --explain "],
+        ["status --json --explain "],
+        ["history import --dry-run ", "history import --status "],
+        ["config --global show ", "config --global set ", "config --global unset "],
+        None,
+        None,
+    ]
+
+
 def test_the_plugin_directory_is_also_a_pi_package():
     """One directory, three agents: Pi loads the extension its `pi` manifest names, and that
     extension drives the same launchers the Claude Code and Codex hooks run."""
