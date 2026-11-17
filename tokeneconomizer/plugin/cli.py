@@ -751,7 +751,10 @@ def cmd_history(args):
     res = history.run(ctx, auto=args.auto, log=lambda line: print(line, flush=True))
     if args.auto:
         return 0
-    if res["state"] in ("refused", "skipped", "busy"):
+    if res["state"] in ("refused", "skipped", "busy", "error"):
+        # "error" is a fatal error inside the import: `run` recorded the reason
+        # and left no `imported` count, so it is reported like the other
+        # failure states rather than read as one.
         print(f"not imported: {res['reason']}")
         return 1
     print(f"imported {res['imported']} earlier session(s) of {ctx.repo.label}"
