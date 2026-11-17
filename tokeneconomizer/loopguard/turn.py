@@ -41,6 +41,11 @@ _PYTHON = (r"python\d?(?:\.\d+)?"
 VERIFY_RE = re.compile(
     r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
     r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|" + _PYTHON + r"\s+-m\s+(?:pytest|unittest)|"
+    # coverage.py measuring a test run (`coverage run -m pytest`, `python -m coverage run
+    # manage.py test`), past its own options, of which these take a value
+    r"(?:-m\s+)?coverage\s+run(?:\s+(?:--(?:rcfile|source|omit|include|data-file|context|"
+    r"concurrency|debug|save-signal)(?:=|\s+)\S+|-[-\w]+))*\s+"
+    r"(?:-m\s+(?:pytest|unittest)|(?:[\w.\-]+/)*(?:manage\.py\s+test|runtests(?:\.py)?))|"
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
