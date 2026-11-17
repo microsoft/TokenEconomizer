@@ -187,8 +187,10 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     stage.catalog_desc = dict(st.get("catalog_desc") or {})
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
-    # The mask this session actually ran under: none, for one from before the plugin.
-    stage._exclude_tools = [] if imported else list(applied)
+    # Read the session's catalog even when it ran under a deny list. The stage skips a masked
+    # session's catalog, but here the catalog is only ever added to, so a shorter list removes
+    # nothing, and skipping it would keep out every tool that first appears later.
+    stage._exclude_tools = []
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
     # person wrote, and only in the direction of giving a tool back.
@@ -233,8 +235,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     doc = {"used_tools": sorted(stage.used_tools), "streaks": stage.tool_unused_streaks,
            "prompt_streaks": prompt_streaks,
            "catalog_tools": sorted(stage.catalog_tools), "catalog_desc": stage.catalog_desc,
-           # A session run under an applied mask parses no catalog (the stage skips it, as the
-           # masked list is not the full one); the last source still describes the catalog.
+           # A session with no tool call and no catalog parses none; the last source still
+           # describes the catalog.
            "catalog_source": srow.get("untool_catalog_source") or st.get("catalog_source"),
            "sessions": sessions, "prompts": int(st.get("prompts", 0)) + (prompts or 0),
            "updated": time.time()}
