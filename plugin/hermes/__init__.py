@@ -26,11 +26,16 @@ levers. All of the mechanism logic lives in the dispatcher; this file only trans
 One gateway serves every session and every repository, and its own directory and environment
 belong to neither, so everything about a session is read from its row in `state.db`, per session.
 
-The plugin follows only sessions a person started in a directory on this machine: `created_source`
-`cli` or `oneshot`, with a `cwd`. That is also what keeps it out of its own side calls, which run
-in this same gateway as `--source tool` and which `TE_SIDECALL` cannot reach; a session whose row
-cannot be read is not followed. Subagents (`subagent`), messaging platforms, cron and the other
-surfaces are not followed either.
+The plugin follows the sessions a person or a schedule started: `created_source` `cli` or
+`oneshot` on this machine, a messaging platform or the API server (`GATEWAY_SOURCES`), and `cron`.
+Each needs a directory: its row's `cwd`, or for a gateway session with none, the gateway's own
+working directory (`TERMINAL_CWD`). A `cron` run is one turn, so it ends with it, as `hermes -z`
+does. Sessions of the plugin's own side calls run in this same gateway as `--source tool` and
+`TE_SIDECALL` cannot reach them, and a session whose row cannot be read is not followed, so both
+stay out. Subagents (`subagent`) are not followed: the fold prices a session with its subagents,
+and a child of its own would count them twice. The terminal UI and ACP are not followed either.
+
+`/te` runs the command line (`te --host hermes ...`) where Hermes has `register_command`.
 
 Hermes runs hooks under `plugins.hook_callback_timeout` (30s), and one overrun silences that
 callback for 60s for every session, so a dispatcher call has a shorter limit of its own. Every
@@ -40,6 +45,7 @@ import json
 import logging
 import os
 import pathlib
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -50,6 +56,10 @@ logger = logging.getLogger(__name__)
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOOTSTRAP = os.path.join(HERE, "..", "scripts", "te_bootstrap.py")
 USER_SOURCES = ("cli", "oneshot")
+GATEWAY_SOURCES = ("api_server", "discord", "telegram", "slack", "whatsapp", "signal", "matrix",
+                   "mattermost", "email", "sms", "webhook")
+SCHEDULED_SOURCES = ("cron",)
+FOLLOWED_SOURCES = USER_SOURCES + GATEWAY_SOURCES + SCHEDULED_SOURCES
 HOOK_TIMEOUT_S = 20
 LOCK_TIMEOUT_S = 5
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -176,8 +186,8 @@ class Bridge:
 
     def _record(self, row, root):
         return {"id": root, "cwd": row["cwd"], "lock": threading.Lock(), "started": False,
-                "mode": "oneshot" if (row.get("created_source") or row.get("source")) == "oneshot"
-                        else "cli", "held": [], "notices": []}
+                "mode": "oneshot" if (row.get("created_source") or row.get("source"))
+                        in ("oneshot",) + SCHEDULED_SOURCES else "cli", "held": [], "notices": []}
 
     def session(self, session_id):
         """The record of a session the plugin follows, or None. A row that cannot be read is
@@ -201,8 +211,10 @@ class Bridge:
         leaf, root = chain[-1], chain[0]["id"]
         origin = chain[0].get("created_source") or chain[0].get("source")
         cwd = leaf.get("cwd") or chain[0].get("cwd")
+        if not cwd and origin in GATEWAY_SOURCES:
+            cwd = os.environ.get("TERMINAL_CWD")      # a messaging session records none
         with self.guard:
-            if origin not in USER_SOURCES or not cwd or not os.path.isdir(cwd):
+            if origin not in FOLLOWED_SOURCES or not cwd or not os.path.isdir(cwd):
                 if len(self.ignored) >= MAX_IGNORED:
                     self.ignored.clear()
                 self.ignored.add(session_id)
@@ -316,6 +328,20 @@ class Bridge:
         return "\n".join(notices) or None
 
 
+def te_command(raw_args=""):
+    """`/te ...`: the command line, as `te --host hermes ...`, and its output as the reply."""
+    try:
+        argv = shlex.split(raw_args or "")
+        out = subprocess.run([os.environ.get("TE_PYTHON") or sys.executable, BOOTSTRAP, "cli",
+                              "--host", "hermes", *argv],
+                             capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=HOOK_TIMEOUT_S, stdin=subprocess.DEVNULL,
+                             env=dict(os.environ, PYTHONUTF8="1", HERMES_HOME=hermes_home()),
+                             **HIDDEN)
+        return ((out.stdout or "") + (out.stderr or "")).strip() or "te: no output"
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return f"te: {e}"
+
 def register(ctx):
     bridge = Bridge()
     ctx.register_system_prompt_section(SECTION_ID, bridge.section, position="after_memory",
@@ -324,3 +350,5 @@ def register(ctx):
     ctx.register_hook("transform_tool_result", bridge.transform_tool_result)
     ctx.register_hook("on_session_end", bridge.on_session_end)
     ctx.register_hook("on_session_finalize", bridge.on_session_finalize)
+    if hasattr(ctx, "register_command"):              # older Hermes has none
+        ctx.register_command("te", te_command, description="TokenEconomizer status and settings")

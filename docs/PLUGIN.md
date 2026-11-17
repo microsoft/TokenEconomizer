@@ -598,8 +598,10 @@ was not.)
   (`reason: cli_close`), and, against the docs, not for `hermes -z`.
 * A subagent fires the whole set, on a session of its own (`created_source: subagent`).
 * A user's interactive row reads `source: local`, `created_source: cli`; a side call's reads
-  `tool`, with no `cwd`. The plugin follows `created_source` `cli` and `oneshot` with a `cwd`, and a
-  row it cannot read not at all, so the filter fails closed.
+  `tool`, with no `cwd`. The plugin follows `created_source` `cli`, `oneshot`, `cron` and the gateway
+  platforms it lists with a `cwd` (a gateway session with none takes the gateway's `TERMINAL_CWD`),
+  and a row it cannot read not at all, so the filter fails closed. Subagents stay out: the fold
+  prices a session with its subagents.
 * **Side calls.** `--source tokeneconomizer` is refused (`invalid_params`), though the docs say any
   value is stored; `tool` is accepted. `TE_SIDECALL` does not reach the gateway, and worse: with no
   gateway running a side call starts one, which kept `TE_SIDECALL=1` in its environment, and would
@@ -835,8 +837,8 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   never gets it), and the ledger counts it as injected from `SessionStart`. A turn interrupted
   with Ctrl+C is closed by the next prompt, not by an event. Side calls leave a session under
   `~/.grok/sessions/`; xAI models are priced on the fallback curve.
-* **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
-  runs, verified with a scripted model and one free real model. Its limits are listed in
+* **Hermes Agent** (experimental): micro-skills and the loop guard, on the classic CLI, one-shot
+  runs, gateway sessions and `cron`, and `/te` where Hermes has `register_command`; verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
 * **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, tested against
   `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux, using its installed hook documentation;

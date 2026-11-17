@@ -283,10 +283,10 @@ def test_a_result_with_no_place_for_a_redirect_is_left_alone(raw):
 
 # ---- which sessions are followed ---------------------------------------------------------------
 @pytest.mark.parametrize("source,created", [("tool", "tool"), ("subagent", "subagent"),
-                                            ("telegram", "telegram"), ("cron", "cron"),
-                                            ("local", "tui"), ("local", "acp")])
-def test_only_a_persons_classic_or_one_shot_session_is_followed(bridge, home, tmp_path, source,
-                                                                created):
+                                            ("local", "tui"), ("local", "acp"),
+                                            ("unknown", "unknown")])
+def test_only_sessions_a_person_or_a_schedule_started_are_followed(bridge, home, tmp_path, source,
+                                                                   created):
     home.session("x", source=source, created=created, cwd=str(tmp_path))
     assert bridge.section({"session_id": "x"}) == ""
     assert bridge.pre_llm_call(session_id="x", turn_id="t") is None
@@ -295,6 +295,39 @@ def test_only_a_persons_classic_or_one_shot_session_is_followed(bridge, home, tm
     assert bridge.on_session_finalize(session_id="x") is None
     assert bridge.fake.calls == []
 
+@pytest.mark.parametrize("source", ["discord", "telegram", "api_server", "slack", "cron"])
+def test_a_gateway_or_cron_session_is_followed_from_its_recorded_directory(bridge, home, tmp_path,
+                                                                           source):
+    home.session("g", source=source, created=source, cwd=str(tmp_path))
+    bridge.section({"session_id": "g"})
+    bridge.pre_llm_call(session_id="g", user_message="hi", turn_id="t")
+    assert bridge.fake.events() == ["SessionStart", "UserPromptSubmit"]
+    assert {c["_cwd"] for c in bridge.fake.calls} == {str(tmp_path)}
+    assert bridge.fake.calls[0]["_mode"] == ("oneshot" if source == "cron" else "cli")
+
+def test_a_gateway_session_with_no_recorded_directory_uses_the_gateways_working_one(
+        bridge, home, tmp_path, monkeypatch):
+    home.session("g", source="discord", created="discord", cwd=None)
+    home.session("t", source="tool", created="tool", cwd=None)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    bridge.section({"session_id": "g"})
+    bridge.section({"session_id": "t"})
+    assert bridge.fake.events() == ["SessionStart"]
+    assert bridge.fake.calls[0]["_cwd"] == str(tmp_path)
+    assert bridge.fake.calls[0]["session_id"] == "g"
+
+def test_a_cli_session_with_no_directory_does_not_borrow_the_gateways(bridge, home, tmp_path,
+                                                                      monkeypatch):
+    home.session("c", cwd=None)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    assert bridge.section({"session_id": "c"}) == ""
+    assert bridge.fake.calls == []
+
+def test_a_cron_session_ends_with_its_turn(bridge, home, tmp_path):
+    home.session("j", source="cron", created="cron", cwd=str(tmp_path))
+    bridge.pre_llm_call(session_id="j", user_message="go", turn_id="t")
+    bridge.on_session_end(session_id="j", turn_id="t", completed=True)
+    assert bridge.fake.events() == ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
 
 def test_a_session_with_no_directory_here_or_with_the_plugin_off_is_not_followed(
         bridge, home, monkeypatch):
@@ -748,6 +781,43 @@ class Ctx:
 
     def register_system_prompt_section(self, sid, cb, position="", max_chars=0):
         self.sections[sid] = (cb, position, max_chars)
+
+class CommandCtx(Ctx):
+    def __init__(self):
+        super().__init__()
+        self.commands = {}
+
+    def register_command(self, name, handler, description=""):
+        self.commands[name] = (handler, description)
+
+def test_te_is_a_slash_command_where_hermes_has_them_and_nothing_where_it_has_not():
+    plugin.register(Ctx())                                   # an older Hermes: no register_command
+    ctx = CommandCtx()
+    plugin.register(ctx)
+    handler, description = ctx.commands["te"]
+    assert description
+
+def test_te_runs_the_command_line_for_hermes_and_returns_its_output(monkeypatch):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(cmd=cmd, kw=kw)
+        return subprocess.CompletedProcess(cmd, 0, stdout="all quiet\n", stderr="")
+
+    monkeypatch.setattr(plugin.subprocess, "run", run)
+    monkeypatch.setattr(plugin, "hermes_home", lambda: "/h")
+    assert plugin.te_command("status --explain") == "all quiet"
+    assert seen["cmd"][1:] == [plugin.BOOTSTRAP, "cli", "--host", "hermes", "status", "--explain"]
+    assert seen["kw"]["env"]["HERMES_HOME"] == "/h"
+    assert seen["kw"]["timeout"] <= plugin.HOOK_TIMEOUT_S
+
+@pytest.mark.parametrize("fail", [OSError("no python"), subprocess.TimeoutExpired("te", 1)])
+def test_te_never_raises(monkeypatch, fail):
+    def run(*a, **kw):
+        raise fail
+    monkeypatch.setattr(plugin.subprocess, "run", run)
+    assert plugin.te_command("status").startswith("te:")
+    assert plugin.te_command("unbalanced 'quote").startswith("te:")
 
 
 def test_the_plugin_registers_what_its_manifest_declares():
