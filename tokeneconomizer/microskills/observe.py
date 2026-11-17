@@ -98,7 +98,24 @@ DEFAULT_VOCAB = PYTHON_GIT
 GIT_FETCH_SUBS = frozenset({"fetch", "clone", "pull", "ls-remote"})
 GIT_PROBE_SUBS = frozenset({"remote", "branch", "tag", "fsck", "stash", "show-ref",
                             "for-each-ref"})
-PREFIX_HEADS = ("sudo", "env", "time", "exec", "nice", "nohup", "timeout")
+# Wrappers a command can be typed behind, each with its options that take a value: `sudo -u bob
+# pytest` and `nice -n 10 pytest` are pytest runs, not a command named `-u` or `-n`.
+# loopguard/shell_edits.py keeps the same table for the edits it reads (`_WRAPPERS`).
+PREFIX_HEADS = {
+    "sudo": frozenset({"-u", "-g", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "--user",
+                       "--group", "--prompt", "--close-from", "--chdir", "--chroot", "--role",
+                       "--type", "--command-timeout", "--other-user"}),
+    "env": frozenset({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}),
+    "time": frozenset({"-f", "-o", "--format", "--output"}),
+    "exec": frozenset({"-a"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "nohup": frozenset(),
+    "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
+}
+# `env` options that change the environment or the directory the command runs in, which the
+# command's form leaves out, as it leaves out a `VAR=value`.
+_ENV_CHANGES_RE = re.compile(r"^(?:-$|-[a-zA-Z0-9]*[iuCS]|"
+                             r"--(?:ignore-environment|unset|chdir|split-string)\b)")
 _PASSTHROUGH = frozenset({"cd", "echo", "head", "tail", "cat", "sort", "uniq", "tee", "true",
                           "printf", "less", "more"})
 
@@ -360,7 +377,11 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             if _ASSIGN_TOKEN_RE.match(toks[0]):          # `env VAR=value cmd`
                 assigned, toks = True, toks[1:]
             else:
-                toks = toks[1:] if toks[0] != "timeout" else toks[2:]
+                rest = _past_prefix(toks)
+                if toks[0] == "env" and any(_ENV_CHANGES_RE.match(t)
+                                            for t in toks[1:len(toks) - len(rest)]):
+                    assigned = True                      # `env -u VAR cmd`, `env -i cmd`
+                toks = rest
         if not toks:
             continue
         head = toks[0]
@@ -371,6 +392,30 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             o.env = assigned
             obs.append(o)
     return obs
+
+
+def _past_prefix(toks):
+    """The words after a wrapper such as `sudo` or `timeout`: past its own options (`-u bob`,
+    `-Eu bob`, `-n10`, `--signal KILL`, `--`) and, for `timeout`, the duration."""
+    takes_value = PREFIX_HEADS[toks[0]]
+    i = 1
+    while i < len(toks) and toks[i].startswith("-"):
+        t = toks[i]
+        i += 1
+        if t == "--":
+            break
+        if t.startswith("--"):
+            if t in takes_value:                          # `--user bob`, not `--user=bob`
+                i += 1
+            continue
+        for n, letter in enumerate(t[1:], 2):             # `-Eu bob`, `-ubob`, `-n10`, `-10`
+            if "-" + letter in takes_value:
+                if n == len(t):                           # the value is the next word
+                    i += 1
+                break
+    if toks[0] == "timeout":
+        i += 1
+    return toks[i:]
 
 
 def _runner_script(rest, vocab):
