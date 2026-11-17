@@ -346,8 +346,8 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S, effort=""):
         eff, _ = accounting.effective({
             "input_tokens": max(0, inp - cached - cw), "cache_read_input_tokens": cached,
             "cache_creation_input_tokens": cw,
-            "output_tokens": int(usage.get("output_tokens") or 0)
-            + int(usage.get("reasoning_output_tokens") or 0),
+            # Codex's output_tokens already holds its reasoning_output_tokens.
+            "output_tokens": int(usage.get("output_tokens") or 0),
             "model": model or "codex"})
     return text, eff
 

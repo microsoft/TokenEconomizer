@@ -195,10 +195,10 @@ def _rollout(path):
             "type": "Reasoning", "id": "r1"}}},
         {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
             "input_tokens": 1000, "cached_input_tokens": 600, "cache_write_input_tokens": 100,
-            "output_tokens": 40, "reasoning_output_tokens": 10}}}},
+            "output_tokens": 40, "reasoning_output_tokens": 10, "total_tokens": 1040}}}},
         {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
             "input_tokens": 3000, "cached_input_tokens": 2000, "cache_write_input_tokens": 200,
-            "output_tokens": 90, "reasoning_output_tokens": 30}}}},
+            "output_tokens": 90, "reasoning_output_tokens": 30, "total_tokens": 3090}}}},
     ]
     with open(path, "w") as fh:
         fh.write("\n".join(json.dumps(r) for r in recs) + "\n")
@@ -215,12 +215,38 @@ def test_codex_rollout_reads_through_the_existing_trace_seam(tmp_path):
     assert traj[1][0] == "apply_patch" and traj[1][1]["path"] == "/work/r/pkg/a.py"
 
 
-def test_codex_usage_is_converted_as_the_harness_converts_it(tmp_path):
+def test_codex_usage_counts_reasoning_once(tmp_path):
     u = trace.codex_session_usage(_rollout(str(tmp_path / "rollout-x.jsonl")))
-    # last cumulative total; fresh input excludes both cache fields; reasoning joins output
+    # last cumulative total; fresh input excludes both cache fields; Codex's output_tokens
+    # already holds its reasoning (total_tokens == input + output), so it is taken as reported
     assert u["input_tokens"] == 3000 - 2000 - 200
     assert u["cache_read_input_tokens"] == 2000 and u["cache_creation_input_tokens"] == 200
-    assert u["output_tokens"] == 90 + 30 and u["model"] == "gpt-6-astra"
+    assert u["output_tokens"] == 90 and u["reasoning_output_tokens"] == 30
+    assert u["model"] == "gpt-6-astra"
+
+
+@pytest.mark.real_sidecalls
+def test_codex_side_call_counts_reasoning_once(monkeypatch, tmp_path):
+    """`codex exec --json` reports reasoning inside `output_tokens`; the side call's cost must
+    price output as reported, not add `reasoning_output_tokens` again."""
+    from tokeneconomizer.plugin import accounting, sidecall
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    usage = {"input_tokens": 12023, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+             "output_tokens": 80, "reasoning_output_tokens": 64}
+
+    def fake_run(cmd, **kw):
+        out = "\n".join(json.dumps(e) for e in (
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "380"}},
+            {"type": "turn.completed", "usage": usage}))
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    text, eff = sidecall.codex_call("how many?", model="gpt-5-mini")
+    once, _ = accounting.effective({
+        "input_tokens": 12023, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+        "output_tokens": 80, "model": "gpt-5-mini"})
+    assert text == "380" and eff == once
 
 
 def test_codex_capability_evidence_includes_the_models_own_exec_calls(tmp_path):
