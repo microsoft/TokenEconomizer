@@ -244,8 +244,10 @@ def codex_session_meta(rollout_path):
 def codex_session_usage(rollout_path):
     """Token breakdown of a Codex session from its last cumulative `token_count`.
 
-    Converted as `te_harness.codex.row_usage` converts the exec stream: fresh input is the grand
-    input total less both cache fields, and reasoning tokens are added to output."""
+    Fresh input is the grand input total less both cache fields. Codex's `output_tokens` already
+    holds the reasoning tokens (its `total_tokens` is input plus output, and its own "tokens used"
+    adds nothing for reasoning), so output is taken as reported; `reasoning_output_tokens` is kept
+    as information only."""
     total = None
     requests = 0
     for line in _lines(rollout_path):
@@ -276,6 +278,6 @@ def codex_session_usage(rollout_path):
     return {"input_tokens": max(0, inp - cached - cw),
             "cache_read_input_tokens": cached,
             "cache_creation_input_tokens": cw,
-            "output_tokens": int(total.get("output_tokens") or 0) + reasoning,
+            "output_tokens": int(total.get("output_tokens") or 0),
             "reasoning_output_tokens": reasoning,
             "requests": requests, "model": meta.get("model")}
