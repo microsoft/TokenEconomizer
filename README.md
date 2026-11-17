@@ -147,6 +147,11 @@ Start `codex`, choose **Trust and continue** for the folder, then at **Hooks nee
 choose **Trust all and continue**. The hooks take effect from your next Codex session, so quit
 (`/exit`), start `codex` again, and check with `$tokeneconomizer:status`.
 
+**GitHub Copilot in VS Code**
+
+See [VS Code setup](plugin/README.md#github-copilot-in-vs-code) to install from the editor
+with the **Copilot** session target, without GitHub CLI or standalone Copilot CLI.
+
 **Copilot CLI**
 
 ```sh

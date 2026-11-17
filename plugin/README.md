@@ -179,6 +179,40 @@ codex plugin add tokeneconomizer@tokeneconomizer
 
 To update it, rebuild the bundle and run `codex plugin add tokeneconomizer@tokeneconomizer` again.
 
+## GitHub Copilot in VS Code
+
+Requires Python >= 3.10 on PATH and Copilot signed in inside VS Code.
+
+**1. Install.**
+
+1. Open your project and select **Copilot** as the chat session target.
+2. Press **Ctrl+Shift+P**, run **Chat: Manage Plugin Marketplaces**, and choose **Add Marketplace**.
+3. Enter `microsoft/TokenEconomizer` (or the path to your local clone).
+4. Select the `tokeneconomizer` marketplace, choose **Browse**, and install `tokeneconomizer`.
+
+See [VS Code's plugin installation guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
+GitHub CLI and standalone Copilot CLI are not needed for installation.
+
+**2. Optional: use without Copilot CLI.** Skip this step to keep your current settings.
+To enable model-free micro-skills without the standalone CLI, enter this in a new Copilot chat:
+
+```text
+/tokeneconomizer:config set microskills=envfacts toolprune=off loopguard=off
+```
+
+This is not required for installation. It disables the model-based proposer and loop guard,
+which invoke the standalone CLI, and tool pruning, which has not been verified in VS Code.
+These settings apply to this repository.
+
+**3. Check it.** Enter `/tokeneconomizer:status` in chat and check that it reports the
+`copilot` host. If the command is missing, check **Chat: Open Customizations** > **Plugins**
+and start a fresh chat with the plugin enabled.
+
+**Update.** Run **Chat: Update Plugins**, then start a new chat.
+
+**Uninstall.** Open **Chat: Open Customizations** > **Plugins**, select TokenEconomizer,
+and choose **Uninstall**.
+
 ## Copilot CLI
 
 **1. Install.**

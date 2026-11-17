@@ -41,9 +41,11 @@ def load_trajectory(path):
     lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
     if _is_codex_exec(lines):
         return codex_exec_calls(lines)
-    if any('"tool_use"' in line or '"type": "assistant"' in line or '"type":"assistant"' in line
-           for line in lines):
-        return [c[:4] for c in claude_calls(lines)]
+    # Copilot can also say "tool_use" in metadata (for example a model's finish reason).
+    # Recognize actual Claude conversation blocks, not strings anywhere in the event log.
+    claude = claude_calls(lines)
+    if claude:
+        return [c[:4] for c in claude]
     return copilot_event_calls(lines)
 
 
