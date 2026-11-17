@@ -183,8 +183,8 @@ def typed_ok(o):
     return form_worked(o) and not o.env
 
 
-_RUN_WORDS = frozenset({"run", "npx", "uv", "uvx", "pipx", "poetry", "pipenv", "conda", "-m",
-                        "python", "python3"})
+_RUN_WORDS = frozenset({"run", "npx", "uv", "uvx", "pipx", "poetry", "pipenv", "conda",
+                        "micromamba", "-m", "python", "python3"})
 
 
 def _repairs(form, a_form, intent):
