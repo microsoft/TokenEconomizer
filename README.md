@@ -535,4 +535,4 @@ result. It is not part of the installed plugin; the two share only `tokeneconomi
 
 ## License
 
-Apache 2.0; see [`LICENSE`](LICENSE).
+[`MIT LICENSE`](LICENSE).
