@@ -21,6 +21,7 @@ import re
 import shlex
 import time
 
+from ..trace import RTK_WORDS
 from .rules import DEFAULT_THRESHOLDS, assess_abort, is_stuck, nudge_text
 from .shell_edits import (_split_heredocs, fold_shell_edits, shell_edit_targets,
                           shell_revert_targets)
@@ -78,6 +79,8 @@ _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nohup|command|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
                         r"(?:\s+-\S+)*|"
+                        # rtk's prefix, `rtk pytest`, `rtk proxy npm test` (trace.RTK_WORDS)
+                        + RTK_WORDS + r"(?=\s+\S)|"
                         # `dotenv -e .env.local -- npx vitest run`: dotenv-cli's options, then `--`
                         r"dotenv(?:\s+(?!--(?:\s|$))\S+)*\s+--)\s+)*")
 # What only reports on the run before it: `echo "exit=$?"`, `true`, `exit 0`.

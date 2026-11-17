@@ -761,6 +761,46 @@ def test_an_edit_run_through_a_wrapper_with_options_still_counts():
     assert g.whole.edit_counts == {"mod.py": 3}
 
 
+# ---- rtk's Codex mode puts `rtk` in front of every command the agent types ------------------
+@pytest.mark.parametrize("cmd", ["rtk pytest -q", "rtk proxy python -m pytest tests",
+                                 "rtk npm test", "rtk cargo test", "rtk go test ./...",
+                                 "rtk K=2 pytest", "FOO=1 rtk pytest -q",
+                                 "rtk proxy uv run pytest", "cd web && rtk npx vitest run"])
+def test_a_runner_behind_rtks_prefix_counts_as_a_verification(cmd):
+    """`rtk pytest` is a pytest run (trace.strip_rtk_prefix). The loop guard did not pass over
+    the prefix, so the run was no verification and a failing one after the last edit left the
+    turn green."""
+    assert turn.status_of_tests(cmd) == "own"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd,status", [("rtk", None), ("rtk proxy", None),
+                                        ("rtk pytest --collect-only", None),
+                                        ("rtk proxy echo pytest", None),
+                                        ("rtk pytest -q | tail -3", "hidden"),
+                                        ("rtkpytest -q", None)])
+def test_rtks_prefix_leaves_what_it_runs_to_decide(cmd, status):
+    assert turn.status_of_tests(cmd) == status
+
+
+def test_rtks_prefix_keeps_a_read_quiet_and_an_edit_an_edit():
+    """`rtk git status` only reads, as `git status` does, so a run after it keeps its own exit
+    status; `rtk proxy sed -i` edits and `rtk git checkout --` puts a file back."""
+    assert turn.exit_status_covers("rtk git status; rtk pytest -q")
+    assert not turn.exit_status_covers("rtk proxy python repro.py | tail -20")
+    assert guard.shell_edit_targets("rtk proxy sed -i 's/a/b/' pkg/mod.py") == ["mod.py"]
+    assert guard.shell_edit_targets("rtk git diff -- pkg/mod.py") == []
+    revert = "rtk git checkout -- pkg/mod.py"
+    assert shell_edits.shell_revert_targets(revert) == ["mod.py"]
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Bash", {"command": "rtk proxy sed -i 's/a/b/' pkg/mod.py"}, "", 0)
+    g.fold("Bash", {"command": revert}, "", 0)
+    assert g.edits == 2 and g.whole.edit_counts == {"mod.py": 2}
+
+
 def test_an_edit_after_a_here_string_is_counted():
     """`<<<` feeds one word to a command; reading it as a heredoc tag made every later line of
     the command a heredoc body, so a `sed -i` after it was not counted as an edit."""

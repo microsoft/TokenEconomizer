@@ -18,8 +18,10 @@ from .copilot import copilot_event_calls, copilot_session_cwd
 # command's first token -- the micro-skill vocabulary, a test-run detector -- would otherwise
 # stop seeing a test run, a fetch or a repository query. One definition, so the classifiers
 # cannot disagree about what counts as the wrapper. `rtk proxy` is rtk's own passthrough (run
-# unfiltered, still tracked); a bare `rtk` with no command is left alone.
-RTK_PREFIX_RE = re.compile(r"^rtk\s+(?:proxy\s+)?(?=\S)")
+# unfiltered, still tracked); a bare `rtk` with no command is left alone. `RTK_WORDS` is the
+# wrapper alone, for a classifier that passes over it among other prefixes (`loopguard.turn`).
+RTK_WORDS = r"rtk(?:\s+proxy)?"
+RTK_PREFIX_RE = re.compile(r"^" + RTK_WORDS + r"\s+(?=\S)")
 
 
 def strip_rtk_prefix(command):
