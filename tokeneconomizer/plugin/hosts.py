@@ -47,6 +47,7 @@ import shlex
 import time
 
 from .. import trace
+from .store import replace_retrying
 
 _RESPONSE_KEYS = ("stdout", "stderr", "output", "aggregated_output", "formatted_output",
                   "content", "result", "error", "message", "text_result_for_llm")
@@ -541,7 +542,7 @@ class OpenCode(Host):
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(out.stdout)
                 if trace.opencode_prompt_count(tmp):
-                    os.replace(tmp, path)
+                    replace_retrying(tmp, path)
                     return path
             except OSError:
                 return transcript_path
@@ -881,9 +882,15 @@ class Antigravity(Host):
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         tmp = f"{path}.{os.getpid()}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(st, fh)
-        os.replace(tmp, path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(st, fh)
+            replace_retrying(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
 
     def _prune(self, env):
         """Forget cursors of conversations nobody has used for `STATE_KEEP_S`."""

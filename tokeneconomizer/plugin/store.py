@@ -64,6 +64,11 @@ def _replace(src, dst):
     return _retrying(lambda: os.replace(src, dst))
 
 
+# The public name, for the plugin's other atomic writers. The mechanisms (`toolprune`, `trace`)
+# must not import the plugin runtime, so they cannot use it.
+replace_retrying = _replace
+
+
 class Store:
     """One directory of JSON documents and append-only JSONL logs."""
 

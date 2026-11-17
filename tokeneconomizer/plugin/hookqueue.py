@@ -29,7 +29,7 @@ import os
 import re
 import time
 
-from .store import Store
+from .store import Store, replace_retrying
 
 # Seconds a hook waits for its session's lock. Each stays short of the shortest timeout any agent
 # gives that hook (`plugin/hooks/*.json`), which a test pins: Codex allows SessionEnd 3 s.
@@ -61,9 +61,15 @@ def enqueue(queue, payload):
         os.makedirs(queue, exist_ok=True)
         name = f"{time.time_ns():020d}-{os.getpid():08d}-{next(_SEQ):06d}"
         tmp = os.path.join(queue, name + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        os.replace(tmp, os.path.join(queue, name + ".json"))
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            replace_retrying(tmp, os.path.join(queue, name + ".json"))
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
         return True
     except (OSError, TypeError, ValueError):
         return False

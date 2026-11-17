@@ -35,7 +35,7 @@ from ..names import repo_filename
 from . import hosts as hosts_mod
 from .paths import (BY_PATH, BY_REMOTE, RepoId, _slug, digest, home_dir, is_git_entry,
                     normalize_remote, origin_url, repo_identity, state_root)
-from .store import Store
+from .store import Store, replace_retrying
 
 INDEX = "index.json"
 LAYOUT = 2                  # the state layout this version writes (1: everything up to 0.1.0)
@@ -256,10 +256,16 @@ def _write_lines(st, name, records):
     target = st.path(name)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     tmp = f"{target}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        for r in records:
-            fh.write(json.dumps(r, sort_keys=True) + "\n")
-    os.replace(tmp, target)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        replace_retrying(tmp, target)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _rename_label(mech_dir, label):
