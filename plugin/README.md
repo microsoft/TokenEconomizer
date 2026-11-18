@@ -190,6 +190,11 @@ Requires Python >= 3.10 on PATH and Copilot signed in inside VS Code.
 3. Enter `microsoft/TokenEconomizer` (or the path to your local clone).
 4. Select the `tokeneconomizer` marketplace, choose **Browse**, and install `tokeneconomizer`.
 
+If you install from GitHub rather than a local clone (or on Windows without Git symlink
+support), the copied plugin directory holds only `plugin/` without the Python package; either
+install from a bundle built with `python scripts/build_plugin.py`, or clone the repository to
+`~/.tokeneconomizer/src` (or set `TE_CORE_PATH` to your clone).
+
 See [VS Code's plugin installation guide](https://code.visualstudio.com/docs/agent-customization/agent-plugins).
 GitHub CLI and standalone Copilot CLI are not needed for installation.
 

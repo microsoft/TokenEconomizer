@@ -95,6 +95,153 @@ def _marketplace_sources(plugin_root):
     return out
 
 
+def _state_home():
+    return os.environ.get("TOKENECONOMIZER_HOME") or os.path.join(
+        os.path.expanduser("~"), ".tokeneconomizer")
+
+
+def _json_load_relaxed(path):
+    """Read a JSON file that may carry leading `//` comment lines (Copilot's config.json)."""
+    import json
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+        try:
+            text = fh.read()
+        finally:
+            fh.close()
+    except (IOError, OSError):
+        return None
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("//")]
+    try:
+        return json.loads("\n".join(lines))
+    except ValueError:
+        return None
+
+
+def _paths_from_entry(entry):
+    """Extract string directory candidates from a marketplace registry entry."""
+    out = []
+    if isinstance(entry, str):
+        out.append(entry)
+    elif isinstance(entry, dict):
+        src = entry.get("source")
+        if isinstance(src, str):
+            out.append(src)
+        elif isinstance(src, dict):
+            for key in ("path", "location", "root"):
+                if isinstance(src.get(key), str):
+                    out.append(src[key])
+        for key in ("path", "installLocation", "location", "sourcePath", "uri"):
+            val = entry.get(key)
+            if isinstance(val, str):
+                out.append(val)
+    cleaned = []
+    for cand in out:
+        if cand.startswith("file:///"):
+            from urllib.parse import unquote
+            # `file:///C:/foo` -> `C:/foo`; `file:///home/foo` -> `/home/foo`
+            tail = unquote(cand[8:])
+            if len(tail) >= 2 and tail[1] == ":":
+                cand = tail
+            else:
+                cand = "/" + tail
+        cleaned.append(cand)
+    return cleaned
+
+
+def _known_marketplace_sources(plugins_dir, market):
+    data = _json_load_relaxed(os.path.join(plugins_dir, "known_marketplaces.json"))
+    if not isinstance(data, dict):
+        return []
+    out = []
+    keys = [market] if market else []
+    for k in data:
+        if k not in keys and "tokeneconomizer" in str(k).lower():
+            keys.append(k)
+    for k in keys:
+        out.extend(_paths_from_entry(data.get(k)))
+    return out
+
+
+def _copilot_sources(copilot_home, market):
+    """Marketplace checkouts and registered local sources under a Copilot home directory."""
+    out = []
+    names = [market] if market and market != "_direct" else []
+    if "tokeneconomizer" not in names:
+        names.append("tokeneconomizer")
+    for sub in ("marketplaces", ".marketplaces", os.path.join("plugins", "marketplaces"),
+                "marketplace-cache"):
+        base = os.path.join(copilot_home, sub)
+        for name in names:
+            out.append(os.path.join(base, name))
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            entries = []
+        for entry in entries:
+            if "tokeneconomizer" in entry.lower():
+                out.append(os.path.join(base, entry))
+    for fname in ("config.json", "marketplaces.json", "known_marketplaces.json"):
+        data = _json_load_relaxed(os.path.join(copilot_home, fname))
+        if not isinstance(data, dict):
+            continue
+        for section in (data, data.get("marketplaces"), data.get("pluginMarketplaces")):
+            if isinstance(section, dict):
+                for name in names:
+                    out.extend(_paths_from_entry(section.get(name)))
+                for k, v in section.items():
+                    if "tokeneconomizer" in str(k).lower():
+                        out.extend(_paths_from_entry(v))
+    return out
+
+
+def _extra_sources(plugin_root):
+    """Package locations outside Claude/Codex's cache layout: Copilot `installed-plugins`,
+    VS Code's `agentPlugins` mirrors, cross-cache `~/.claude/plugins/known_marketplaces.json`
+    (`omp`/Copilot on Windows), and `<TOKENECONOMIZER_HOME>/src`."""
+    out = []
+    norm = os.path.normpath(plugin_root).rstrip(os.sep)
+    parts = norm.split(os.sep)
+    market = None
+    user_home = os.path.expanduser("~")
+
+    if "installed-plugins" in parts:
+        idx = parts.index("installed-plugins")
+        copilot_home = os.sep.join(parts[:idx]) or os.sep
+        if idx + 1 < len(parts):
+            market = parts[idx + 1]
+            out.extend(_copilot_sources(copilot_home, market))
+            if market == "_direct" and idx + 2 < len(parts):
+                out.extend(_copilot_sources(copilot_home, parts[idx + 2]))
+
+    if "agentPlugins" in parts:
+        ap_idx = parts.index("agentPlugins")
+        ap_dir = os.sep.join(parts[:ap_idx + 1]) or os.sep
+        for cfg_dir in (ap_dir, os.path.dirname(ap_dir)):
+            data = _json_load_relaxed(os.path.join(cfg_dir, "installed.json"))
+            if isinstance(data, dict):
+                for item in data.values():
+                    out.extend(_paths_from_entry(item))
+            elif isinstance(data, list):
+                for item in data:
+                    out.extend(_paths_from_entry(item))
+        user_copilot = os.path.join(user_home, ".copilot")
+        out.extend(_copilot_sources(user_copilot, "tokeneconomizer"))
+        inst_root = os.path.join(user_copilot, "installed-plugins")
+        try:
+            for sub in sorted(os.listdir(inst_root)):
+                if os.path.isdir(os.path.join(inst_root, sub)):
+                    out.extend(_copilot_sources(user_copilot, sub))
+        except OSError:
+            pass
+
+    if not market and len(parts) >= 6 and parts[-4] == "cache" and parts[-5] == "plugins":
+        market = parts[-3]
+    out.extend(_known_marketplace_sources(os.path.join(user_home, ".claude", "plugins"), market))
+    out.append(os.path.join(_state_home(), "src"))
+    return out
+
+
 def _symlink_stub(plugin_root):
     """Where `lib/tokeneconomizer` points when git checked the symlink out as a plain file
     holding its target (Windows without symlink support): the directory holding the package."""
@@ -112,7 +259,8 @@ def core_path():
     plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for cand in ([os.environ.get("TE_CORE_PATH"), os.path.join(plugin_root, "lib"),
                   _symlink_stub(plugin_root), os.path.dirname(plugin_root)]
-                 + _marketplace_sources(plugin_root)):
+                 + _marketplace_sources(plugin_root)
+                 + _extra_sources(plugin_root)):
         if cand and os.path.isfile(os.path.join(cand, "tokeneconomizer", "plugin", "hook.py")):
             return cand
     return None
@@ -120,10 +268,10 @@ def core_path():
 
 def _say_missing(plugin_root):
     """One line in the plugin's errors.log (not repeated) when the core cannot be found."""
-    home = os.environ.get("TOKENECONOMIZER_HOME") or os.path.join(os.path.expanduser("~"),
-                                                                  ".tokeneconomizer")
+    home = _state_home()
     line = ("bootstrap: the tokeneconomizer package was not found for the plugin at %s; "
-            "install from the bundle (scripts/build_plugin.py) or set TE_CORE_PATH\n" % plugin_root)
+            "install from the bundle (scripts/build_plugin.py), clone into "
+            "~/.tokeneconomizer/src, or set TE_CORE_PATH\n" % plugin_root)
     path = os.path.join(home, "errors.log")
     try:
         if os.path.exists(path) and line in open(path, encoding="utf-8", errors="replace").read():
