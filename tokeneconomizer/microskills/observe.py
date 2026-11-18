@@ -123,8 +123,11 @@ _ACTIVATE_RE = re.compile(r"^(?:source|\.)\s+\S*activate\s+([\w.-]+)\s*$")
 _CD_RE = re.compile(r"^cd\s+(['\"]?)([^\s;&|'\"]+)\1\s*$")
 _CD_FAILED_RE = re.compile(r"\bcd: [^\n]*: (?:No such file or directory|Not a directory)")
 _CONDA_ACTIVATE_RE = re.compile(r"^(?:conda|mamba)\s+activate\s+([\w.-]+)\s*$")
-_CONDA_RUN_RE = re.compile(r"^(?:conda|mamba)\s+run\s+(?:--no-capture-output\s+|--live-stream\s+)*"
-                           r"(?:-n|--name)\s+([\w.-]+)\s+")
+# The environment by name (`-n ml`) or by path (`-p ./env`); micromamba takes the same options.
+_CONDA_RUN_RE = re.compile(r"^(conda|mamba|micromamba)\s+run\s+"
+                           r"(?:--no-capture-output\s+|--live-stream\s+)*"
+                           r"(?:(?:-n|--name)(?:\s+|=)([\w.-]+)|"
+                           r"(?:-p|--prefix)(?:\s+|=)([^\s;&|'\"]+))\s+")
 _TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
 # Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
@@ -357,7 +360,9 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
         body = seg
         m = _CONDA_RUN_RE.match(body)
         if m:
-            prefix = (prefix + " " if prefix else "") + f"conda run -n {m.group(1)}"
+            launcher = "micromamba" if m.group(1) == "micromamba" else "conda"
+            env = f"-n {m.group(2)}" if m.group(2) else f"-p {m.group(3)}"
+            prefix = (prefix + " " if prefix else "") + f"{launcher} run {env}"
             body = body[m.end():]
         m = _TOOL_RUN_RE.match(body)
         if m:
