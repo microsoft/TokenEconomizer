@@ -434,15 +434,45 @@ def _runner_script(rest, vocab):
     return None
 
 
+# coverage.py's `run` options that take a value (`--source pkg`); the others are flags.
+_COVERAGE_VALUE_OPTS = frozenset({"--rcfile", "--source", "--omit", "--include", "--data-file",
+                                  "--context", "--concurrency", "--debug", "--save-signal"})
+
+
+def _coverage_target(args, vocab):
+    """What `coverage run <args>` runs, when it is a test runner: `-m pytest`, `manage.py`
+    (given `test`) or a runner script; None for anything else."""
+    i = 0
+    while i < len(args) and args[i].startswith("-") and args[i] != "-m":
+        i += 2 if args[i] in _COVERAGE_VALUE_OPTS else 1
+    if args[i:i + 1] == ["-m"]:
+        mod = args[i + 1] if i + 1 < len(args) else ""
+        return f"-m {mod}" if mod in vocab.runner_modules else None
+    script = _runner_script(args[i:i + 1], vocab)
+    if script and (script != "manage.py" or "test" in args[i + 1:]):
+        return script
+    return None
+
+
 def _classify(head, base, rest, body, prefix, seg, call, vocab):
     def form(expr):
         return (prefix + " " + expr).strip() if prefix else expr
 
+    if base == "coverage" and rest[:1] == ["run"]:          # `coverage run -m pytest`
+        target = _coverage_target(rest[1:], vocab)
+        if target:
+            return Observation(call, "run_tests", form(f"{head} run {target}"), head, prefix, seg)
     if base in vocab.interpreters or _INTERP_VERSIONED_RE.match(base):
         if rest and all(t in ("--version", "-V", "-VV", "-v") for t in rest):
             return Observation(call, "probe_env", form(head), head, prefix, seg)
         if "-m" in rest:
             mod = rest[rest.index("-m") + 1] if rest.index("-m") + 1 < len(rest) else ""
+            after = rest[rest.index("-m") + 2:]
+            if mod == "coverage" and after[:1] == ["run"]:   # `python -m coverage run -m pytest`
+                target = _coverage_target(after[1:], vocab)
+                if target:
+                    return Observation(call, "run_tests", form(f"{head} -m coverage run {target}"),
+                                       head, prefix, seg)
             if mod in vocab.runner_modules:
                 return Observation(call, "run_tests", form(f"{head} -m {mod}"), head, prefix, seg)
             # `python -m mypy` runs the checker itself, not the interpreter.
