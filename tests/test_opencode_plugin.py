@@ -65,7 +65,7 @@ process.exit(0);
 '''
 
 
-def _run(tmp_path, plugin_file, name):
+def _run(tmp_path, plugin_file, name, state=None):
     """The harness against `plugin_file`, from a parent with no console; the probe's records."""
     work, probe_dir = tmp_path / f"work-{name}", tmp_path / "probe"
     work.mkdir()
@@ -76,7 +76,7 @@ def _run(tmp_path, plugin_file, name):
     harness = tmp_path / f"harness-{name}.ts"
     harness.write_text(HARNESS % json.dumps(pathlib.Path(plugin_file).as_uri()), encoding="utf-8")
     env = dict(os.environ, BUN_BE_BUN="1", TE_WORK=str(work), TE_PYTHON=sys.executable,
-               TOKENECONOMIZER_HOME=str(tmp_path / f"te-{name}"), TE_CORE_PATH=REPO,
+               TOKENECONOMIZER_HOME=str(tmp_path / f"te-{state or name}"), TE_CORE_PATH=REPO,
                PYTHONPATH=str(probe_dir), TE_CONSOLE_PROBE=str(log))
     env.pop("TE_DISABLE", None)
     flags = subprocess.DETACHED_PROCESS if os.name == "nt" else 0
@@ -128,6 +128,20 @@ def test_a_quiet_session_is_handed_over_without_a_mode_guess(tmp_path, monkeypat
     (state,) = (tmp_path / "te-quiet").glob("repos/*/opencode/sessions/ses_t.json")
     doc = json.loads(state.read_text(encoding="utf-8"))
     assert doc.get("end_reason") == "idle" and doc.get("ended"), doc
+
+
+def test_a_resumed_session_keeps_the_earlier_turns(tmp_path, monkeypatch):
+    """A quiet hand-over ends the session and writes its export. Resuming the session must not
+    replace that file with only the new turn: the fold reads the turns from it."""
+    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
+    monkeypatch.setenv("TE_WAIT_MS", "15000")
+    plugin = os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts")
+    _run(tmp_path, plugin, "resume-a", state="resume")
+    _run(tmp_path, plugin, "resume-b", state="resume")
+    export = tmp_path / "te-resume" / "opencode-sessions" / "ses_t.json"
+    doc = json.loads(export.read_text(encoding="utf-8"))
+    users = [m for m in doc.get("messages", []) if (m.get("info") or {}).get("role") == "user"]
+    assert len(users) == 2, doc
 
 
 class _Chat(BaseHTTPRequestHandler):

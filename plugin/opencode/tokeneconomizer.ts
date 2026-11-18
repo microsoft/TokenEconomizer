@@ -40,7 +40,7 @@
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -355,6 +355,19 @@ const setupV2 = async (ctx: any) => {
     if (typeof text === "string" && text) console.error(text);
   };
 
+  /** A resumed session keeps the turns an earlier hand-over already wrote, so the export a fold
+   * reads is never replaced by only the new epoch. */
+  const loadExport = (sessionID: string): any[] => {
+    const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
+    if (!existsSync(file)) return [];
+    try {
+      const doc = JSON.parse(readFileSync(file, "utf8"));
+      return Array.isArray(doc?.messages) ? doc.messages : [];
+    } catch {
+      return [];
+    }
+  };
+
   const writeExport = (sessionID: string): string => {
     const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
     // A copy of this plugin that saw none of the session's messages has nothing to add, and must
@@ -378,7 +391,7 @@ const setupV2 = async (ctx: any) => {
   const start = async (id: string) => {
     if (open.has(id)) return;
     open.add(id);
-    records.set(id, []);
+    records.set(id, loadExport(id));
     prompts.set(id, 0);
     const out = await hook({ ...base(id), hook_event_name: "SessionStart", source: "startup" });
     manuals.set(id, out?.hookSpecificOutput?.additionalContext ?? "");
