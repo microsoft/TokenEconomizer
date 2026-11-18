@@ -16,6 +16,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.13"]
     runs-on: ${{ matrix.os }}
+    # A test that starts hanging or slows every test down fails the job instead of holding it.
+    timeout-minutes: 10
     defaults:
       run:
         # Git Bash on Windows: the launchers are `sh` scripts, run there as Claude Code runs them.
@@ -25,12 +27,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install pytest
+      - run: python -m pip install pytest pytest-xdist
+      # The tests run in parallel: many start hook and launcher processes, which are slow to
+      # start on Windows, and wait on them, so four workers beat the runner's core count (two on
+      # Windows). Workers steal queued tests, so the long ones do not all end up last on one
+      # worker. --durations names the slowest in the log.
       # On failure, the summary lines also go out as an annotation, which the check run shows
       # without signing in.
       - run: |
           set -o pipefail
-          python -m pytest tests -rfEs --tb=line 2>&1 | tee pytest.log || {
+          python -m pytest tests -n 4 --dist worksteal --durations=15 -rfEs --tb=line 2>&1 | tee pytest.log || {
             status=$?
             msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \
                   | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
@@ -54,6 +60,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     defaults:
       run:
         shell: bash
@@ -100,6 +107,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     defaults:
       run:
         shell: bash
