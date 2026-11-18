@@ -12,7 +12,8 @@ here and nowhere else:
 
 Stdlib only.
 """
-from .calls import RTK_PREFIX_RE, call_cwds, load_trajectory, strip_rtk_prefix, tool_usage
+from .calls import (RTK_PREFIX_RE, RTK_WORDS, call_cwds, load_trajectory, strip_rtk_prefix,
+                    tool_usage)
 from .catalog import (CODEX_DEFAULT_TOOL_CATALOG, catalog_sources, parse_catalog,
                       parse_catalog_with_source, parse_tool_catalog, parse_tool_catalog_claude,
                       parse_tool_catalog_flat, parse_tool_names_copilot)
@@ -44,7 +45,7 @@ from .pi import (pi_active_branch, pi_json_reply, pi_prompt_count, pi_session_he
                  pi_session_to_claude, pi_session_usage)
 
 __all__ = [
-    "RTK_PREFIX_RE", "call_cwds", "load_trajectory", "strip_rtk_prefix", "tool_usage",
+    "RTK_PREFIX_RE", "RTK_WORDS", "call_cwds", "load_trajectory", "strip_rtk_prefix", "tool_usage",
     "CODEX_DEFAULT_TOOL_CATALOG", "catalog_sources", "parse_catalog", "parse_catalog_with_source",
     "parse_tool_catalog", "parse_tool_catalog_claude", "parse_tool_catalog_flat",
     "parse_tool_names_copilot",

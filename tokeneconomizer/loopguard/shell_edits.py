@@ -251,6 +251,8 @@ def _bare(cmds):
         while tokens:
             if tokens[0] in _WRAPPERS:
                 tokens = _past_wrapper(tokens)
+            elif tokens[0] == "rtk" and len(tokens) > 1:          # trace.strip_rtk_prefix
+                tokens = tokens[2:] if tokens[1] == "proxy" and len(tokens) > 2 else tokens[1:]
             elif re.match(r"^\w+=", tokens[0]):
                 tokens = tokens[1:]
             else:
