@@ -75,6 +75,10 @@ _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nohup|command|"
                         # env's options; `-u`, `-C` and their long forms take a value
                         r"env(?:\s+(?:(?:-[uC]|--unset|--chdir)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
+                        # `conda run -n ml`, `mamba run -p ./env`, `micromamba run -r /opt -n ml`:
+                        # the environment's name or path, and the other options that take a value
+                        r"(?:conda|mamba|micromamba)\s+run(?:\s+(?:(?:-[npr]|--name|--prefix|"
+                        r"--root-prefix|--cwd)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
                         r"(?:\s+-\S+)*|"
