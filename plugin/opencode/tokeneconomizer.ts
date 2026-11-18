@@ -192,8 +192,31 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
     }
   };
 
+  const cleanup = (sessionID: string) => {
+    manuals.delete(sessionID);
+    prompts.delete(sessionID);
+    turns.delete(sessionID);
+    if (current === sessionID) current = "";
+  };
+
+  // Where the process ends without a `session.deleted` (quitting the TUI, `opencode run`
+  // finishing), the sessions still open are handed over, once, synchronously.
+  const onExit = () => {
+    for (const sessionID of open) {
+      const file = exportSession(sessionID, directory);
+      cleanup(sessionID);
+      hookSync({
+        ...base(sessionID, file),
+        hook_event_name: "SessionEnd",
+        reason: "exit",
+      });
+    }
+    open.clear();
+  };
+
   const start = async (sessionID: string) => {
     if (open.has(sessionID)) return;
+    if (open.size === 0) process.once("exit", onExit);
     open.add(sessionID);
     prompts.set(sessionID, 0);
     const out = await hook({
@@ -205,34 +228,13 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
     await notify(out?.systemMessage);
   };
 
-  const cleanup = (sessionID: string) => {
-    manuals.delete(sessionID);
-    prompts.delete(sessionID);
-    turns.delete(sessionID);
-    if (current === sessionID) current = "";
-  };
-
   const end = async (sessionID: string, reason: string) => {
     if (!open.delete(sessionID)) return;
+    if (open.size === 0) process.off("exit", onExit);
     const file = exportSession(sessionID, directory);
     cleanup(sessionID);
     await hook({ ...base(sessionID, file), hook_event_name: "SessionEnd", reason });
   };
-
-  // Where the process ends without a `session.deleted` (quitting the TUI, `opencode run`
-  // finishing), the sessions still open are handed over, once, synchronously.
-  process.once("exit", () => {
-    for (const sessionID of open) {
-      const file = exportSession(sessionID, directory);
-      cleanup(sessionID);
-      hookSync({
-        ...base(sessionID, file),
-        hook_event_name: "SessionEnd",
-        reason: "exit",
-      });
-    }
-    open.clear();
-  });
 
   return {
     event: async ({ event }: { event: any }) => {
@@ -356,8 +358,11 @@ const deliverNudge = (e: any, ok: boolean, result: any, nudge: string): boolean 
       result.output = `${result.output}\n\n${nudge}`;
       return true;
     }
-    result.content = nudge;
-    return true;
+    if (result.content === undefined) {
+      result.content = nudge;
+      return true;
+    }
+    return false;
   }
   if (!ok && e && typeof e === "object") {
     if (e.error && typeof e.error === "object" && typeof e.error.message === "string") {

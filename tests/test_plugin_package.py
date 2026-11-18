@@ -923,7 +923,7 @@ def test_opencode_v2_delivers_redirect_on_failed_tool_and_holds_when_immutable(t
     hook_py = (
         "import json, sys\n"
         "p = json.loads(sys.stdin.read())\n"
-        "if p.get('hook_event_name') == 'PostToolUse' and p.get('tool_use_id') in ('c_mut', 'c_frz'):\n"
+        "if p.get('hook_event_name') == 'PostToolUse' and p.get('tool_use_id') in ('c_mut', 'c_frz', 'c_obj'):\n"
         "    print(json.dumps({'hookSpecificOutput': {'additionalContext': 'REDIRECT:' + p['tool_use_id']}}))\n"
         "else:\n"
         "    print('{}')\n"
@@ -963,6 +963,15 @@ const okNext = { sessionID: "s1", status: "completed", tool: "read", id: "c_ok",
   input: {}, result: { content: "file text", metadata: { exit: 0 } } };
 await hooks["tool.execute.after"](okNext);
 
+// Non-string, non-array object `result.content` must not be overwritten; hold for next call.
+const okObj = { sessionID: "s1", status: "completed", tool: "custom", id: "c_obj",
+  input: {}, result: { content: { structured: 1 }, metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okObj);
+
+const okAfterObj = { sessionID: "s1", status: "completed", tool: "read", id: "c_after_obj",
+  input: {}, result: { content: "after obj", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okAfterObj);
+
 // An undelivered redirect from turn 1 must not spill into turn 2.
 const errFrz2 = { sessionID: "s1", status: "failed", tool: "bash", id: "c_frz",
   input: {}, error: Object.freeze({ message: "Frozen again" }) };
@@ -979,6 +988,8 @@ console.log(JSON.stringify({
   mutError: errMut.error.message,
   frozenError: errFrz.error.message,
   okNextContent: okNext.result.content,
+  okObjContent: okObj.result.content,
+  okAfterObjContent: okAfterObj.result.content,
   okTurn2Content: okTurn2.result.content,
 }));
 """
@@ -986,6 +997,8 @@ console.log(JSON.stringify({
     assert got["mutError"] == "Edit failed\n\nREDIRECT:c_mut"
     assert got["frozenError"] == "Frozen error"
     assert got["okNextContent"] == "file text\n\nREDIRECT:c_frz"
+    assert got["okObjContent"] == {"structured": 1}
+    assert got["okAfterObjContent"] == "after obj\n\nREDIRECT:c_obj"
     assert got["okTurn2Content"] == "clean turn2"
 
 
@@ -1007,6 +1020,7 @@ const work = process.argv[2];
 const hooks = {};
 const events = [];
 let wake;
+const baseExitListeners = process.listenerCount("exit");
 const teardown = await plugin.setup({
   location: { directory: work },
   session: { hook: async (n, fn) => { hooks["session." + n] = fn; } },
@@ -1027,6 +1041,8 @@ await push({ type: "session.step.started", properties: {
   sessionID: "s_del", assistantMessageID: "a1", model: { id: "m-test" } } });
 await push({ type: "session.tool.input.started", properties: {
   sessionID: "s_del", id: "tc1", name: "bash" } });
+await push({ type: "session.tool.input.started", properties: {
+  sessionID: "s_del", id: "tc_orphan", name: "leaked_tool" } });
 await push({ type: "session.tool.called", properties: {
   sessionID: "s_del", assistantMessageID: "a1", id: "tc1", input: { command: "pytest" } } });
 await push({ type: "session.tool.success", properties: {
@@ -1042,13 +1058,47 @@ await push({ type: "session.deleted", properties: { sessionID: "s_del" } });
 const sysAfter = [];
 hooks["session.context"]({ sessionID: "s_del", system: sysAfter });
 
+// Reusing the same assistant/call ids in a new session must not hit leftover `steps`/`names`.
+await hooks["session.prompt"]({ sessionID: "s_next", messageID: "u2", prompt: { text: "next task" } });
+await push({ type: "session.step.started", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", model: { id: "m-test" } } });
+await push({ type: "session.tool.called", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", input: {} } });
+await push({ type: "session.tool.success", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", content: "ok", metadata: { exit: 0 } } });
+await push({ type: "session.step.ended", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", cost: 0.01, tokens: { input: 10, output: 2 } } });
+await push({ type: "session.deleted", properties: { sessionID: "s_next" } });
+
 teardown();
 wake?.();
-console.log(JSON.stringify({ sysBefore, sysAfter }));
+const v2After = process.listenerCount("exit");
+
+// v1 `exit` listener should attach only while sessions are open and detach on close.
+const v1 = await plugin.server({ client: { tui: { showToast: async () => {} } }, directory: work });
+const v1Before = process.listenerCount("exit");
+await v1.event({ event: { type: "session.created", properties: { info: { id: "s_v1" } } } });
+const v1During = process.listenerCount("exit");
+await v1.event({ event: { type: "session.deleted", properties: { info: { id: "s_v1" } } } });
+const v1After = process.listenerCount("exit");
+
+console.log(JSON.stringify({
+  sysBefore,
+  sysAfter,
+  baseExitListeners,
+  v2After,
+  v1Before,
+  v1During,
+  v1After,
+}));
 """
     got = _run_opencode_v2_script(tmp_path, driver, hook_py)
     assert got["sysBefore"] == [{"type": "text", "text": "LEARNED MANUAL"}]
     assert got["sysAfter"] == []
+    assert got["v2After"] == got["baseExitListeners"]
+    assert got["v1Before"] == got["baseExitListeners"]
+    assert got["v1During"] == got["baseExitListeners"] + 1
+    assert got["v1After"] == got["baseExitListeners"]
     exported = json.loads(
         (tmp_path / "te-home" / "opencode-sessions" / "s_del.json").read_text(encoding="utf-8")
     )
@@ -1057,3 +1107,8 @@ console.log(JSON.stringify({ sysBefore, sysAfter }));
     assert exported["messages"][0]["parts"][0]["text"] == "fix bug"
     assert exported["messages"][1]["parts"][0]["tool"] == "bash"
     assert exported["messages"][1]["parts"][0]["state"]["status"] == "completed"
+    next_exported = json.loads(
+        (tmp_path / "te-home" / "opencode-sessions" / "s_next.json").read_text(encoding="utf-8")
+    )
+    assert len(next_exported["messages"]) == 2
+    assert next_exported["messages"][1]["parts"][0]["tool"] == ""
