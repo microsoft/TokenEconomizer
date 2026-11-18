@@ -52,9 +52,11 @@ from . import adapter as live_adapter
 SETTINGS_REL = os.path.join(".claude", "settings.local.json")
 CODEX_CONFIG_REL = os.path.join(".codex", "config.toml")
 COPILOT_SETTINGS_REL = os.path.join(".github", "copilot", "settings.local.json")
+OPENCODE_CONFIG_REL = "opencode.json"
 
-_SETTINGS = {"claude": SETTINGS_REL, "codex": CODEX_CONFIG_REL, "copilot": COPILOT_SETTINGS_REL}
-_UNITS = {"claude": "tool", "codex": "capability", "copilot": "MCP server"}
+_SETTINGS = {"claude": SETTINGS_REL, "codex": CODEX_CONFIG_REL, "copilot": COPILOT_SETTINGS_REL,
+             "opencode": OPENCODE_CONFIG_REL}
+_UNITS = {"claude": "tool", "codex": "capability", "copilot": "MCP server", "opencode": "tool"}
 
 # Codex capability -> (table or None for top level, key, TOML value). Each probed project-local
 # on 0.153.1 (see the module docstring); `te_harness.codex` holds the launch-time superset.
@@ -122,12 +124,20 @@ def _guard_target(repo_root, path):
 
 
 def write_json(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".te.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(obj, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _write_text(path, text):
@@ -532,10 +542,72 @@ def codex_project_trusted(repo_root, env=None):
 
 
 # ---- dispatch ------------------------------------------------------------------------------
+def _apply_opencode(repo_root, tools, store):
+    path = settings_path(repo_root, "opencode")
+    _guard_target(repo_root, path)
+    if _git_tracked(repo_root, OPENCODE_CONFIG_REL):
+        raise RuntimeError(f"{path} is committed to git")
+    created = not os.path.exists(path)
+    data = _read_settings(path)
+    raw_perm = data.get("permission")
+    if raw_perm is not None and not isinstance(raw_perm, dict):
+        raise RuntimeError(f"{path}: unexpected 'permission' field ({type(raw_perm).__name__})")
+    perm = dict(raw_perm or {})
+    mine = set(applied(store, path))
+    added = []
+    for t in tools:
+        if not isinstance(t, str) or not t or t in perm or t in added:
+            continue
+        perm[t] = "deny"
+        added.append(t)
+    if added:
+        data["permission"] = perm
+        write_json(path, data)
+    if created and os.path.exists(path):
+        _exclude_from_git(repo_root, OPENCODE_CONFIG_REL)
+    _record(store, mine | set(added), path)
+    return added
+
+
+def _restore_opencode(repo_root, store, tools=None):
+    path = settings_path(repo_root, "opencode")
+    mine = set(applied(store, path))
+    if not mine:
+        return []
+    _guard_target(repo_root, path)
+    if os.path.exists(path) and _git_tracked(repo_root, OPENCODE_CONFIG_REL):
+        raise RuntimeError(f"{path} is committed to git")
+    target = mine if tools is None else (mine & set(tools))
+    if not target:
+        return []
+    removed = []
+    if os.path.exists(path):
+        data = _read_settings(path)
+        perm = data.get("permission")
+        if isinstance(perm, dict):
+            for t in sorted(target):
+                if perm.get(t) == "deny":
+                    perm.pop(t)
+                    removed.append(t)
+            if perm:
+                data["permission"] = perm
+            else:
+                data.pop("permission", None)
+            if removed:
+                if data:
+                    write_json(path, data)
+                else:
+                    os.unlink(path)
+    _record(store, mine - target, path)
+    return removed
+
+
 def apply(repo_root, tools, store, host="claude"):
     """Write `tools` (tools, capabilities or MCP servers, by host). Returns those newly added."""
     if host == "codex":
         return _apply_codex(repo_root, tools, store)
+    if host == "opencode":
+        return _apply_opencode(repo_root, tools, store)
     return _apply_json_list(repo_root, tools, store, host)
 
 
@@ -543,6 +615,8 @@ def restore(repo_root, store, tools=None, host="claude"):
     """Remove entries this plugin added (all of them, or just `tools`). Returns removed."""
     if host == "codex":
         return _restore_codex(repo_root, store, tools)
+    if host == "opencode":
+        return _restore_opencode(repo_root, store, tools)
     return _restore_json_list(repo_root, store, tools, host)
 
 

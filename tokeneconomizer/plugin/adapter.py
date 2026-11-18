@@ -31,7 +31,9 @@ import os
 from .. import trace
 from ..loopguard import state_from_trajectory
 from ..microskills import GENERIC, NODE_WEB, PYTHON_GIT
+from ..pricing import approx_tokens
 from ..toolprune.tools import PROTECTED_TOOLS
+from ..trace.catalog import _load_claude_catalog_snapshot
 
 # Tools a person relies on in an interactive session, beyond the benchmark work surface.
 INTERACTIVE_PROTECTED = frozenset({
@@ -55,6 +57,13 @@ COPILOT_PROTECTED = frozenset({
     "str_replace", "apply_patch", "custom", "rg", "grep", "glob", "task", "skill",
     "read_agent", "list_agents", "write_agent", "ask_user", "web_fetch", "web_search",
     "report_intent", "update_todo", "sql",
+})
+
+# Core OpenCode built-ins: denying `read`, `task`, or `*` stalls OpenCode 1.19.5 at startup
+# with no output (see sidecall.py), and basic edit/search/todo tools must stay available.
+OPENCODE_PROTECTED = frozenset({
+    "*", "bash", "read", "edit", "write", "patch", "apply_patch", "glob", "grep", "list",
+    "task", "skill", "question", "todowrite", "todoread", "lsp",
 })
 # Rarely used, but expensive to lose when a task needs them: proposed only after
 # HIGH_RISK_FACTOR times the usual evidence.
@@ -94,25 +103,84 @@ def catalog_path(state_root, host):
     return os.path.join(state_root, "hosts", host, "catalog.json")
 
 
-def load_catalog(state_root, host):
-    """{tool: description} from the last `te toolprune refresh-catalog` probe, {} if none."""
+def _read_catalog_file(state_root, host):
     try:
         with open(catalog_path(state_root, host), encoding="utf-8") as fh:
             data = json.load(fh)
-        return {t: "" for t in data.get("tools", []) if isinstance(t, str)}
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def load_catalog(state_root, host):
+    """{tool: description} from the last `te toolprune refresh-catalog` probe, {} if none."""
+    data = _read_catalog_file(state_root, host)
+    descs = data.get("descriptions")
+    descs = descs if isinstance(descs, dict) else {}
+    return {t: descs[t] if isinstance(descs.get(t), str) else ""
+            for t in data.get("tools", []) if isinstance(t, str)}
+
+
+def load_catalog_tokens(state_root, host):
+    """{tool: estimated schema tokens} from `catalog.json` and Claude's bundled snapshot."""
+    out = {}
+    if host == "claude":
+        for name, desc in _load_claude_catalog_snapshot().items():
+            if isinstance(desc, str) and desc:
+                out[name] = approx_tokens(desc)
+    data = _read_catalog_file(state_root, host)
+    descs = data.get("descriptions")
+    if isinstance(descs, dict):
+        for name, desc in descs.items():
+            if isinstance(name, str) and isinstance(desc, str) and desc:
+                out[name] = approx_tokens(desc)
+    toks = data.get("tokens")
+    if isinstance(toks, dict):
+        for name, n in toks.items():
+            if (isinstance(name, str) and isinstance(n, (int, float))
+                    and not isinstance(n, bool) and n > 0):
+                out[name] = int(n)
+    return out
+
+
+def opencode_mcp_servers(env=None, repo_root=None):
+    """Configured OpenCode MCP server names (`mcp.<name>` unless `enabled: false`)."""
+    env = os.environ if env is None else env
+    xdg = (env.get("XDG_CONFIG_HOME") or "").strip()
+    home = env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
+    paths = [os.path.join(xdg or os.path.join(home, ".config"), "opencode", "opencode.json")]
+    if repo_root:
+        paths.append(os.path.join(repo_root, "opencode.json"))
+    servers = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        mcp = data.get("mcp") if isinstance(data, dict) else None
+        if not isinstance(mcp, dict):
+            continue
+        for name, cfg in mcp.items():
+            if not isinstance(name, str) or not name or not isinstance(cfg, dict):
+                continue
+            if cfg.get("enabled") is False:
+                servers.pop(name, None)
+            else:
+                servers[name] = cfg
+    return sorted(servers)
 
 
 class LiveAdapter:
     name = "live"
 
-    def __init__(self, host, repo_root, vocabulary="auto", catalog=None, protect=()):
+    def __init__(self, host, repo_root, vocabulary="auto", catalog=None, protect=(), env=None):
         self.host = host
         self.repo_root = repo_root
         self.vocabulary = vocabulary
         self.catalog = dict(catalog or {})
         self.protect = tuple(protect)
+        self.env = env
 
     # ---- trajectory reading ----
     def load_trajectory(self, path):
@@ -135,6 +203,9 @@ class LiveAdapter:
             observed |= set(trace.parse_tool_names_copilot(
                 open(transcript, encoding="utf-8", errors="replace").read()
                 if os.path.exists(transcript) else ""))
+        elif self.host.name == "opencode":
+            for srv in opencode_mcp_servers(self.env, repo_root=self.repo_root):
+                observed.add(f"{srv}_*")
         for name in observed:
             cat.setdefault(name, "")
         if not cat:
@@ -143,7 +214,9 @@ class LiveAdapter:
 
     # ---- tool pruning ----
     def protected_tools(self):
-        extra = COPILOT_PROTECTED if self.host.name == "copilot" else frozenset()
+        extra = (COPILOT_PROTECTED if self.host.name == "copilot"
+                 else OPENCODE_PROTECTED if self.host.name == "opencode"
+                 else frozenset())
         return _Protected(PROTECTED_TOOLS | INTERACTIVE_PROTECTED | extra, self.protect)
 
     def inapplicable_tools(self):
