@@ -914,11 +914,25 @@ def test_copilot_and_vscode_plugin_copies_find_the_core(tmp_path):
     out = doctor(copy)
     assert out.returncode == 1 and "core package was not found" in out.stderr
 
-    # 2. Copilot `config.json` (with // comments) pointing at a local clone.
+    # 2. Copilot `config.json` (JSONC with //, /* ... */, trailing comma, and string-leading //).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "te_bootstrap_under_test", os.path.join(PLUGIN, "scripts", "te_bootstrap.py"))
+    boot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boot)
     copilot.mkdir(parents=True, exist_ok=True)
     (copilot / "config.json").write_text(
-        "// Copilot CLI config\n" + json.dumps({"marketplaces": {"tokeneconomizer": REPO}}),
+        "// Copilot CLI config\n"
+        "{\n"
+        '  /* inline block comment */\n'
+        '  "note": "line 1\n//not-a-comment",\n'
+        '  "marketplaces": {\n'
+        f'    "tokeneconomizer": {json.dumps(REPO)}, // inline comment\n'
+        "  },\n"
+        "}\n",
         encoding="utf-8")
+    parsed_cfg = boot._json_load_relaxed(str(copilot / "config.json"))
+    assert parsed_cfg["note"] == "line 1\n//not-a-comment"
     assert doctor(copy).returncode == 0
     assert doctor(vscode_copy).returncode == 0
     (copilot / "config.json").unlink()
@@ -971,10 +985,14 @@ def test_te_bootstrap_stays_python30_compatible():
 
 def test_powershell_slash_commands_guard_missing_te_json():
     """#265: PowerShell slash commands check `Test-Path` on `bin\\te.json` before reading it."""
+    templates = set()
     for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
         block = _powershell_block(name)
         assert "Test-Path -LiteralPath $meta" in block
         assert "COPILOT_PLUGIN_ROOT" in block
+        templates.add(re.sub(r"--cwd \(Get-Location\)\.Path .+", "--cwd (Get-Location).Path <CMD>",
+                             block))
+    assert len(templates) == 1
 
 
 @pytest.mark.powershell

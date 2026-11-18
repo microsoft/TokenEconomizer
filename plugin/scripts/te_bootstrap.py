@@ -100,8 +100,67 @@ def _state_home():
         os.path.expanduser("~"), ".tokeneconomizer")
 
 
+def _strip_jsonc(text):
+    """Strip `//`, `/* ... */` comments and trailing commas outside JSON strings."""
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    while i < n:
+        ch = text[i]
+        if in_str:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == "/":
+                end = text.find("\n", i + 2)
+                i = n if end == -1 else end
+                continue
+            if nxt == "*":
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    break
+                for c in text[i:end + 2]:
+                    if c == "\n":
+                        out.append("\n")
+                i = end + 2
+                continue
+        if ch == ",":
+            j = i + 1
+            while j < n:
+                if text[j] in " \t\r\n":
+                    j += 1
+                elif text[j:j + 2] == "//":
+                    end = text.find("\n", j + 2)
+                    j = n if end == -1 else end + 1
+                elif text[j:j + 2] == "/*":
+                    end = text.find("*/", j + 2)
+                    j = n if end == -1 else end + 2
+                else:
+                    break
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _json_load_relaxed(path):
-    """Read a JSON file that may carry leading `//` comment lines (Copilot's config.json)."""
+    """Read a JSON/JSONC file (comments and trailing commas allowed outside strings)."""
     import json
     try:
         fh = open(path, encoding="utf-8", errors="replace")
@@ -111,9 +170,8 @@ def _json_load_relaxed(path):
             fh.close()
     except (IOError, OSError):
         return None
-    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("//")]
     try:
-        return json.loads("\n".join(lines))
+        return json.loads(_strip_jsonc(text), strict=False)
     except ValueError:
         return None
 
