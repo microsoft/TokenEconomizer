@@ -699,7 +699,7 @@ console.log(JSON.stringify({
     assert out["cases"] == [
         [f"{name} " for name in expected],
         ["microskills "],
-        ["microskills show ", "microskills forget ", "microskills unforget "],
+        ["microskills show ", "microskills forget ", "microskills unforget ", "microskills export ", "microskills import "],
         ["microskills forget "],
         ["status --json ", "status --explain "],
         ["status --json --explain "],

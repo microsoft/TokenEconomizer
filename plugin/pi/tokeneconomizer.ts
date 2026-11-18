@@ -155,7 +155,7 @@ export function carriedSection(entries: any[]): string {
  * the plugin starts itself, nor `probe`, which runs on Copilot only. */
 export const TE_COMMANDS: Record<string, { actions: string[]; flags: string[] }> = {
   status: { actions: [], flags: ["--json", "--explain"] },
-  microskills: { actions: ["show", "forget", "unforget"], flags: [] },
+  microskills: { actions: ["show", "forget", "unforget", "export", "import"], flags: [] },
   toolprune: {
     actions: ["show", "apply", "restore", "refresh-catalog", "measure", "apply-pending"],
     flags: [],
