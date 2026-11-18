@@ -526,10 +526,19 @@ quiet for 10 minutes. A session whose rows cannot be read then stays unfolded an
 each later start in that repository, for a week after its last hook; after that it is recorded as
 unreadable.
 
-**Which repository.** Each session's own row names its directory, so sessions in different
-repositories can run at once in the one gateway. A gateway session whose row records no directory
-uses the gateway's working directory (`TERMINAL_CWD`); any other session with no directory on this
-machine is not followed. A `cron` run is one turn and ends with it.
+**Which repository.** Each session names its own directory, so sessions in different repositories
+can run at once in the one gateway; the gateway's working directory and `TERMINAL_CWD` are never
+used. A session's directory is its row's `cwd` in Hermes's `state.db`. A gateway or `cron` session
+whose row records none takes the `terminal_cwd` of its chat's routing entry (`gateway_routing`),
+then the directory Hermes scopes to the running turn; with none of these it is not followed yet,
+and is looked at again at its next hook. Any other session with no directory on this machine is not
+followed. A `cron` run is one turn and ends with it; a gateway chat ends at `/new` (a finalize or a
+reset), at shutdown, or, if neither fires, when the next session starts in its repository after 10
+quiet minutes.
+
+**`/te`.** It runs in the repository of the session that typed it, found as above and by the chat's
+`session_key`. `/te --cwd PATH status` names another. A session with no directory gets
+`te: no working directory for this session; pass --cwd PATH`.
 
 **Model calls.** The proposer and the loop guard's judge run through `hermes chat --oneshot --source
 tool` on your default Hermes model (`paid_model` names another; `hermes_cli` or `TE_HERMES_CLI`

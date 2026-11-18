@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -76,6 +77,16 @@ class Home:
         with self._con() as con:
             con.execute("INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,0,0,0)",
                         (sid, model, task, calls, fresh, out, cached))
+
+    def route(self, key, sid, cwd=None, scope="gateway"):
+        """A gateway chat's routing entry, as Hermes persists it when a chat works in a directory."""
+        entry = {"session_id": sid, "metadata": {"terminal_cwd": cwd} if cwd else {}}
+        with self._con() as con:
+            con.execute("CREATE TABLE IF NOT EXISTS gateway_routing "
+                        "(scope TEXT, session_key TEXT, entry_json TEXT)")
+            con.execute("DELETE FROM gateway_routing WHERE session_key = ?", (key,))
+            con.execute("INSERT INTO gateway_routing VALUES (?,?,?)",
+                        (scope, key, json.dumps(entry)))
 
     def gone(self, sid):
         with self._con() as con:
@@ -177,8 +188,8 @@ def test_the_host_reads_what_the_plugin_sends():
 
 
 # ---- the export ----------------------------------------------------------------------------
-def _conversation(home, sid="s1", cwd="/w/repo"):
-    home.session(sid, cwd=cwd)
+def _conversation(home, sid="s1", cwd="/w/repo", source="local", created="cli"):
+    home.session(sid, source=source, created=created, cwd=cwd)
     home.message(sid, "user", "fix it", message_uid="u1")
     home.message(sid, "assistant", tool_calls=_call("terminal", {"command": "pytest"}))
     home.message(sid, "tool", '{"output": "1 failed", "exit_code": 1, "error": null}',
@@ -305,16 +316,66 @@ def test_a_gateway_or_cron_session_is_followed_from_its_recorded_directory(bridg
     assert {c["_cwd"] for c in bridge.fake.calls} == {str(tmp_path)}
     assert bridge.fake.calls[0]["_mode"] == ("oneshot" if source == "cron" else "cli")
 
-def test_a_gateway_session_with_no_recorded_directory_uses_the_gateways_working_one(
-        bridge, home, tmp_path, monkeypatch):
+def test_a_gateway_session_never_borrows_the_gateways_directory(bridge, home, tmp_path,
+                                                                monkeypatch):
+    """`TERMINAL_CWD` and the working directory are the gateway's: shared by every chat."""
     home.session("g", source="discord", created="discord", cwd=None)
     home.session("t", source="tool", created="tool", cwd=None)
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-    bridge.section({"session_id": "g"})
-    bridge.section({"session_id": "t"})
-    assert bridge.fake.events() == ["SessionStart"]
-    assert bridge.fake.calls[0]["_cwd"] == str(tmp_path)
-    assert bridge.fake.calls[0]["session_id"] == "g"
+    monkeypatch.chdir(tmp_path)
+    assert bridge.section({"session_id": "g", "cwd": str(tmp_path)}) == ""
+    assert bridge.section({"session_id": "t"}) == ""
+    assert bridge.fake.calls == []
+
+def test_two_gateway_chats_with_no_recorded_directory_take_their_routed_ones(bridge, home,
+                                                                             tmp_path):
+    dirs = {}
+    for name in ("a", "b"):
+        dirs[name] = str(tmp_path / name)
+        os.makedirs(dirs[name])
+        home.session(name, source="discord", created="discord", cwd=None)
+        home.route(f"agent:main:discord:dm:{name}", name, dirs[name])
+    home.session("c", source="telegram", created="telegram", cwd=None)
+    home.route("agent:main:telegram:dm:c", "c")                  # a chat that works in no directory
+    for name in ("a", "b", "c"):
+        bridge.section({"session_id": name})
+    assert {c["session_id"]: c["_cwd"] for c in bridge.fake.calls} == dirs
+
+def test_a_routed_directory_is_found_from_a_session_the_chat_rotated_into(bridge, home, tmp_path):
+    home.session("old", source="discord", created="discord", cwd=None, ended=time.time(),
+                 reason="compression")
+    home.session("new", source="discord", created="discord", cwd=None, parent="old")
+    home.route("k", "old", str(tmp_path))
+    bridge.section({"session_id": "new"})
+    assert [(c["session_id"], c["_cwd"]) for c in bridge.fake.calls] == [("old", str(tmp_path))]
+
+def test_a_session_scoped_directory_stands_in_for_a_row_that_records_none(home, tmp_path):
+    calls = []
+    for source in ("discord", "cron"):
+        home.session(source, source=source, created=source, cwd=None)
+    home.session("c", cwd=None)
+    b = plugin.Bridge(call=lambda p, cwd, mode, h: calls.append((p["session_id"], cwd)) or {},
+                      home=lambda: home.path, session_cwd=lambda: str(tmp_path))
+    for sid in ("discord", "cron", "c"):
+        b.section({"session_id": sid})
+    assert calls == [("discord", str(tmp_path)), ("cron", str(tmp_path))]    # not the CLI's
+
+def test_a_gateway_chat_that_gets_a_directory_later_is_followed_from_then_on(bridge, home,
+                                                                              tmp_path):
+    home.session("g", source="discord", created="discord", cwd=None)
+    assert bridge.section({"session_id": "g"}) == ""
+    assert bridge.pre_llm_call(session_id="g", user_message="hi", turn_id="t") is None
+    assert bridge.fake.calls == []
+    home.route("k", "g", str(tmp_path))
+    bridge.pre_llm_call(session_id="g", user_message="hi", turn_id="t")
+    assert bridge.fake.events() == ["SessionStart", "UserPromptSubmit"]
+
+def test_a_side_call_stays_ignored_even_when_a_directory_is_routed_to_it(bridge, home, tmp_path):
+    home.session("t", source="tool", created="tool", cwd=None)
+    home.route("k", "t", str(tmp_path))
+    assert bridge.section({"session_id": "t"}) == ""
+    home.session("u", source="tool", created="tool", cwd=str(tmp_path))
+    assert bridge.section({"session_id": "u"}) == "" and bridge.fake.calls == []
 
 def test_a_cli_session_with_no_directory_does_not_borrow_the_gateways(bridge, home, tmp_path,
                                                                       monkeypatch):
@@ -601,6 +662,126 @@ def test_two_repositories_fold_apart_through_the_real_dispatcher(home, tmp_path,
         assert r["input_tokens"] == 2800 and r["requests"] == 7 and not r.get("error")
 
 
+def _real(monkeypatch, tmp_path):
+    root = tmp_path / "te"
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(root))
+    monkeypatch.setenv("TE_FOLD_SYNC", "1")
+    monkeypatch.setenv("TE_CORE_PATH", REPO)
+    for var in ("TE_DISABLE", "TE_SIDECALL", "TERMINAL_CWD"):
+        monkeypatch.delenv(var, raising=False)
+    return root
+
+def _folded(root):
+    """Session records in each repository's ledger: {state directory: [session ids]}."""
+    out = {}
+    for path in root.rglob("ledger.jsonl"):
+        rows = [json.loads(ln) for ln in path.read_text("utf-8").splitlines()]
+        out[path.parent] = sorted(r["session_id"] for r in rows if r.get("kind") == "session")
+    return out
+
+def _one_turn(b, sid, end=True):
+    b.pre_llm_call(session_id=sid, user_message="fix it", turn_id=f"{sid}-t")
+    b.transform_tool_result("terminal", {"command": "pytest"},
+                            '{"output": "1 failed", "exit_code": 1, "error": null}',
+                            session_id=sid, turn_id=f"{sid}-t", tool_call_id=f"{sid}-1")
+    b.on_session_end(session_id=sid, turn_id=f"{sid}-t", completed=True)
+
+def test_gateway_and_cron_sessions_in_two_repositories_fold_apart_through_the_real_dispatcher(
+        home, tmp_path, monkeypatch):
+    """Four sessions run at once in one gateway, each finding its repository a different way: a
+    row's `cwd`, a chat's routed directory, the directory scoped to the cron run. The process's
+    own directory and `TERMINAL_CWD` are a fifth place that is none of theirs."""
+    root = _real(monkeypatch, tmp_path)
+    elsewhere = tmp_path / "gateway-install"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("TERMINAL_CWD", str(elsewhere))
+    alpha, beta = _repo(tmp_path / "alpha"), _repo(tmp_path / "beta")
+    scoped = threading.local()
+    b = plugin.Bridge(home=lambda: home.path, session_cwd=lambda: getattr(scoped, "cwd", ""))
+    sessions = {"rowed": ("api_server", alpha), "chat-a": ("discord", None),
+                "chat-b": ("telegram", None), "job": ("cron", None)}
+    for sid, (source, cwd) in sessions.items():
+        _conversation(home, sid, cwd=cwd, source=source, created=source)
+    home.route("agent:discord:a", "chat-a", alpha)
+    home.route("agent:telegram:b", "chat-b", beta)
+
+    def run(sid):
+        if sid == "job":
+            scoped.cwd = beta                                  # `_CronRunScope` binds it per run
+        b.section({"session_id": sid})
+        _one_turn(b, sid)
+    threads = [threading.Thread(target=run, args=(s,)) for s in sessions]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not (root / "errors.log").exists() or not (root / "errors.log").read_text("utf-8").strip()
+    # A cron run is one turn and ends with it; the chats are still open.
+    assert list(_folded(root).values()) == [["job"]]
+    (state_dir,) = _folded(root)
+    assert state_dir != elsewhere and not any(elsewhere.iterdir())
+
+    b.on_session_finalize(session_id="chat-a", reason="new_session")      # `/new`
+    b.on_session_reset(session_id="chat-b-2", old_session_id="chat-b", reason="new_session")
+    ledgers = _folded(root)
+    assert sorted(map(tuple, ledgers.values())) == [("chat-a",), ("chat-b", "job")]
+    by_repo = {}
+    for path in root.rglob("ledger.jsonl"):
+        rows = [json.loads(ln) for ln in path.read_text("utf-8").splitlines()]
+        for r in rows:
+            if r.get("kind") == "session":
+                by_repo[r["session_id"]] = r["repo"]
+    assert by_repo == {"job": "beta", "chat-b": "beta", "chat-a": "alpha"}
+    for rows in (json.loads(ln) for p in root.rglob("ledger.jsonl")
+                 for ln in p.read_text("utf-8").splitlines()):
+        if rows.get("kind") == "session":
+            assert rows["input_tokens"] == 2800 and rows["requests"] == 7 and not rows.get("error")
+
+def test_a_gateway_session_nobody_finalized_is_folded_by_the_next_start_in_its_repository(
+        home, tmp_path, monkeypatch):
+    root = _real(monkeypatch, tmp_path)
+    alpha = _repo(tmp_path / "alpha")
+    b = plugin.Bridge(home=lambda: home.path)
+    for sid in ("lost", "next"):
+        _conversation(home, sid, cwd=None, source="discord", created="discord")
+        home.route(f"agent:discord:{sid}", sid, alpha)
+    b.section({"session_id": "lost"})
+    _one_turn(b, "lost")
+    assert _folded(root) == {}
+    state = next(p for p in root.rglob("lost.json") if p.parent.name == "sessions")
+    doc = json.loads(state.read_text("utf-8"))
+    doc.update(started=time.time() - 3 * 600, updated=time.time() - 2 * 600)
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    b.section({"session_id": "next"})                        # the repository's next session starts
+    assert list(_folded(root).values()) == [["lost"]]
+
+def test_te_reads_the_repository_of_the_session_that_asks_whatever_the_process_directory_is(
+        home, tmp_path, monkeypatch):
+    root = _real(monkeypatch, tmp_path)
+    elsewhere = tmp_path / "gateway-install"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    alpha, beta = _repo(tmp_path / "alpha"), _repo(tmp_path / "beta")
+    b = plugin.Bridge(home=lambda: home.path)
+    for sid, source, repo in (("a", "local", alpha), ("b", "discord", None)):
+        _conversation(home, sid, cwd=repo, source=source, created="cli" if repo else source)
+    home.route("agent:discord:b", "b", beta)
+    b.section({"session_id": "a"})
+    b.section({"session_id": "b"})
+    monkeypatch.setenv("HERMES_HOME", home.path)
+    ctx = CommandCtx()
+    plugin.register(ctx)
+    handler = ctx.commands["te"][0]
+    # `status` names the repository it read; the process's own is neither
+    for kw, want in (({"session_id": "a"}, "alpha"), ({"session_id": "b"}, "beta"),
+                     ({"session_key": "agent:discord:b"}, "beta")):
+        out = handler("status", **kw)
+        assert want in out and "gateway-install" not in out, out
+    explicit = handler(f"--cwd {alpha} status", session_id="b")
+    assert "alpha" in explicit and "beta" not in explicit
+    assert "pass --cwd PATH" in handler("status")
+    assert "alpha" in handler("repos") and "beta" in handler("repos")
+    assert not any(elsewhere.iterdir())
+
 # ---- the plugin's own model calls --------------------------------------------------------------
 class FakeCli:
     """`subprocess.run` for the `hermes` commands a side call runs, on a real `state.db`."""
@@ -819,6 +1000,81 @@ def test_te_never_raises(monkeypatch, fail):
     assert plugin.te_command("status").startswith("te:")
     assert plugin.te_command("unbalanced 'quote").startswith("te:")
 
+
+def _te_run(monkeypatch):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(cmd=cmd, kw=kw)
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+    monkeypatch.setattr(plugin.subprocess, "run", run)
+    return seen
+
+def test_te_declares_the_session_arguments_hermes_passes_a_handler():
+    import inspect
+    ctx = CommandCtx()
+    plugin.register(ctx)
+    params = inspect.signature(ctx.commands["te"][0]).parameters
+    for name in ("session_id", "session_key", "platform", "source"):
+        assert params[name].default in ("", None)
+
+def test_te_runs_in_the_repository_of_the_session_that_called_it(bridge, home, tmp_path,
+                                                                  monkeypatch):
+    seen = _te_run(monkeypatch)
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    home.session("s", cwd=repo)
+    assert bridge.command("status", session_id="s") == "ok"
+    assert seen["cmd"][1:] == [plugin.BOOTSTRAP, "cli", "--host", "hermes", "--cwd", repo, "status"]
+    assert seen["kw"]["cwd"] == repo
+
+def test_te_finds_a_chat_by_its_session_key_before_any_hook_has_run(bridge, home, tmp_path,
+                                                                    monkeypatch):
+    seen = _te_run(monkeypatch)
+    routed, rowed = str(tmp_path / "routed"), str(tmp_path / "rowed")
+    os.makedirs(routed)
+    os.makedirs(rowed)
+    home.route("k1", "x", routed)
+    home.session("y", source="telegram", created="telegram", cwd=rowed)
+    home.route("k2", "y")
+    bridge.command("status", session_key="k1")
+    assert seen["kw"]["cwd"] == routed
+    bridge.command("status", session_key="k2")
+    assert seen["kw"]["cwd"] == rowed
+
+def test_te_falls_back_to_the_directory_scoped_to_the_calling_session(home, tmp_path, monkeypatch):
+    seen = _te_run(monkeypatch)
+    b = plugin.Bridge(call=FakeDispatcher(), home=lambda: home.path,
+                      session_cwd=lambda: str(tmp_path))
+    b.command("status")
+    assert seen["kw"]["cwd"] == str(tmp_path) and "--cwd" in seen["cmd"]
+
+@pytest.mark.parametrize("args", ["--cwd /elsewhere status", "status --cwd /elsewhere",
+                                  "status --cwd=/elsewhere"])
+def test_te_leaves_a_directory_the_person_named(bridge, home, tmp_path, monkeypatch, args):
+    seen = _te_run(monkeypatch)
+    home.session("s", cwd=str(tmp_path))
+    bridge.command(args, session_id="s")
+    assert seen["cmd"][5:] == shlex.split(args) and seen["kw"].get("cwd") is None
+
+def test_te_with_no_directory_for_its_session_says_so_and_runs_nothing(bridge, home, tmp_path,
+                                                                       monkeypatch):
+    seen = _te_run(monkeypatch)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    home.session("g", source="discord", created="discord", cwd=None)
+    for kw in ({}, {"session_id": "g"}, {"session_key": "unknown"}):
+        assert bridge.command("status", **kw) == "te: no working directory for this session; " \
+                                                  "pass --cwd PATH"
+    assert not seen
+
+def test_a_reset_ends_the_session_it_left_and_only_once(bridge, home, tmp_path):
+    home.session("old", cwd=str(tmp_path))
+    bridge.section({"session_id": "old"})
+    bridge.on_session_reset(session_id="new", old_session_id="old", reason="new_session")
+    bridge.on_session_reset(session_id="new", old_session_id="old", reason="new_session")
+    assert bridge.fake.events() == ["SessionStart", "SessionEnd"]
+    assert bridge.fake.calls[1]["reason"] == "new_session"
 
 def test_the_plugin_registers_what_its_manifest_declares():
     text = open(os.path.join(REPO, "plugin", "hermes", "plugin.yaml"), encoding="utf-8").read()

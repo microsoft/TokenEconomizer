@@ -599,8 +599,15 @@ was not.)
 * A subagent fires the whole set, on a session of its own (`created_source: subagent`).
 * A user's interactive row reads `source: local`, `created_source: cli`; a side call's reads
   `tool`, with no `cwd`. The plugin follows `created_source` `cli`, `oneshot`, `cron` and the gateway
-  platforms it lists with a `cwd` (a gateway session with none takes the gateway's `TERMINAL_CWD`),
-  and a row it cannot read not at all, so the filter fails closed. Subagents stay out: the fold
+  platforms it lists with a directory, and a row it cannot read not at all, so the filter fails
+  closed. The gateway's `os.getcwd()` and `TERMINAL_CWD` are the daemon's, shared by every chat, so
+  neither names a session's repository. A session's directory is its row's `cwd`; a gateway or
+  `cron` row that records none (Hermes writes `cwd` at a cron run's end) takes the `terminal_cwd`
+  of its `gateway_routing` entry, then the directory scoped to the running turn
+  (`agent.runtime_cwd.scoped_session_cwd`, `ctx.session_cwd()`), and with none it is looked at again
+  at its next hook. `/te` handlers are passed the `session_id` and `session_key` they declare, and
+  run in that session's directory. `on_session_reset` is handled as a finalize of the session it
+  leaves. Subagents stay out: the fold
   prices a session with its subagents.
 * **Side calls.** `--source tokeneconomizer` is refused (`invalid_params`), though the docs say any
   value is stored; `tool` is accepted. `TE_SIDECALL` does not reach the gateway, and worse: with no
