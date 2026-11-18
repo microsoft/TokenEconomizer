@@ -71,15 +71,15 @@ _NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list
 # `sudo -u bob`, `time -p`, and a launcher that runs it in the project's environment, `uv run
 # pytest`, `npx jest`, `bundle exec rspec`. `command -v pytest` looks the runner up; only
 # `command -p` runs it.
-_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|nohup|command(?:\s+-p)?|"
+_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|nohup|command(?:\s+-p)?(?:\s+--)?|"
                         # time's options; `-f` and `-o` take a value
-                        r"time(?:\s+(?:-[fo]\s*[^\s-]\S*|--(?:format|output)(?:=|\s+)\S+|"
+                        r"time(?:\s+(?:-[fo](?:\s+\S+|\S+)|--(?:format|output)(?:=|\s+)\S+|"
                         r"-[pvaq]+|--(?:portability|verbose|append|quiet)))*|"
-                        r"exec(?:\s+(?:-a\s*[^\s-]\S*|-[cl]+))*|"
+                        r"exec(?:\s+(?:-a\s*[^\s-]\S*|-[cl]+))*(?:\s+--)?|"
                         # sudo's options; these letters and long forms take a value
                         r"sudo(?:\s+(?:-\w*[ugpCDRrtTU]\s*[^\s-]\S*|--(?:user|group|prompt|"
                         r"close-from|chdir|chroot|role|type|command-timeout|other-user)"
-                        r"(?:=|\s+)\S+|-[-\w]*))*|"
+                        r"(?:=|\s+)\S+|-[-\w]*(?:=\S*)?))*|"
                         r"nice(?:\s+(?:-n\s*|--adjustment(?:=|\s+))?[-+]?\d+)?|"
                         # env's options; `-u`, `-C` and their long forms take a value
                         r"env(?:\s+(?:(?:-[uC]|--unset|--chdir)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"

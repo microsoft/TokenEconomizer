@@ -1495,7 +1495,10 @@ def test_env_and_nice_leave_what_they_run_to_decide(cmd, status):
                                  "sudo --user=bob cargo test", "sudo env -u CI pytest",
                                  "time -p pytest", "time -o /tmp/t.txt npm test", "exec pytest",
                                  "exec -a runner pytest", "command -p pytest",
-                                 "nice --adjustment 5 pytest"])
+                                 "nice --adjustment 5 pytest",
+                                 "sudo --preserve-env=CI pytest", "sudo --preserve-env pytest",
+                                 "exec -- pytest", "command -- pytest", "command -p -- pytest",
+                                 "time -o - pytest"])
 def test_a_runner_behind_sudo_time_or_exec_counts_as_a_verification(cmd):
     """`sudo`, `time -p` and `exec` run the command after them, as `env` and `nice` do. They
     were not passed over, so the run was no verification and a failing one after the last edit
