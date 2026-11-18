@@ -66,6 +66,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from .. import trace
 from . import accounting
@@ -997,6 +1000,94 @@ def call_name(host_name):
     return _CALLS.get(host_name, f"{host_name} -p")
 
 
+def http_routes(config):
+    """Whether `sidecall_url` routes side calls over an OpenAI-compatible HTTP endpoint."""
+    return bool(str(getattr(config, "sidecall_url", "") or "").strip())
+
+
+def _http_endpoint(url):
+    u = str(url or "").strip().rstrip("/")
+    return u if u.endswith("/chat/completions") else f"{u}/chat/completions"
+
+
+def _http_message_text(data):
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return ""
+    msg = _obj(_obj(choices[0]).get("message"))
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [c.get("text") or "" for c in content if isinstance(c, dict)]
+        return "\n".join(p for p in parts if p).strip()
+    return ""
+
+
+def http_call(prompt, url, model="", key_env="", timeout=TIMEOUT_S, env=None):
+    """Direct OpenAI-compatible chat-completions side call without spawning an agent CLI.
+    Returns `(text, effective_tokens)` on success, or `(None, 0)` on failure."""
+    endpoint = _http_endpoint(url)
+    payload = json.dumps({
+        "model": model or "default",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    }).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    env_map = os.environ if env is None else env
+    if key_env:
+        token = str(env_map.get(key_env) or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(endpoint, data=payload, headers=headers, method="POST")
+    host = (urllib.parse.urlsplit(endpoint).hostname or "").lower()
+    opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              if host in ("127.0.0.1", "localhost", "::1")
+              else urllib.request.build_opener())
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw or "{}")
+    except (OSError, ValueError, urllib.error.URLError) as e:
+        what = " ".join(str(e).split())[:200]
+        _log(f"sidecall http: failed ({type(e).__name__}: {what})\n")
+        return None, 0
+    text = _http_message_text(data)
+    if not text:
+        _log("sidecall http: empty completion reply\n")
+        return None, 0
+    eff = None
+    usage = _obj(data.get("usage") if isinstance(data, dict) else None)
+    if usage and (usage.get("prompt_tokens") is not None or usage.get("completion_tokens") is not None):
+        details = _obj(usage.get("prompt_tokens_details"))
+        cached = int(details.get("cached_tokens") or 0)
+        prompt_toks = int(usage.get("prompt_tokens") or 0)
+        eff, _ = accounting.effective({
+            "input_tokens": max(0, prompt_toks - cached),
+            "cache_read_input_tokens": cached,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": int(usage.get("completion_tokens") or 0),
+            "model": (data.get("model") if isinstance(data, dict) else None) or model or None,
+        })
+    return text, eff
+
+
+def http_runner(config, fallback=None, env=None):
+    """Direct HTTP side-call runner when `sidecall_url` is set, falling back to `fallback`."""
+    if not http_routes(config):
+        return None
+    url = str(config.sidecall_url).strip()
+    model = str(getattr(config, "sidecall_model", "") or getattr(config, "paid_model", "") or "")
+    key_env = str(getattr(config, "sidecall_key_env", "") or "").strip()
+
+    def run(prompt, _m="agent"):
+        text, eff = http_call(prompt, url, model=model, key_env=key_env, env=env)
+        if text:
+            return text, eff
+        return fallback(prompt, _m) if fallback is not None else ("", 0)
+    return run
+
+
 def runner_for(host_name, config, role=None):
     """The optimizer callable for this host. Each host's calls go through that host's own CLI,
     never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
@@ -1004,15 +1095,17 @@ def runner_for(host_name, config, role=None):
     `NO_SIDE_CALLS`. A call that raises is noted in errors.log (`_noted`).
 
     `role` (`judge`, `nudge`, `proposer`) lets `local_model` run that call on-device instead
-    (`local_runner`), falling back to the host's CLI when the local call fails; on a host in
-    `NO_SIDE_CALLS` the local model is the only runner."""
+    (`local_runner`), falling back to the HTTP endpoint (when `sidecall_url` is configured) or
+    the host's CLI; on a host in `NO_SIDE_CALLS`, `local_model` or `sidecall_url` still works."""
     call = _host_call(host_name, config)
     host = None if call is None else _noted(host_name, call)
+    http = http_runner(config, fallback=host)
+    remote = http if http is not None else host
     if role is not None:
-        local = local_runner(role, config, fallback=host)
+        local = local_runner(role, config, fallback=remote)
         if local is not None:
             return local
-    return host
+    return remote
 
 
 def _host_call(host_name, config):

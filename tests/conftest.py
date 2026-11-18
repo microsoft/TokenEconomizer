@@ -62,6 +62,7 @@ def _no_model_calls(request, monkeypatch):
     for name in ("claude_call", "codex_call", "copilot_call", "droid_call", "grok_call",
                  "hermes_call", "pi_call"):
         monkeypatch.setattr(sidecall, name, lambda *a, **k: ("", None))
-    # Nor the on-device model: `fm` answers nothing, as if absent, unless a test fakes it.
+    # Nor the on-device model or HTTP endpoint: both answer nothing unless a test fakes them.
     monkeypatch.setattr(sidecall, "fm_call", lambda *a, **k: (None, 0))
+    monkeypatch.setattr(sidecall, "http_call", lambda *a, **k: (None, 0))
     monkeypatch.setattr(sidecall, "_fm_ok", {})
