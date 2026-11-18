@@ -13,12 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest supported Python is checked on Ubuntu. Windows runs the one Python its
-        # runner image already has: a Python it lacks is downloaded and installed on every run.
-        include:
-          - { os: ubuntu-latest, python: "3.10" }
-          - { os: ubuntu-latest, python: "3.13" }
-          - { os: windows-latest, python: "3.13" }
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
     runs-on: ${{ matrix.os }}
     # A test that starts hanging or slows every test down fails the job instead of holding it.
     timeout-minutes: 10
@@ -49,6 +45,10 @@ jobs:
           }
         env:
           COLUMNS: "200"
+          # The PowerShell tests (marker `powershell`) check the hook's and the slash commands'
+          # PowerShell text, and each launches PowerShell several times: one Python of the
+          # Windows matrix runs them.
+          PYTEST_ADDOPTS: ${{ matrix.os == 'windows-latest' && matrix.python == '3.10' && '-m "not powershell"' || '' }}
 
   codex:
     # The plugin installed and run by a real Codex CLI (tests/test_codex_cli.py): its install
