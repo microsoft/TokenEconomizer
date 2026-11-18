@@ -27,7 +27,7 @@ def edited_pyfiles(calls):
     fs = set()
     for tool, args, _ in calls:
         if tool in ("edit", "multiedit", "write", "create", "str_replace_editor"):
-            p = args.get("file_path") or args.get("path") or ""
+            p = args.get("file_path") or args.get("path") or args.get("relative_path") or ""
             if p.endswith(".py"):
                 fs.add(os.path.basename(p))
         elif tool == "apply_patch":
@@ -43,7 +43,7 @@ def edited_files(calls):
     fs = set()
     for tool, args, _ in calls:
         if tool in ("edit", "multiedit", "write", "create", "str_replace_editor"):
-            p = args.get("file_path") or args.get("path") or ""
+            p = args.get("file_path") or args.get("path") or args.get("relative_path") or ""
             if p:
                 fs.add(os.path.basename(p))
         elif tool == "apply_patch":

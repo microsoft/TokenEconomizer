@@ -41,6 +41,12 @@ person can tune by hand:
   * toolprune_quiet_minutes     -- how long every session of the repository must have been idle
                                    before `auto` writes a deny list (0: at once), so that no
                                    conversation resumed with a warm prompt cache loses it;
+  * tool_roles                  -- tools the mechanisms do not know by name, each given the role
+                                   of a built-in one, comma-separated `tool=role` (a tool may be
+                                   a pattern; role: shell, edit or read), such as an MCP server's
+                                   edit tool (`mcp__serena__replace_content=edit`): micro-skills
+                                   read a shell tool's commands and every mechanism counts an
+                                   edit tool's file as edited;
   * loopguard_aggr              -- the guard's threshold preset;
   * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
@@ -94,6 +100,8 @@ import json
 import math
 import os
 from dataclasses import asdict, dataclass, field, fields
+
+from ..trace import TOOL_ROLES, parse_tool_role
 
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 # An on-device model some side calls can run on instead of the agent's CLI (`sidecall.local_runner`):
@@ -189,6 +197,7 @@ class LiveConfig:
     toolprune_sessions: int = 5
     toolprune_quiet_minutes: int = 60
     toolprune_protect: list = field(default_factory=list)
+    tool_roles: list = field(default_factory=list)
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
     loopguard_nudges: int = 1
@@ -294,6 +303,12 @@ class LiveConfig:
         except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: {key}={value!r} rejected ({e})")
             return False
+        if key == "tool_roles":
+            bad = [e for e in v if parse_tool_role(e) is None]
+            if bad:
+                self.warnings.append(f"{source}: tool_roles {bad!r} not `tool=role` with a role "
+                                     f"in {tuple(TOOL_ROLES)}")
+                return False
         if key == "local_roles":
             bad = [r for r in v if r not in LOCAL_ROLES]
             if bad:
@@ -354,7 +369,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",
         "TE_TOOLPRUNE_SESSIONS": "toolprune_sessions",
-        "TE_TOOLPRUNE_PROTECT": "toolprune_protect",
+        "TE_TOOLPRUNE_PROTECT": "toolprune_protect", "TE_TOOL_ROLES": "tool_roles",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",

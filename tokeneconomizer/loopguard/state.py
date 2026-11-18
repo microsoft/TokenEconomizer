@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 
-from ..trace import load_trajectory as _load_trajectory
+from ..trace import load_trajectory as _load_trajectory, tool_kind
 
 # An output that RAN code to verify behavior (the test/repro step of the edit->test
 # loop).
@@ -47,7 +47,7 @@ _TOOL_CANON = {
 
 
 def canon_tool(name):
-    return _TOOL_CANON.get((name or "").lower(), name or "?")
+    return _TOOL_CANON.get(tool_kind(name), name or "?")
 
 
 def completed_calls(line, pend):
@@ -185,7 +185,8 @@ class SpiralState:
             # A patch names every file it changes in `paths`; any other edit names one.
             paths = args.get("paths")
             if not isinstance(paths, (list, tuple)) or not paths:
-                paths = [args.get("path") or args.get("filePath") or args.get("file_path")]
+                paths = [args.get("path") or args.get("filePath") or args.get("file_path")
+                         or args.get("relative_path")]
             names = list(dict.fromkeys(basename(p) for p in paths if isinstance(p, str)))
             names = [b for b in names if b]
             for b in names:
