@@ -128,7 +128,15 @@ _CONDA_RUN_RE = re.compile(r"^(conda|mamba|micromamba)\s+run\s+"
                            r"(?:--no-capture-output\s+|--live-stream\s+)*"
                            r"(?:(?:-n|--name)(?:\s+|=)([\w.-]+)|"
                            r"(?:-p|--prefix)(?:\s+|=)([^\s;&|'\"]+))\s+")
-_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
+_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|pdm|hatch|rye|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
+# A Python launcher's own options before the command (`uv run --frozen --extra test pytest`), of
+# which these take a value; a bare `--` ends them. They stay in the form: an extra, a group or a
+# `--with` is often what makes the command work.
+_PY_LAUNCHERS = frozenset({"poetry", "pipenv", "uv", "pdm", "hatch", "rye"})
+_RUN_OPTION_RE = re.compile(r"^(?:((?:--with(?:-editable|-requirements)?|--extra|"
+                            r"--(?:only-|no-)?group|--python|-p|--package|--project|--directory|"
+                            r"--env-file|--index|--pyproject)(?:=|\s+)[^\s-]\S*|"
+                            r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
 # Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
 _TOOL_LAUNCH_RE = re.compile(r"^(uvx|uv\s+tool\s+run|pipx\s+run)\s+")
@@ -366,8 +374,14 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             body = body[m.end():]
         m = _TOOL_RUN_RE.match(body)
         if m:
-            prefix = (prefix + " " if prefix else "") + f"{m.group(1)} run"
+            launcher = [f"{m.group(1)} run"]
             body = body[m.end():]
+            while m.group(1) in _PY_LAUNCHERS and (o := _RUN_OPTION_RE.match(body)):
+                body = body[o.end():]
+                if o.group(1) is None:                   # `--`: the command follows
+                    break
+                launcher.append(" ".join(o.group(1).split()))
+            prefix = (prefix + " " if prefix else "") + " ".join(launcher)
         else:
             m = _NPX_RE.match(body)
             if m and m.end() > 0:
