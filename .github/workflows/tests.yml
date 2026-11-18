@@ -32,13 +32,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install pytest pytest-xdist
-      # The tests run in parallel, one worker per core: many start hook and launcher
-      # processes, which are slow to start on Windows. --durations names the slowest in the log.
+      # The tests run in parallel: many start hook and launcher processes, which are slow to
+      # start on Windows, and wait on them, so four workers beat the runner's core count (two on
+      # Windows). Workers steal queued tests, so the long ones do not all end up last on one
+      # worker. --durations names the slowest in the log.
       # On failure, the summary lines also go out as an annotation, which the check run shows
       # without signing in.
       - run: |
           set -o pipefail
-          python -m pytest tests -n auto --durations=15 -rfEs --tb=line 2>&1 | tee pytest.log || {
+          python -m pytest tests -n 4 --dist worksteal --durations=15 -rfEs --tb=line 2>&1 | tee pytest.log || {
             status=$?
             msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \
                   | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
