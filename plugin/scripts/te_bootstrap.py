@@ -18,7 +18,16 @@ The package is found, in order:
                                          `source` (the clone a local marketplace was added
                                          from), or Codex's own checkout of a git marketplace,
                                          `<CODEX_HOME>/.tmp/marketplaces/<marketplace>`;
-  5. an installed package            -- `pip install` of the repository.
+  5. a Copilot or VS Code copy       -- for a copy under `<COPILOT_HOME>/installed-plugins/...`
+                                         or VS Code's `agentPlugins/...`, the marketplace
+                                         checkouts under the Copilot home and the sources its
+                                         `config.json`, `marketplaces.json` or VS Code's
+                                         `installed.json` name;
+  6. Claude Code's marketplace       -- the source `~/.claude/plugins/known_marketplaces.json`
+                                         records for this marketplace, which another agent's
+                                         copy can share;
+  7. `<TOKENECONOMIZER_HOME>/src`     -- a clone kept in the state directory;
+  8. an installed package            -- `pip install` of the repository.
 
 When none has it, a hook answers `{}` as always, and says why once in the plugin's errors.log.
 
