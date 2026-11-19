@@ -86,13 +86,22 @@ def settings_path(repo_root, host="claude"):
     return os.path.join(repo_root, _SETTINGS.get(host, SETTINGS_REL))
 
 
+def _read_text(path):
+    """The text of the settings file at `path`, read without following a symlink there.
+
+    `_guard_target` looks at the path first, but the checkout can swap the file for a link to
+    a user-level configuration before it is read, and what is read is written back."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags), encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _read_settings(path):
     """The settings object at `path`: {} when there is no file. A file that is there but is not
     a JSON object is refused rather than written over -- it is the person's, and a parse error
     is no reason to replace what they had in it."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
+        text = _read_text(path)
     except FileNotFoundError:
         return {}
     except OSError as e:
@@ -121,10 +130,23 @@ def _guard_target(repo_root, path):
                            "leads out of the repository")
 
 
+def _open_tmp(tmp):
+    """Open the temporary file `tmp` for writing, never through a link.
+
+    `_guard_target` checks the final path, and a checkout decides what sits at the temporary
+    name too: a symlink planted there would carry the write to its target, a user-level
+    configuration for one. An old entry is removed and a new file created exclusively."""
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_BINARY", 0))
+    return os.fdopen(os.open(tmp, flags, 0o666), "w", encoding="utf-8")
+
+
 def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".te.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with _open_tmp(tmp) as fh:
         json.dump(obj, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, path)
@@ -133,7 +155,7 @@ def write_json(path, obj):
 def _write_text(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".te.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with _open_tmp(tmp) as fh:
         fh.write(text)
     os.replace(tmp, path)
 
@@ -423,7 +445,7 @@ def _apply_codex(repo_root, capabilities, store):
         raise RuntimeError(f"{path} is committed in this repository; the plugin will not edit a "
                            "shared file. Add the toggles by hand, or keep them in your own "
                            "copy of it.")
-    original = open(path, encoding="utf-8").read() if not created else ""
+    original = _read_text(path) if not created else ""
     text = original
     added = []
     for cap in capabilities:
@@ -461,7 +483,7 @@ def _restore_codex(repo_root, store, capabilities):
     path = settings_path(repo_root, "codex")
     _guard_target(repo_root, path)
     if os.path.exists(path):
-        text = _toml_remove(open(path, encoding="utf-8").read(),
+        text = _toml_remove(_read_text(path),
                             [f"{MARK}:{c}" for c in target])
         if text.strip():
             _write_text(path, text)

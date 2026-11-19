@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -83,9 +84,13 @@ def head_commit(root):
 
 
 def _has_aider(python, env):
+    # `-c` puts the working directory first on sys.path, and the background `te` runs in the
+    # repository: an `aider/` the checkout carries would be the one imported, and run. An empty
+    # directory instead; `-I` would also hide an aider installed in the user site.
     try:
-        return subprocess.run([python, "-c", PROBE], capture_output=True, timeout=60,
-                              env=env).returncode == 0
+        with tempfile.TemporaryDirectory(prefix="te-aider-probe-") as empty:
+            return subprocess.run([python, "-c", PROBE], capture_output=True, timeout=60,
+                                  env=env, cwd=empty).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
