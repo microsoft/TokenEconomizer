@@ -487,8 +487,11 @@ the side call denies only `bash`, `edit`, `webfetch` and `websearch`.
 ## Hermes Agent
 
 Experimental, and narrower than the other agents: **micro-skills and the loop guard**, on Hermes's
-**classic CLI** (`hermes`, `hermes chat`) and **one-shot runs** (`hermes -z`, `hermes chat --oneshot`),
-with `terminal.backend: local`. Tested on 0.22.5 only.
+**classic CLI** (`hermes`, `hermes chat`), **one-shot runs** (`hermes -z`, `hermes chat --oneshot`),
+and gateway sessions (the API server and messaging platforms such as Discord and Telegram) and `cron`
+runs, with `terminal.backend: local`. Tested on 0.22.5 only; the gateway and `cron` sessions have
+been exercised against a recorded `state.db` and not against a live platform. Where Hermes has
+`register_command`, `/te` runs the command line below.
 
 **1. Install.** Link the plugin directory, keeping it next to `scripts/` and `lib/`, enable it, and
 restart the gateway, which is what runs your sessions:
@@ -523,9 +526,19 @@ quiet for 10 minutes. A session whose rows cannot be read then stays unfolded an
 each later start in that repository, for a week after its last hook; after that it is recorded as
 unreadable.
 
-**Which repository.** Each session's own row names its directory, so sessions in different
-repositories can run at once in the one gateway. A session with no directory on this machine is
-not followed.
+**Which repository.** Each session names its own directory, so sessions in different repositories
+can run at once in the one gateway; the gateway's working directory and `TERMINAL_CWD` are never
+used. A session's directory is its row's `cwd` in Hermes's `state.db`. A gateway or `cron` session
+whose row records none takes the `terminal_cwd` of its chat's routing entry (`gateway_routing`),
+then the directory Hermes scopes to the running turn; with none of these it is not followed yet,
+and is looked at again at its next hook. Any other session with no directory on this machine is not
+followed. A `cron` run is one turn and ends with it; a gateway chat ends at `/new` (a finalize or a
+reset), at shutdown, or, if neither fires, when the next session starts in its repository after 10
+quiet minutes.
+
+**`/te`.** It runs in the repository of the session that typed it, found as above and by the chat's
+`session_key`. `/te --cwd PATH status` names another. A session with no directory gets
+`te: no working directory for this session; pass --cwd PATH`.
 
 **Model calls.** The proposer and the loop guard's judge run through `hermes chat --oneshot --source
 tool` on your default Hermes model (`paid_model` names another; `hermes_cli` or `TE_HERMES_CLI`
@@ -577,9 +590,8 @@ off in mid-turn by a gateway that died, and two timed-out side calls, were recov
 * A session resumed after it was folded: its later turns are neither learned from nor priced, since
   a session folds once. That rule is shared by every agent. It matters more here, because a one-shot
   run folds as soon as its turn ends, so `hermes -c` after `hermes -z` always lands on it.
-* The Ink TUI (`--tui`), Desktop, ACP, messaging platforms and cron are ignored, on purpose: nothing
-  has been verified there, and a chat is not repository work. So are subagents, whose tokens are
-  counted with their session and whose tool calls are not.
+* The Ink TUI (`--tui`), Desktop and ACP are ignored, on purpose: nothing has been verified there.
+  So are subagents, whose tokens are counted with their session and whose tool calls are not.
 * Remote terminal backends, named profiles and `plugins.isolation: host`.
 * Tool pruning. Hermes has no per-repository tool setting. `llm_request` middleware removed a tool
   from a request in a probe, but keeping a session's list stable across its cache has not been built.
