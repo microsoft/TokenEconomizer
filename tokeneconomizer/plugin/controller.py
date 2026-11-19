@@ -315,7 +315,8 @@ class LiveController:
             s["turn"] = loopguard.TurnGuard(turn_key=self.host.turn_key(self.p)).to_dict()
             if self.host.name == "droid":
                 # The log's calls so far belong to turns already closed: the new turn
-                # reconciles only what comes after this mark (#231).
+                # reconciles only what comes after this mark (#231). Only a Droid that drops
+                # failed calls has its log read here.
                 path = self._droid_log(s)
                 try:
                     s["droid_log_seen"] = len(droid_trace.droid_session_calls(path)) \
@@ -341,11 +342,18 @@ class LiveController:
         return {}
 
     def _droid_log(self, s):
-        """This Droid session's log: the payload's transcript, else the one the
-        session state kept from an earlier hook."""
+        """This Droid session's log -- the payload's transcript, else the one the session
+        state kept from an earlier hook -- when it was written by a Droid whose PostToolUse
+        drops failed calls (#231); "" otherwise, so other versions never read it."""
         if self.host.name != "droid":
             return ""
-        return self.host.transcript(self.p) or (s or {}).get("transcript") or ""
+        path = self.host.transcript(self.p) or (s or {}).get("transcript") or ""
+        if not path or not os.path.exists(path):
+            return ""
+        version = droid_trace.droid_version(path)
+        if version is None or not (_DROID_DROPS_FAILURES[0] <= version < _DROID_DROPS_FAILURES[1]):
+            return ""
+        return path
 
     def _reconcile_droid_failures(self, s, g, thr=None):
         """Fold the failed calls of this Droid session that PostToolUse never
@@ -358,13 +366,8 @@ class LiveController:
         only accumulates the failure signals, and the call that follows (or the
         turn's close) decides on them -- a reconcile never spends a nudge or an
         abort itself."""
-        if self.host.name != "droid":
-            return
         path = self._droid_log(s)
-        if not path or not os.path.exists(path):
-            return
-        version = droid_trace.droid_version(path)
-        if version is None or not (_DROID_DROPS_FAILURES[0] <= version < _DROID_DROPS_FAILURES[1]):
+        if not path:
             return
         try:
             calls = droid_trace.droid_session_calls(path)
@@ -379,7 +382,7 @@ class LiveController:
         for name, args, text, ok in calls[seen:]:
             if ok:
                 continue
-            g.fold(droid_trace.claude_tool_name(name), args, text, 1,
+            g.fold(name, args, text, 1,
                    envelope=None,
                    thr=dict(thr, backstop_turns=None) if thr is not None else None,
                    judge=None)

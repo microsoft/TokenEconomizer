@@ -52,24 +52,27 @@ def claude_tool_name(name):
     return _TOOL_NAMES.get((name or "").lower(), name)
 
 
+def _parsed(fh):
+    """Each record of an open Droid session log, skipping blank and unparseable lines."""
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
 def droid_records(path):
     """The parsed records of a Droid session, in file order (which is `seq` order)."""
-    out = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(ev, dict):
-                    out.append(ev)
+            return list(_parsed(fh))
     except OSError:
         return []
-    return out
 
 
 def _epoch(ts):
@@ -83,10 +86,15 @@ def _epoch(ts):
 
 
 def droid_session_header(path):
-    """The `session_start` record ({id, cwd, version, title, ...}), {} if absent."""
-    for ev in droid_records(path):
-        if ev.get("type") == "session_start":
-            return ev
+    """The `session_start` record ({id, cwd, version, title, ...}), {} if absent. It heads the
+    log, so the read stops there: the live hooks ask for it on every call."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for ev in _parsed(fh):
+                if ev.get("type") == "session_start":
+                    return ev
+    except OSError:
+        pass
     return {}
 
 
