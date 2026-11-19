@@ -216,6 +216,13 @@ class Host:
         """What a session's state keeps from the environment of its first hook."""
         return {}
 
+    def session_model(self, p):
+        """The model the session runs on, in the agent CLI's own `--model` form, or "" when the
+        payload does not say. A host that reports it lets the plugin's own calls follow the
+        session instead of whatever model the CLI would pick by default -- which is how a
+        paid provider the person selected can be looked past."""
+        return ""
+
     def tool_usage(self, trace_path):
         return trace.tool_usage(trace_path)
 
@@ -485,6 +492,11 @@ class OpenCode(Host):
 
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
+
+    def session_model(self, p):
+        """`session.step.started` names the model on `provider/model#variant`; the plugin sends
+        the session's own, so the plugin's calls do not fall back to the CLI default."""
+        return str(p.get("model") or "")
 
     def headless(self, env, transcript=None):
         return str(env.get("TE_OPENCODE_MODE", "")).strip() == "run"

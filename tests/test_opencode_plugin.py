@@ -54,8 +54,12 @@ await plugin.setup({
   location: { directory: process.env.TE_WORK },
   session: { hook: async (name: string, fn: any) => { hooks["session." + name] = fn; } },
   tool: { hook: async (name: string, fn: any) => { hooks["tool." + name] = fn; } },
-  event: { subscribe: async function* () {} },
+  event: { subscribe: async function* () {
+    yield { type: "session.step.started", properties: { sessionID: "ses_t", assistantMessageID: "a1", model: { id: "te-model", providerID: "te", variant: "high" } } };
+  } },
 });
+// The event stream is consumed off the setup path; let it land before the hooks that carry it.
+await new Promise((r) => setTimeout(r, 200));
 await hooks["session.prompt"]({ sessionID: "ses_t", messageID: "m1", prompt: { text: "say hi" } });
 await hooks["tool.execute.after"]({ sessionID: "ses_t", status: "completed", tool: "bash",
   id: "c1", input: { command: "echo hi" }, result: { content: "hi", metadata: { exit: 0 } } });
@@ -111,6 +115,20 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
         text.replace("windowsHide: true", "windowsHide: false"), encoding="utf-8")
     control = _run(tmp_path, copy / "opencode" / "tokeneconomizer.ts", "control")
     assert all(r["visible"] for r in control if r["hook"]), control
+
+
+def test_the_plugin_sends_the_model_the_session_runs_on(tmp_path):
+    """`session.step.started` names the model the turn runs on; the plugin passes it with the
+    hooks and the session state keeps it, so the judge and the fold need not fall back to the
+    CLI's configured default."""
+    _run(
+        tmp_path,
+        os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+        "model",
+    )
+    (state,) = (tmp_path / "te-model").glob("repos/*/opencode/sessions/ses_t.json")
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    assert doc.get("model") == "te/te-model#high", doc
 
 
 class _Chat(BaseHTTPRequestHandler):

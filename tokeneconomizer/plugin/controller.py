@@ -58,6 +58,11 @@ class LiveController:
                  "cwd": self.host.cwd(self.p, self.ctx.env), "turns": [], "nudges": 0,
                  "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0,
                  **self.host.session_state(self.ctx.env)}
+        # The model the session runs on, when its payload names one: the plugin's own calls
+        # follow it (`sidecall`) instead of the CLI's default.
+        model = self.host.session_model(self.p)
+        if model:
+            s["model"] = model
         return s
 
     def _save(self, s):

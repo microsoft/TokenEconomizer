@@ -72,7 +72,8 @@ def _microskills_config(ctx, profile):
                            max_tokens=ctx.config.microskills_max_tokens)
 
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False):
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False,
+                      model=""):
     profile = ctx.config.microskills
     if profile == "off":
         return None
@@ -83,7 +84,8 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
     runner = None
     if icfg.paid and not imported:
-        runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
+        runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer",
+                                      session_model=model)
                   if not sidecall.paused(ctx.host.name, ctx.root)
                   else sidecall.local_runner("proposer", ctx.config))
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
@@ -542,9 +544,14 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
             catalog = {} if imported else load_catalog(ctx.root, ctx.host.name)
             adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
                                   catalog=catalog, protect=ctx.config.toolprune_protect)
+            # The model this session ran on, as its own hooks recorded it: the proposer follows
+            # it instead of the CLI's configured default. The session log keeps a bare model id
+            # (no provider), which `opencode run --model` cannot resolve, so it is not a source.
+            model = str(sess.get("model") or "")
             with ctx.store.locked("mechanisms"):
                 inj = _fold_microskills(ctx, adapter, run_dir, session_id,
-                                        injected=sess.get("injected_ids"), imported=imported)
+                                        injected=sess.get("injected_ids"), imported=imported,
+                                        model=model)
                 # A session that ran no prompt is no evidence about the tools.
                 unt = None if prompts == 0 else _fold_toolprune(
                     ctx, adapter, run_dir, session_id, transcript=transcript,
