@@ -48,6 +48,7 @@ import time
 
 from .. import trace
 from . import adapter as live_adapter
+from .store import replace_retrying
 
 SETTINGS_REL = os.path.join(".claude", "settings.local.json")
 CODEX_CONFIG_REL = os.path.join(".codex", "config.toml")
@@ -124,18 +125,30 @@ def _guard_target(repo_root, path):
 def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".te.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(obj, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2)
+            fh.write("\n")
+        replace_retrying(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _write_text(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".te.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        replace_retrying(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _exclude_from_git(repo_root, rel=SETTINGS_REL):

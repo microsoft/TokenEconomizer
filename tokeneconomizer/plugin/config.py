@@ -95,6 +95,8 @@ import math
 import os
 from dataclasses import asdict, dataclass, field, fields
 
+from .store import replace_retrying
+
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 # An on-device model some side calls can run on instead of the agent's CLI (`sidecall.local_runner`):
 # "fm" is Apple's Foundation Models CLI (`/usr/bin/fm`, macOS 27 with Apple Intelligence).
@@ -474,6 +476,12 @@ def unset_config(path, keys):
 def _write(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(obj, fh, indent=2, sort_keys=True)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2, sort_keys=True)
+        replace_retrying(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
