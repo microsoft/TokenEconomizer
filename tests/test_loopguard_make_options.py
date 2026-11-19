@@ -13,7 +13,10 @@ from tokeneconomizer.loopguard import turn
 @pytest.mark.parametrize("cmd", ["make test", "make -j4 test", "make -j 4 test", "make -j test",
                                  "make -C build test", "make --directory=build check",
                                  "make -k -j8 check", "make V=1 test",
-                                 "make -f Makefile.ci test"])
+                                 "make -f Makefile.ci test", "make -j$(nproc) check",
+                                 "make -j $(nproc) test", "make --jobs=$(nproc) check",
+                                 "make CFLAGS=-O2 test", "make -i test", "make -w check",
+                                 "make --include-dir=inc test", "make -W src/a.c test"])
 def test_a_make_target_past_its_options_counts_as_a_verification(cmd):
     assert turn.status_of_tests(cmd) == "own"
     g = guard.TurnGuard(turn_key="t")
@@ -23,6 +26,9 @@ def test_a_make_target_past_its_options_counts_as_a_verification(cmd):
 
 
 @pytest.mark.parametrize("cmd", ["make", "make install", "make -C build install", "make -j4",
-                                 "make testdata", "make -j8 all"])
+                                 "make testdata", "make -j8 all", "make -j$(nproc)",
+                                 "make -C test", "make -f check"])
 def test_other_make_targets_are_not_test_runs(cmd):
+    """`make -C test` builds the default target in `test/`: `-C` always takes a value."""
     assert turn.status_of_tests(cmd) is None
+
