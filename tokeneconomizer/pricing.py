@@ -108,6 +108,10 @@ MODEL_WEIGHTS = {
     "gpt-6-sol":               dict(input=1.0, cache_read=0.10,   cache_write=1.25,  output=5.0),
     "gpt-6.1-sol":             dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
     "gpt-6.1-terra":           dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    # Added 2026-11-19 from the same page: gpt-6.2-astra $8.00 in / $0.40 cached / $40 out and
+    # gpt-6.2-sol $2.00 / $0.10 / $10, so both bill a cache hit at 0.05x input like gpt-6.1-sol.
+    "gpt-6.2-astra":           dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
+    "gpt-6.2-sol":             dict(input=1.0, cache_read=0.05,   cache_write=1.25,  output=5.0),
     # Google, https://aistudio.google.com/docs/pricing. No cache-write charge. Gemini 4 bills a
     # cache hit at 0.05x input ($2.00 in / $0.10 cached / $10 out for argon and carbon). The
     # gemini-4-* prices rise on 2026-12-01 and gemini-3.8-flash's on 2027-01-01; the ratios stay.

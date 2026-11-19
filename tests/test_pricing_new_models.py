@@ -1,20 +1,23 @@
 """Models that came after the 2026-07-27 price snapshot are in the table with their vendors' own
 ratios. A model missing from the table is priced on the live ledger's fallback curve (cache hit
 0.10x input, output 6x), which overstates a session on a model whose cache hit costs 0.05x input
-(gpt-6.1-sol, gpt-6.1-terra, gemini-4-*) or whose output costs 5x (every GPT-6 model)."""
+(gpt-6.1-*, gpt-6.2-*, gemini-4-*) or whose output costs 5x (every GPT-6 model)."""
 import pytest
 
 from tokeneconomizer import pricing
 from tokeneconomizer.plugin import accounting
 
 # id, input, cached input, cache write (30-minute, or None), output: USD per 1M tokens, Standard
-# tier, short context, as OpenAI's and Google's price pages listed them on 2026-11-13.
+# tier, short context, as OpenAI's and Google's price pages listed them on 2026-11-13
+# (gpt-6.2-* on 2026-11-19).
 PRICES = [
     ("gpt-6-astra",           10.00, 1.00,  12.50, 50.00),
     ("gpt-6-luna",             0.10, 0.01,  0.125,  0.50),
     ("gpt-6-sol",              2.00, 0.20,   2.50, 10.00),
     ("gpt-6.1-sol",            2.00, 0.10,   2.50, 10.00),
     ("gpt-6.1-terra",          1.00, 0.05,   1.25,  5.00),
+    ("gpt-6.2-astra",          8.00, 0.40,  10.00, 40.00),
+    ("gpt-6.2-sol",            2.00, 0.10,   2.50, 10.00),
     ("gemini-3.1-flash-lite",  0.25, 0.025, None,   1.50),
     ("gemini-3.5-flash-lite",  0.30, 0.03,  None,   2.50),
     ("gemini-3.8-flash",       0.75, 0.075, None,   3.75),
