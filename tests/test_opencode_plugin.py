@@ -47,18 +47,26 @@ if log:
 '''
 
 # opencode 2.x's plugin context, as far as the plugin reads it: one prompt, one tool call, then
-# the process exits (the plugin hands the open session over then, with a blocking call).
+# the process exits (the plugin hands the open session over then, with a blocking call). With
+# TE_END_TURN the turn ends after the tool call (`session.idle`); without it, it is still open.
 HARNESS = '''import plugin from %s;
 const hooks: Record<string, any> = {};
+let endTurn = () => {};
+const turnEnded = new Promise<void>((r) => (endTurn = r));
 await plugin.setup({
   location: { directory: process.env.TE_WORK },
   session: { hook: async (name: string, fn: any) => { hooks["session." + name] = fn; } },
   tool: { hook: async (name: string, fn: any) => { hooks["tool." + name] = fn; } },
-  event: { subscribe: async function* () {} },
+  event: { subscribe: async function* () {
+    if (!process.env.TE_END_TURN) return;
+    await turnEnded;
+    yield { type: "session.idle", properties: { sessionID: "ses_t" } };
+  } },
 });
 await hooks["session.prompt"]({ sessionID: "ses_t", messageID: "m1", prompt: { text: "say hi" } });
 await hooks["tool.execute.after"]({ sessionID: "ses_t", status: "completed", tool: "bash",
   id: "c1", input: { command: "echo hi" }, result: { content: "hi", metadata: { exit: 0 } } });
+endTurn();
 if (process.env.TE_WAIT_MS) await new Promise((r) => setTimeout(r, Number(process.env.TE_WAIT_MS)));
 console.log("harness done");
 process.exit(0);
@@ -114,12 +122,23 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
     assert all(r["visible"] for r in control if r["hook"]), control
 
 
+def _quiet(monkeypatch, end_turn=True):
+    """A short quiet window, a harness that outlives it, and the TUI's mode, so that a turn's end
+    does not hand the session over at once as a headless run's does."""
+    monkeypatch.setenv("TE_OPENCODE_MODE", "tui")
+    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
+    monkeypatch.setenv("TE_WAIT_MS", "18000")
+    if end_turn:
+        monkeypatch.setenv("TE_END_TURN", "1")
+    else:
+        monkeypatch.delenv("TE_END_TURN", raising=False)
+
+
 def test_a_quiet_session_is_handed_over_without_a_mode_guess(tmp_path, monkeypatch):
     """On 2.x `opencode run` and the TUI are the same background process, so the plugin cannot
     tell them apart. A session quiet for the window it is told (TE_OPENCODE_QUIET_MS) is handed
     over with SessionEnd while the process is still up, instead of waiting for the next start."""
-    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
-    monkeypatch.setenv("TE_WAIT_MS", "15000")
+    _quiet(monkeypatch)
     _run(
         tmp_path,
         os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
@@ -130,11 +149,25 @@ def test_a_quiet_session_is_handed_over_without_a_mode_guess(tmp_path, monkeypat
     assert doc.get("end_reason") == "idle" and doc.get("ended"), doc
 
 
+def test_a_turn_still_open_is_not_handed_over_as_quiet(tmp_path, monkeypatch):
+    """A turn whose end has not arrived (a long tool call, a permission prompt waiting on the
+    person) is not quiet: the session stays open past the window, and is handed over only when
+    the process exits."""
+    _quiet(monkeypatch, end_turn=False)
+    _run(
+        tmp_path,
+        os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+        "open-turn",
+    )
+    (state,) = (tmp_path / "te-open-turn").glob("repos/*/opencode/sessions/ses_t.json")
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    assert doc.get("end_reason") == "exit", doc
+
+
 def test_a_resumed_session_keeps_the_earlier_turns(tmp_path, monkeypatch):
     """A quiet hand-over ends the session and writes its export. Resuming the session must not
     replace that file with only the new turn: the fold reads the turns from it."""
-    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
-    monkeypatch.setenv("TE_WAIT_MS", "15000")
+    _quiet(monkeypatch)
     plugin = os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts")
     _run(tmp_path, plugin, "resume-a", state="resume")
     _run(tmp_path, plugin, "resume-b", state="resume")

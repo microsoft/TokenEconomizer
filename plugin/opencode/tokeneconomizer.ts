@@ -403,11 +403,13 @@ const setupV2 = async (ctx: any) => {
    * `mode()` cannot tell them apart -- and a release may move which one holds the plugin again.
    * TE's own recovery already calls a session quiet for `fold.STALE_S` (600 s) over; this
    * enforces the same rule here, so the hand-over does not wait for a later session start and
-   * does not depend on guessing the mode. Any activity resets the timer.
+   * does not depend on guessing the mode. Any activity resets the timer, and a turn still open
+   * (a long tool call, a permission prompt waiting on the person) is not quiet: the session is
+   * handed over only once its turn has ended.
    */
   const QUIET_MS = (() => {
     const raw = Number(process.env.TE_OPENCODE_QUIET_MS);
-    return Number.isFinite(raw) && raw >= 10_000 ? raw : 600_000;
+    return Number.isFinite(raw) && raw > 0 ? Math.max(raw, 10_000) : 600_000;
   })();
   const quiet = new Map<string, ReturnType<typeof setTimeout>>();
   const settled = (id: string) => {
@@ -420,7 +422,8 @@ const setupV2 = async (ctx: any) => {
     settled(id);
     const timer = setTimeout(() => {
       quiet.delete(id);
-      if (open.has(id)) void end(id, "idle");
+      if (unsettled.has(id)) bumpQuiet(id);
+      else if (open.has(id)) void end(id, "idle");
     }, QUIET_MS);
     (timer as unknown as { unref?: () => void }).unref?.();
     quiet.set(id, timer);
