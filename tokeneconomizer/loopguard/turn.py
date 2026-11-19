@@ -50,7 +50,11 @@ VERIFY_RE = re.compile(
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
-    r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    # make's own options and variables before the target (`make -j8 check`, `make -C build
+    # test`, `make V=1 test`); of its options, these take a value
+    r"make(?:\s+(?:-[CfIjlo]\s*[^\s\-]\S*|--(?:directory|file|jobs|load-average)(?:=|\s+)\S+|"
+    r"-[-\w]+|\w+=\S*))*\s+(?:test|check)|"
+    r"ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
     # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
