@@ -391,6 +391,24 @@ def test_on_windows_the_launcher_probes_and_skips_a_broken_alias_when_it_is_the_
     assert (tmp_path / "alias_called").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash's path conversion")
+def test_on_windows_the_launchers_hand_python_a_windows_path_with_path_conversion_off(tmp_path):
+    """Claude Code runs hooks in Git Bash with MSYS path conversion off. `pwd` there prints
+    `/c/...`, which native Python reads as `C:\\c\\...` when nothing converts it, so the
+    launchers pass the Windows form (`pwd -W`)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    env = _hook_env(tmp_path, MSYS_NO_PATHCONV="1")
+    code, out, err = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                               {"hook_event_name": "SessionStart", "session_id": "s",
+                                "cwd": str(work), "source": "startup"}, env)
+    assert code == 0 and json.loads(out) == {}, err
+    assert os.path.isdir(tmp_path / "home" / "repos")
+    p = subprocess.run(SH + [os.path.join(PLUGIN, "scripts", "te"), "--help"],
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert p.returncode == 0 and "usage" in p.stdout, p.stderr
+
+
 def test_the_launcher_fails_open_without_python(tmp_path):
     code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
                              {"hook_event_name": "SessionStart"},
