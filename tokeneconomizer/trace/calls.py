@@ -22,6 +22,8 @@ from .copilot import copilot_event_calls, copilot_session_cwd
 # unfiltered, still tracked); a bare `rtk` with no command is left alone. `RTK_WORDS` is the
 # wrapper alone, for a classifier that passes over it among other prefixes (`loopguard.turn`).
 RTK_WORDS = r"rtk(?:\s+proxy)?"
+RTK_PREFIX_RE = re.compile(r"^" + RTK_WORDS + r"\s+(?=\S)")
+
 # The tools whose `command` argument is shell text, lower-cased: Claude Code's Bash, and its
 # PowerShell tool on Windows, Codex's shell, the Copilot CLI's stop_bash.
 SHELL_TOOLS = frozenset({"bash", "powershell", "shell", "stop_bash"})
@@ -56,7 +58,6 @@ def tool_kind(name):
         if fnmatch.fnmatchcase(low, pattern):
             return TOOL_ROLES[role]
     return low
-RTK_PREFIX_RE = re.compile(r"^" + RTK_WORDS + r"\s+(?=\S)")
 
 
 def strip_rtk_prefix(command):

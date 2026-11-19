@@ -908,6 +908,7 @@ first session there ends.
 | `local_judge_confidence` | `0.9` | how sure a stuck verdict from the on-device judge must be to count; below it the turn is spared |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
+| `tool_roles` | none | tools the mechanisms do not know by name, each given the role of a built-in one: `tool=role` entries separated by commas, a tool by name or pattern, a role `shell`, `edit` or `read` (`mcp__serena__replace_content=edit,mcp__serena__execute_shell_command=shell`). Micro-skills read a shell tool's commands, and an edit tool's file counts as edited; tool pruning still knows each tool by its own name |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
 
