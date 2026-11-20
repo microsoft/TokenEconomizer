@@ -35,7 +35,8 @@ from ..toolprune.tools import PROTECTED_TOOLS
 
 # Tools a person relies on in an interactive session, beyond the benchmark work surface.
 INTERACTIVE_PROTECTED = frozenset({
-    "Bash", "Read", "Edit", "MultiEdit", "Write", "Grep", "Glob", "LS", "NotebookRead",
+    "Bash", "PowerShell", "Read", "Edit", "MultiEdit", "Write", "Grep", "Glob", "LS",
+    "NotebookRead",
     "BashOutput", "KillShell", "KillBash",
     "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TodoWrite",
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",

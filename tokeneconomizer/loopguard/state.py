@@ -36,7 +36,7 @@ _CONTENT_TOOLS = ("view", "grep", "glob")
 # Code's stream-json (which names tools Bash/Read/Edit/Write/Grep/Glob/MultiEdit). Unknown
 # names pass through unchanged.
 _TOOL_CANON = {
-    "bash": "bash", "shell": "bash",
+    "bash": "bash", "shell": "bash", "powershell": "bash",
     "read": "view", "view": "view",
     "grep": "grep",
     "glob": "glob",

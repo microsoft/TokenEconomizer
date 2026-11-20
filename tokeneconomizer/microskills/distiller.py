@@ -21,7 +21,7 @@ import os
 import re
 
 from ..names import repo_filename
-from ..trace import call_cwds
+from ..trace import SHELL_TOOLS, call_cwds
 from ..trace.claude import CONVERSATION
 from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
@@ -113,7 +113,7 @@ def load_calls(fp):
 def bash_cmds(calls):
     out = []
     for tool, args, res in calls:
-        if tool in ("bash", "shell", "stop_bash"):
+        if tool in SHELL_TOOLS:
             out.append(((args.get("command") or args.get("cmd") or ""), res))
     return out
 

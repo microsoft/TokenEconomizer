@@ -15,7 +15,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 
-from ..trace import call_cwds, load_trajectory, strip_rtk_prefix
+from ..trace import SHELL_TOOLS, call_cwds, load_trajectory, strip_rtk_prefix
 from .lifecycle import edited_files, edited_pyfiles
 
 
@@ -390,7 +390,7 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
         if not toks:
             continue
         head = toks[0]
-        base = head.rsplit("/", 1)[-1]
+        base = _command_base(head)
         rest = toks[1:]
         o = _classify(head, base, rest, body, prefix, seg, call_index, vocab)
         if o is not None:
@@ -663,7 +663,7 @@ def observe_task(transcript_path, vocab=None):
     for idx, (name, args, out, ok) in enumerate(calls):
         tool = (name or "").lower()
         triples.append((tool, args if isinstance(args, dict) else {}, out or ""))
-        if tool not in ("shell", "bash", "stop_bash"):
+        if tool not in SHELL_TOOLS:
             continue
         cmd = (args.get("command") or args.get("cmd") or "") if isinstance(args, dict) else ""
         out = out or ""
@@ -765,6 +765,13 @@ def _error_line(out, err):
 
 def _base(path):
     return (path or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _command_base(head):
+    """The command a segment's head names: its last path part, less a Windows `.exe`, so
+    `C:\\Python312\\python.exe` and `.venv/bin/python` are both the `python` interpreter."""
+    base = _base(head)
+    return base[:-4] if base.lower().endswith(".exe") else base
 
 
 def _not_found_name(line):
