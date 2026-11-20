@@ -30,7 +30,7 @@ def test_a_test_run_in_a_pixi_environment_is_observed_with_it(cmd, form):
 
 
 @pytest.mark.parametrize("cmd", ["pixi run -n pytest", "pixi run --dry-run pytest",
-                                 "pixi run -e test --dry-run pytest"])
+                                 "pixi run -e test --dry-run pytest", "pixi run -xn pytest"])
 def test_a_dry_run_ran_nothing(cmd):
     assert _seen(cmd) == []
 

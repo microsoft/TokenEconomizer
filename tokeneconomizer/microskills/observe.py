@@ -145,7 +145,8 @@ _PIXI_OPTION_RE = re.compile(r"^(?:((?:-[epmws]|--(?:environment|platform|manife
                              r"concurrent-solves|pinning-strategy|pypi-keyring-provider|"
                              r"tls-root-certs))(?:=|\s+)[^\s-]\S*|"
                              r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
-_DRY_RUN = frozenset({"-n", "--dry-run"})
+# A dry run: `--dry-run`, or `-n`, alone or among short flags (`-xn`).
+_DRY_RUN_RE = re.compile(r"--dry-run|-[A-Za-z]*n[A-Za-z]*")
 
 
 def _past_options(body, option_re):
@@ -395,7 +396,7 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
         m = _PIXI_RUN_RE.match(body)
         if m:
             body, opts = _past_options(body[m.end():], _PIXI_OPTION_RE)
-            if _DRY_RUN & set(opts):
+            if any(_DRY_RUN_RE.fullmatch(opt) for opt in opts):
                 continue
             prefix = (prefix + " " if prefix else "") + " ".join(["pixi run", *opts])
         m = _TOOL_RUN_RE.match(body)
