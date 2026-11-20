@@ -1027,8 +1027,9 @@ agents the default listed under [Settings](#settings). `status` prints the repos
 `overhead`, and a record of its own for each judge call (`"kind": "overhead"`, with the session's
 id).
 
-These calls run through **your own agent's CLI**: `claude -p`; `codex exec`; `copilot -p`, with
-every tool removed; and `pi -p`, with nothing loaded but the model. So they use whatever your
+These calls run through **your own agent's CLI**: `claude -p`, in safe mode where your Claude
+Code has `--safe-mode` (none of your CLAUDE.md, plugins or hooks); `codex exec`; `copilot -p`,
+with every tool removed; and `pi -p`, with nothing loaded but the model. So they use whatever your
 sessions already use (a Claude subscription or Anthropic API key, your Codex login or OpenAI key,
 Copilot's subscription, or the provider and login Pi is set up with), are billed there, and are
 shown in `status`. Copilot with BYOK is the exception; see [Copilot CLI](#copilot-cli).

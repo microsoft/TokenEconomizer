@@ -1232,6 +1232,32 @@ def test_a_claude_side_call_attaches_none_of_the_persons_mcp_servers(monkeypatch
     assert "--strict-mcp-config" not in seen["cmd"] and "--mcp-config" not in seen["cmd"]
 
 
+@pytest.mark.real_sidecalls
+def test_a_claude_side_call_starts_without_the_persons_customizations(monkeypatch):
+    """A side call loads none of the person's CLAUDE.md, plugins or hooks where the CLI has
+    `--safe-mode` (#162); the catalog probes, which measure the real session, keep them, and a
+    Claude Code without the flag is not given it."""
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    helps = {"new": "  --no-session-persistence\n  --safe-mode   Start with all customizations "
+                    "(CLAUDE.md, skills, installed plugins, hooks, ...) disabled", "old": "  -p"}
+    seen = []
+
+    def fake_run(cmd, **kw):
+        if cmd[1:] == ["--help"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=helps[cmd[0]], stderr="")
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "OK"}), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    monkeypatch.setattr(sidecall, "_HELP", {})
+    assert sidecall.claude_call("Reply with exactly: OK", cli="new")[0] == "OK"
+    assert "--safe-mode" in seen[-1]
+    assert "--safe-mode" not in sidecall.claude_flags("new")             # the probes' flags
+    sidecall.claude_call("Reply with exactly: OK", cli="old")
+    assert "--safe-mode" not in seen[-1]
+
+
 def test_claude_cli_falls_back_to_the_native_install_when_not_on_path(monkeypatch, tmp_path):
     import os
     from tokeneconomizer.plugin import sidecall

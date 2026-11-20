@@ -274,6 +274,16 @@ def claude_no_mcp(cli, cwd):
     return ["--strict-mcp-config", "--mcp-config", path]
 
 
+def claude_safe_mode(cli):
+    """`--safe-mode` when this Claude Code has it: a side call starts without the person's
+    customizations -- CLAUDE.md, installed plugins and their hooks, skills, output styles --
+    which it would otherwise load, pay for on every judge and proposer call, and run its hooks
+    inside (#162). Auth, model selection and the settings file's `env` still apply (verified on
+    2.1.329), so a provider set there is still the one called. Not for the catalog probes, which
+    measure the person's real session."""
+    return ["--safe-mode"] if "--safe-mode" in _claude_help(cli) else []
+
+
 def claude_json(stdout):
     """The result object of a `claude -p --output-format json` run, {} when there is none. With
     `"verbose": true` in the person's settings (or `--verbose`), Claude Code prints the whole
@@ -296,6 +306,7 @@ def claude_call(prompt, model="haiku", cli=None, timeout=TIMEOUT_S, effort=""):
         # `--mcp-config` takes several values, so an option follows it, never a bare argument.
         cmd = ([cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", ""]
                + claude_no_mcp(cli, cwd) + ["--model", model or "haiku"] + claude_flags(cli)
+               + claude_safe_mode(cli)
                + (["--effort", effort] if effort and "--effort" in _claude_help(cli) else []))
         out = subprocess.run(cmd, input=prompt, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
