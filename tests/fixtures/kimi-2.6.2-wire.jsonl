@@ -1,0 +1,10 @@
+{"type":"turn.prompt","agentId":"main","turnId":0,"promptId":"msg_01M7FCTGHVTRB0DQ02KK68MP4A"}
+{"type":"usage.record","agentId":"main","model":"fixture","usageScope":"turn","usage":{"inputOther":100,"output":8,"inputCacheRead":23,"inputCacheCreation":0}}
+{"type":"turn.prompt","agentId":"main","turnId":1,"promptId":"msg_01M7FCTHT5KBB0C9J3ZXW0QEQN"}
+{"type":"usage.record","agentId":"main","model":"fixture","usageScope":"turn","usage":{"inputOther":100,"output":8,"inputCacheRead":23,"inputCacheCreation":0}}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"48747bb3-80a5-49f1-8fef-8aaa9c07a858","turnId":"1","step":1,"stepUuid":"866d2861-37c2-4623-90b1-8bdd0a7f9e7b","toolCallId":"call_Bash","name":"Bash","args":{"command":"printf 'TE_KIMI_BASH\\n'; exit 7","timeout":5}},"time":1794739357601}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.result","parentUuid":"48747bb3-80a5-49f1-8fef-8aaa9c07a858","toolCallId":"call_Bash","result":{"output":"TE_KIMI_BASH\nCommand failed with exit code: 7.","isError":true,"durationMs":4}},"time":1794739357615}
+{"type":"usage.record","agentId":"main","model":"fixture","usageScope":"turn","usage":{"inputOther":100,"output":8,"inputCacheRead":23,"inputCacheCreation":0}}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"17cecd3c-987a-4e41-8ab6-fe0d814124f5","turnId":"1","step":2,"stepUuid":"99b8d639-ba71-4439-81fe-11db445ccaf6","toolCallId":"call_Read","name":"Read","args":{"path":"/fixture/fixture.txt"}},"time":1794739357647}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.result","parentUuid":"17cecd3c-987a-4e41-8ab6-fe0d814124f5","toolCallId":"call_Read","result":{"output":"1\tTE_KIMI_READ","durationMs":1}},"time":1794739357649}
+{"type":"usage.record","agentId":"main","model":"fixture","usageScope":"turn","usage":{"inputOther":100,"output":8,"inputCacheRead":23,"inputCacheCreation":0}}

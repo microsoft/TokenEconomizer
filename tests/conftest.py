@@ -60,7 +60,7 @@ def _no_model_calls(request, monkeypatch):
     if request.node.get_closest_marker("real_sidecalls"):
         return
     for name in ("claude_call", "codex_call", "copilot_call", "droid_call", "grok_call",
-                 "hermes_call", "pi_call"):
+                 "hermes_call", "pi_call", "zcode_call"):
         monkeypatch.setattr(sidecall, name, lambda *a, **k: ("", None))
     # Nor the on-device model: `fm` answers nothing, as if absent, unless a test fakes it.
     monkeypatch.setattr(sidecall, "fm_call", lambda *a, **k: (None, 0))
