@@ -137,6 +137,27 @@ _RUN_OPTION_RE = re.compile(r"^(?:((?:--with(?:-editable|-requirements)?|--extra
                             r"--(?:only-|no-)?group|--python|-p|--package|--project|--directory|"
                             r"--env-file|--index|--pyproject)(?:=|\s+)[^\s-]\S*|"
                             r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
+# `pixi run`'s own options (pixi's CLI reference), of which these take a value; its `-m` is the
+# manifest path, not a module. Its dry run (`-n`, `--dry-run`) only prints the command.
+_PIXI_RUN_RE = re.compile(r"^pixi\s+run\s+")
+_PIXI_OPTION_RE = re.compile(r"^(?:((?:-[epmws]|--(?:environment|platform|manifest-path|workspace|"
+                             r"script|config-file|auth-file|concurrent-downloads|"
+                             r"concurrent-solves|pinning-strategy|pypi-keyring-provider|"
+                             r"tls-root-certs))(?:=|\s+)[^\s-]\S*|"
+                             r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
+# A dry run: `--dry-run`, or `-n`, alone or among short flags (`-xn`).
+_DRY_RUN_RE = re.compile(r"--dry-run|-[A-Za-z]*n[A-Za-z]*")
+
+
+def _past_options(body, option_re):
+    """`body` past a launcher's own options, and those options as typed; a bare `--` ends them."""
+    opts = []
+    while o := option_re.match(body):
+        body = body[o.end():]
+        if o.group(1) is None:                   # `--`: the command follows
+            break
+        opts.append(" ".join(o.group(1).split()))
+    return body, opts
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
 # Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
 _TOOL_LAUNCH_RE = re.compile(r"^(uvx|uv\s+tool\s+run|pipx\s+run)\s+")
@@ -372,15 +393,19 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             env = f"-n {m.group(2)}" if m.group(2) else f"-p {m.group(3)}"
             prefix = (prefix + " " if prefix else "") + f"{launcher} run {env}"
             body = body[m.end():]
+        m = _PIXI_RUN_RE.match(body)
+        if m:
+            body, opts = _past_options(body[m.end():], _PIXI_OPTION_RE)
+            if any(_DRY_RUN_RE.fullmatch(opt) for opt in opts):
+                continue
+            prefix = (prefix + " " if prefix else "") + " ".join(["pixi run", *opts])
         m = _TOOL_RUN_RE.match(body)
         if m:
             launcher = [f"{m.group(1)} run"]
             body = body[m.end():]
-            while m.group(1) in _PY_LAUNCHERS and (o := _RUN_OPTION_RE.match(body)):
-                body = body[o.end():]
-                if o.group(1) is None:                   # `--`: the command follows
-                    break
-                launcher.append(" ".join(o.group(1).split()))
+            if m.group(1) in _PY_LAUNCHERS:
+                body, opts = _past_options(body, _RUN_OPTION_RE)
+                launcher += opts
             prefix = (prefix + " " if prefix else "") + " ".join(launcher)
         else:
             m = _NPX_RE.match(body)
