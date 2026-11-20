@@ -158,12 +158,17 @@ class LiveController:
         calls_a_model = "distiller" in self.cfg.microskills or self.cfg.loopguard != "off"
         if (pause and calls_a_model and not self.cfg.shadow
                 and seen.get("sidecall_paused") != pause["at"]):
-            byok = (" (with your own model key, Copilot does not pass it to the plugin's hooks)"
-                    if self.host.name == "copilot" else "")
+            # Pi answers with `/login` too when the model's provider is one this call did not
+            # load, so its notice names the settings for that.
+            why = {"copilot": " (with your own model key, Copilot does not pass it to the "
+                              "plugin's hooks)",
+                   "pi": " (Pi also answers this when the model's provider comes from an "
+                         "extension, which these calls load only from `pi_extensions`; `pi_cli` "
+                         "names the `pi` they run)"}.get(self.host.name, "")
             outputs.append(self.host.notice(
                 f"TokenEconomizer: the plugin's own model calls go through "
                 f"`{sidecall.call_name(self.host.name)}`, "
-                f"which answered that it is not signed in{byok}, so they are paused; facts that "
+                f"which answered that it is not signed in{why}, so they are paused; facts that "
                 f"need no model call are still learned, and the loop guard redirects only at its "
                 f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "
                 f"again."))
