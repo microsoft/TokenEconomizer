@@ -25,6 +25,7 @@ def test_a_runner_in_a_pixi_environment_counts_as_a_verification(cmd):
 
 
 @pytest.mark.parametrize("cmd", ["pixi run -n pytest", "pixi run --dry-run pytest",
+                                 "pixi run -xn pytest", "pixi run -nx pytest",
                                  "pixi run python train.py", "pixi run -e test python train.py",
                                  "pixi install", "pixi add pytest",
                                  "pixi run pytest --collect-only"])
