@@ -598,8 +598,17 @@ was not.)
   (`reason: cli_close`), and, against the docs, not for `hermes -z`.
 * A subagent fires the whole set, on a session of its own (`created_source: subagent`).
 * A user's interactive row reads `source: local`, `created_source: cli`; a side call's reads
-  `tool`, with no `cwd`. The plugin follows `created_source` `cli` and `oneshot` with a `cwd`, and a
-  row it cannot read not at all, so the filter fails closed.
+  `tool`, with no `cwd`. The plugin follows `created_source` `cli`, `oneshot`, `cron` and the gateway
+  platforms it lists with a directory, and a row it cannot read not at all, so the filter fails
+  closed. The gateway's `os.getcwd()` and `TERMINAL_CWD` are the daemon's, shared by every chat, so
+  neither names a session's repository. A session's directory is its row's `cwd`; a gateway or
+  `cron` row that records none (Hermes writes `cwd` at a cron run's end) takes the `terminal_cwd`
+  of its `gateway_routing` entry, then the directory scoped to the running turn
+  (`agent.runtime_cwd.scoped_session_cwd`, `ctx.session_cwd()`), and with none it is looked at again
+  at its next hook. `/te` handlers are passed the `session_id` and `session_key` they declare, and
+  run in that session's directory. `on_session_reset` is handled as a finalize of the session it
+  leaves. Subagents stay out: the fold
+  prices a session with its subagents.
 * **Side calls.** `--source tokeneconomizer` is refused (`invalid_params`), though the docs say any
   value is stored; `tool` is accepted. `TE_SIDECALL` does not reach the gateway, and worse: with no
   gateway running a side call starts one, which kept `TE_SIDECALL=1` in its environment, and would
@@ -836,8 +845,8 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   never gets it), and the ledger counts it as injected from `SessionStart`. A turn interrupted
   with Ctrl+C is closed by the next prompt, not by an event. Side calls leave a session under
   `~/.grok/sessions/`; xAI models are priced on the fallback curve.
-* **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
-  runs, verified with a scripted model and one free real model. Its limits are listed in
+* **Hermes Agent** (experimental): micro-skills and the loop guard, on the classic CLI, one-shot
+  runs, gateway sessions and `cron`, and `/te` where Hermes has `register_command`; verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
 * **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, tested against
   `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux, using its installed hook documentation;

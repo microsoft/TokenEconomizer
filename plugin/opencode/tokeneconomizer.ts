@@ -52,7 +52,53 @@ const HERE = (() => {
     return __dirname;
   }
 })();
-const SCRIPTS = join(HERE, "..", "scripts");
+/**
+ * The directory holding the dispatcher (`te_bootstrap.py` / `te-hook`). Where it sits depends on
+ * how the plugin was put where opencode loads it from: the checkout keeps it at
+ * `<root>/plugin/scripts`, an installed plugin at `<dir>/scripts`. Resolve rather than assume, so
+ * a move of the install is not a move of the dispatcher -- and the hook fails open rather than
+ * pointing at a path that is not there.
+ *
+ * Only the shipped layouts and the launcher the plugin writes itself are anchors. Nothing walks
+ * up from the plugin's directory: on Windows that walk ends at `C:\`, where a standard user can
+ * create folders by default, so a planted `scripts/te_bootstrap.py` would run in every hook --
+ * and any unrelated ancestor would win over the dispatcher the plugin actually ships with.
+ */
+const findScripts = (): string => {
+  const wanted = (p: string) => existsSync(join(p, "te_bootstrap.py"));
+  // Named explicitly: `TE_PLUGIN_ROOT` is the package (`<root>/scripts`), `TE_CORE_PATH` the
+  // checkout the bootstrap already documents (`<root>/plugin/scripts`). A fresh install has no
+  // launcher yet, so these are what make the first hook work.
+  const explicit: string[] = [];
+  const pluginRoot = process.env.TE_PLUGIN_ROOT;
+  if (pluginRoot) explicit.push(join(pluginRoot, "scripts"));
+  const core = process.env.TE_CORE_PATH;
+  if (core) explicit.push(join(core, "plugin", "scripts"));
+  for (const c of explicit) {
+    if (wanted(c)) return c;
+  }
+  // The layout the plugin ships in: `<plugin>/opencode/<file>` next to `<plugin>/scripts`.
+  const shipped = join(HERE, "..", "scripts");
+  if (wanted(shipped)) return shipped;
+  const state = process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer");
+  const launcher = join(state, "bin", "te");
+  try {
+    if (existsSync(launcher)) {
+      // The launcher is `exec <plugin>/scripts/te "$@"`, so its own directory is the dispatcher's.
+      const body = readFileSync(launcher, "utf8");
+      const m = /exec\s+(.+?)\s+"\$@"/.exec(body);
+      if (m) {
+        const target = m[1].replace(/^['"]|['"]$/g, "");
+        const scripts = dirname(target);
+        if (wanted(scripts)) return scripts;
+      }
+    }
+  } catch {
+    /* an unreadable launcher is no anchor */
+  }
+  return shipped;
+};
+const SCRIPTS = findScripts();
 const HOOK_TIMEOUT_MS = 60_000;
 
 const truthy = (v: string | undefined) =>
@@ -195,8 +241,31 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
     }
   };
 
+  const cleanup = (sessionID: string) => {
+    manuals.delete(sessionID);
+    prompts.delete(sessionID);
+    turns.delete(sessionID);
+    if (current === sessionID) current = "";
+  };
+
+  // Where the process ends without a `session.deleted` (quitting the TUI, `opencode run`
+  // finishing), the sessions still open are handed over, once, synchronously.
+  const onExit = () => {
+    for (const sessionID of open) {
+      const file = exportSession(sessionID, directory);
+      cleanup(sessionID);
+      hookSync({
+        ...base(sessionID, file),
+        hook_event_name: "SessionEnd",
+        reason: "exit",
+      });
+    }
+    open.clear();
+  };
+
   const start = async (sessionID: string) => {
     if (open.has(sessionID)) return;
+    if (open.size === 0) process.once("exit", onExit);
     open.add(sessionID);
     prompts.set(sessionID, 0);
     const out = await hook({
@@ -210,22 +279,11 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
 
   const end = async (sessionID: string, reason: string) => {
     if (!open.delete(sessionID)) return;
+    if (open.size === 0) process.off("exit", onExit);
     const file = exportSession(sessionID, directory);
+    cleanup(sessionID);
     await hook({ ...base(sessionID, file), hook_event_name: "SessionEnd", reason });
   };
-
-  // Where the process ends without a `session.deleted` (quitting the TUI, `opencode run`
-  // finishing), the sessions still open are handed over, once, synchronously.
-  process.once("exit", () => {
-    for (const sessionID of open) {
-      hookSync({
-        ...base(sessionID, exportSession(sessionID, directory)),
-        hook_event_name: "SessionEnd",
-        reason: "exit",
-      });
-    }
-    open.clear();
-  });
 
   return {
     event: async ({ event }: { event: any }) => {
@@ -335,6 +393,49 @@ const textOf = (content: any): string =>
           .join("\n")
       : "";
 
+const deliverNudge = (e: any, ok: boolean, result: any, nudge: string): boolean => {
+  if (ok && result && typeof result === "object") {
+    if (typeof result.content === "string") {
+      result.content = `${result.content}\n\n${nudge}`;
+      return true;
+    }
+    if (Array.isArray(result.content)) {
+      result.content = [...result.content, { type: "text", text: nudge }];
+      return true;
+    }
+    if (result.content === undefined && typeof result.output === "string") {
+      result.output = `${result.output}\n\n${nudge}`;
+      return true;
+    }
+    if (result.content === undefined) {
+      result.content = nudge;
+      return true;
+    }
+    return false;
+  }
+  if (!ok && e && typeof e === "object") {
+    if (e.error && typeof e.error === "object" && typeof e.error.message === "string") {
+      try {
+        const updated = e.error.message ? `${e.error.message}\n\n${nudge}` : nudge;
+        e.error.message = updated;
+        if (e.error.message === updated) return true;
+      } catch {
+        /* read-only error.message */
+      }
+    }
+    if (typeof e.error === "string") {
+      try {
+        const updated = e.error ? `${e.error}\n\n${nudge}` : nudge;
+        e.error = updated;
+        if (e.error === updated) return true;
+      } catch {
+        /* read-only event.error */
+      }
+    }
+  }
+  return false;
+};
+
 const setupV2 = async (ctx: any) => {
   const directory: string = ctx.location?.directory ?? ctx.location?.path ?? process.cwd();
   const open = new Set<string>();
@@ -343,8 +444,9 @@ const setupV2 = async (ctx: any) => {
   const prompts = new Map<string, number>();
   const turns = new Map<string, string>();
   const records = new Map<string, any[]>();       // sessionID -> messages, in the export's shape
-  const steps = new Map<string, any>();           // assistantMessageID -> assistant message
-  const names = new Map<string, string>();        // tool call id -> tool name
+  const steps = new Map<string, { sessionID: string; msg: any }>();
+  const names = new Map<string, { sessionID: string; name: string }>();
+  const pendingNudges = new Map<string, string>();
 
   const base = (sessionID: string, transcript = "") => ({
     session_id: sessionID,
@@ -385,6 +487,21 @@ const setupV2 = async (ctx: any) => {
       return file;
     } catch {
       return "";
+    }
+  };
+
+  const cleanup = (id: string) => {
+    unsettled.delete(id);
+    manuals.delete(id);
+    prompts.delete(id);
+    turns.delete(id);
+    records.delete(id);
+    pendingNudges.delete(id);
+    for (const [mid, entry] of steps) {
+      if (entry.sessionID === id) steps.delete(mid);
+    }
+    for (const [cid, entry] of names) {
+      if (entry.sessionID === id) names.delete(cid);
     }
   };
 
@@ -431,7 +548,9 @@ const setupV2 = async (ctx: any) => {
   const end = async (id: string, reason: string) => {
     settled(id);
     if (!open.delete(id)) return;
-    await hook({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason });
+    const file = writeExport(id);
+    cleanup(id);
+    await hook({ ...base(id, file), hook_event_name: "SessionEnd", reason });
   };
   /** A turn's end, however 2.x signals it. `session.execution.*` and `session.idle` both arrive
    * per turn on releases that emit both; the first settles the turn and the second is a no-op.
@@ -439,6 +558,7 @@ const setupV2 = async (ctx: any) => {
    * hook in the dispatcher instead. */
   const closeTurn = async (id: string) => {
     if (!unsettled.delete(id)) return;
+    pendingNudges.delete(id);
     await hook({
       ...base(id, writeExport(id)),
       hook_event_name: "Stop",
@@ -450,20 +570,25 @@ const setupV2 = async (ctx: any) => {
     if (mode() === "run") await end(id, "run");
     else bumpQuiet(id);
   };
-  process.once("exit", () => {
-    for (const id of open)
-      hookSync({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason: "exit" });
+  const onExit = () => {
+    for (const id of open) {
+      const file = writeExport(id);
+      cleanup(id);
+      hookSync({ ...base(id, file), hook_event_name: "SessionEnd", reason: "exit" });
+    }
     open.clear();
-  });
+  };
+  process.once("exit", onExit);
 
   const assistant = (sessionID: string, messageID: string) => {
-    let m = steps.get(messageID);
-    if (!m) {
-      m = { info: { id: messageID, role: "assistant", path: { cwd: directory } }, parts: [] };
-      steps.set(messageID, m);
-      records.get(sessionID)?.push(m);
+    let entry = steps.get(messageID);
+    if (!entry) {
+      const msg = { info: { id: messageID, role: "assistant", path: { cwd: directory } }, parts: [] };
+      entry = { sessionID, msg };
+      steps.set(messageID, entry);
+      records.get(sessionID)?.push(msg);
     }
-    return m;
+    return entry.msg;
   };
   const toolPart = (m: any, callID: string) => m.parts.find((p: any) => p.callID === callID);
 
@@ -472,6 +597,7 @@ const setupV2 = async (ctx: any) => {
     await ctx.session.hook("prompt", async (e: any) => {
       const id: string = e.sessionID;
       await start(id);
+      pendingNudges.delete(id);
       const n = (prompts.get(id) ?? 0) + 1;
       prompts.set(id, n);
       const turn = `${id}:${n}`;
@@ -506,6 +632,7 @@ const setupV2 = async (ctx: any) => {
     await ctx.tool.hook("execute.after", async (e: any) => {
       const id: string = e.sessionID;
       bumpQuiet(id);
+      const turnAtCall = turns.get(id) ?? "";
       const ok = e.status === "completed";
       const result = ok ? e.result : undefined;
       const text = ok
@@ -515,7 +642,7 @@ const setupV2 = async (ctx: any) => {
       const out = await hook({
         ...base(id),
         hook_event_name: "PostToolUse",
-        prompt_id: turns.get(id) ?? "",
+        prompt_id: turnAtCall,
         tool_name: e.tool,
         tool_use_id: e.id,
         tool_input: e.input ?? {},
@@ -525,12 +652,14 @@ const setupV2 = async (ctx: any) => {
           exit_code: exit,
         },
       });
+      const held = pendingNudges.get(id);
       const nudge = out?.hookSpecificOutput?.additionalContext;
-      if (nudge && ok && result) {
-        if (typeof result.content === "string") result.content = `${result.content}\n\n${nudge}`;
-        else if (Array.isArray(result.content))
-          result.content = [...result.content, { type: "text", text: nudge }];
-        else result.content = nudge;
+      const combined = [held, nudge]
+        .filter((v): v is string => typeof v === "string" && Boolean(v))
+        .join("\n\n");
+      if (combined) {
+        if (deliverNudge(e, ok, result, combined)) pendingNudges.delete(id);
+        else if ((turns.get(id) ?? "") === turnAtCall) pendingNudges.set(id, combined);
       }
       notify(out?.systemMessage);
     });
@@ -553,13 +682,15 @@ const setupV2 = async (ctx: any) => {
           m.info.cost = p.cost ?? 0;
           m.info.tokens = p.tokens;
         } else if (t === "session.tool.input.started") {
-          names.set(p.id, p.name);
+          names.set(p.id, { sessionID: id, name: p.name });
         } else if (t === "session.tool.called") {
           const m = assistant(id, p.assistantMessageID);
+          const name = names.get(p.id)?.name ?? "";
+          names.delete(p.id);
           m.parts.push({
             type: "tool",
             callID: p.id,
-            tool: names.get(p.id) ?? "",
+            tool: name,
             state: { status: "running", input: p.input ?? {} },
           });
         } else if (t === "session.tool.success" || t === "session.tool.failed") {
@@ -583,7 +714,10 @@ const setupV2 = async (ctx: any) => {
     }
   })();
 
-  return () => controller.abort();
+  return () => {
+    controller.abort();
+    process.off("exit", onExit);
+  };
 };
 
 // One default export for both: v1 reads `server`, v2 reads `setup`.
