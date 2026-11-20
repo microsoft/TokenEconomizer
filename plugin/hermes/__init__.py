@@ -18,19 +18,36 @@ levers. All of the mechanism logic lives in the dispatcher; this file only trans
                                                     turn cut short sends no Stop, so it cannot feed
                                                     the envelope
     on_session_end (one-shot),
-    on_session_finalize       -> SessionEnd         a detached fold. `hermes -z` sends no finalize,
+    on_session_finalize,
+    on_session_reset          -> SessionEnd         a detached fold. `hermes -z` sends no finalize,
                                                     nor does a killed session: the next session's
                                                     start folds it once its hooks have gone quiet.
                                                     The fold reads the session from `state.db`
 
 One gateway serves every session and every repository, and its own directory and environment
-belong to neither, so everything about a session is read from its row in `state.db`, per session.
+(`os.getcwd()`, `TERMINAL_CWD`) belong to neither, so a session's directory is read per session,
+and never from them.
 
-The plugin follows only sessions a person started in a directory on this machine: `created_source`
-`cli` or `oneshot`, with a `cwd`. That is also what keeps it out of its own side calls, which run
-in this same gateway as `--source tool` and which `TE_SIDECALL` cannot reach; a session whose row
-cannot be read is not followed. Subagents (`subagent`), messaging platforms, cron and the other
-surfaces are not followed either.
+The plugin follows the sessions a person or a schedule started: `created_source` `cli` or
+`oneshot` on this machine, a messaging platform or the API server (`GATEWAY_SOURCES`), and `cron`.
+Each needs a directory, the first of: its row's `cwd` in `state.db`; for a gateway or `cron`
+session whose row has none, the `terminal_cwd` of the `gateway_routing` entry that names it (a
+database without that table has no such entries); then the directory Hermes scopes to the running
+turn (`ctx.session_cwd()`, else `agent.runtime_cwd.scoped_session_cwd()`). A gateway or `cron`
+session with none is not followed yet, and is looked at again at its next hook, since a chat can
+be given a directory later; any other session without one is not followed. A `cron` run is one
+turn, so it ends with it, as `hermes -z` does. Sessions of the plugin's own side calls run in this
+same gateway as `--source tool` and `TE_SIDECALL` cannot reach them, and a session whose row cannot
+be read is not followed, so both stay out. Subagents (`subagent`) are not followed: the fold
+prices a session with its subagents, and a child of its own would count them twice. The terminal
+UI and ACP are not followed either.
+
+`/te` runs the command line (`te --host hermes ...`) where Hermes has `register_command`, in the
+calling session's directory: Hermes passes the `session_id` and `session_key` the handler declares,
+and the directory is that session's (as above; a chat is also found by its `session_key` in
+`gateway_routing`). A `--cwd` in the arguments is used as given. With no directory it says so and
+runs nothing, rather than read the gateway's own repository. `on_session_reset` ends the session
+a `/new` leaves, as `on_session_finalize` does, and one already ended is not ended twice.
 
 Hermes runs hooks under `plugins.hook_callback_timeout` (30s), and one overrun silences that
 callback for 60s for every session, so a dispatcher call has a shorter limit of its own. Every
@@ -40,6 +57,7 @@ import json
 import logging
 import os
 import pathlib
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -50,6 +68,10 @@ logger = logging.getLogger(__name__)
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOOTSTRAP = os.path.join(HERE, "..", "scripts", "te_bootstrap.py")
 USER_SOURCES = ("cli", "oneshot")
+GATEWAY_SOURCES = ("api_server", "discord", "telegram", "slack", "whatsapp", "signal", "matrix",
+                   "mattermost", "email", "sms", "webhook")
+SCHEDULED_SOURCES = ("cron",)
+FOLLOWED_SOURCES = USER_SOURCES + GATEWAY_SOURCES + SCHEDULED_SOURCES
 HOOK_TIMEOUT_S = 20
 LOCK_TIMEOUT_S = 5
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -136,6 +158,41 @@ def lineage(con, session_id):
     return rows
 
 
+def _routes(con):
+    """Every gateway routing entry, as dicts; none where `state.db` has no such table."""
+    try:
+        rows = con.execute("SELECT session_key, entry_json FROM gateway_routing").fetchall()
+    except sqlite3.Error:
+        return []
+    out = []
+    for key, raw in rows:
+        try:
+            entry = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            meta = entry.get("metadata")
+            out.append((key, entry.get("session_id"),
+                        meta.get("terminal_cwd") if isinstance(meta, dict) else None))
+    return out
+
+def routed_cwd(con, session_ids):
+    """The directory a gateway chat works in, from the routing entry that names one of these
+    sessions."""
+    for _, sid, cwd in _routes(con):
+        if cwd and sid in session_ids:
+            return cwd
+    return None
+
+def scoped_cwd():
+    """The directory scoped to the session whose turn is running (Hermes binds it per turn and per
+    cron run), or "". Never the gateway's own."""
+    try:
+        from agent.runtime_cwd import scoped_session_cwd
+        return scoped_session_cwd() or ""
+    except Exception:
+        return ""
+
 def with_redirect(result, text):
     """`result` carrying `text`, or None when it cannot without losing its shape. A JSON object
     keeps every byte it had, after a first key of ours; plain text gets the line after it."""
@@ -160,9 +217,10 @@ class Bridge:
     """What the plugin keeps about sessions in the gateway's memory, keyed by the lineage's first
     id. A gateway restart loses it, and the next hook finds each session again."""
 
-    def __init__(self, call=dispatch, home=hermes_home):
+    def __init__(self, call=dispatch, home=hermes_home, session_cwd=scoped_cwd):
         self.call = call
         self.home = home
+        self.session_cwd = session_cwd
         self.sessions = {}                     # any id of a followed session -> its record
         self.ignored = set()
         self.guard = threading.Lock()
@@ -176,8 +234,8 @@ class Bridge:
 
     def _record(self, row, root):
         return {"id": root, "cwd": row["cwd"], "lock": threading.Lock(), "started": False,
-                "mode": "oneshot" if (row.get("created_source") or row.get("source")) == "oneshot"
-                        else "cli", "held": [], "notices": []}
+                "mode": "oneshot" if (row.get("created_source") or row.get("source"))
+                        in ("oneshot",) + SCHEDULED_SOURCES else "cli", "held": [], "notices": []}
 
     def session(self, session_id):
         """The record of a session the plugin follows, or None. A row that cannot be read is
@@ -192,17 +250,24 @@ class Bridge:
             con = _connect(self.home())
             try:
                 chain = lineage(con, session_id)
+                origin = (chain[0].get("created_source") or chain[0].get("source")) if chain else ""
+                cwd = (chain[-1].get("cwd") or chain[0].get("cwd")) if chain else None
+                scheduled = origin in GATEWAY_SOURCES + SCHEDULED_SOURCES
+                if chain and not cwd and scheduled:
+                    cwd = routed_cwd(con, {r["id"] for r in chain})   # a chat's own directory
             finally:
                 con.close()
         except (OSError, ValueError, sqlite3.Error):
             return None
         if not chain:
             return None
-        leaf, root = chain[-1], chain[0]["id"]
-        origin = chain[0].get("created_source") or chain[0].get("source")
-        cwd = leaf.get("cwd") or chain[0].get("cwd")
+        root = chain[0]["id"]
+        if not cwd and scheduled:
+            cwd = self.session_cwd() or None                          # this turn's, never the gateway's
         with self.guard:
-            if origin not in USER_SOURCES or not cwd or not os.path.isdir(cwd):
+            if scheduled and not (cwd and os.path.isdir(cwd)):
+                return None                   # a chat or run can be given a directory later
+            if origin not in FOLLOWED_SOURCES or not cwd or not os.path.isdir(cwd):
                 if len(self.ignored) >= MAX_IGNORED:
                     self.ignored.clear()
                 self.ignored.add(session_id)
@@ -316,11 +381,72 @@ class Bridge:
         return "\n".join(notices) or None
 
 
+    def on_session_reset(self, session_id="", old_session_id="", reason="", **_):
+        """`/new` ends the session it leaves; a surface that fires this and no finalize still ends
+        it. A session already ended is not ended twice."""
+        return self.on_session_finalize(session_id=old_session_id or session_id,
+                                        reason=reason or "reset")
+
+    def command_cwd(self, session_id="", session_key=""):
+        """The directory of the session that typed `/te`: not this process's, which is the
+        gateway's."""
+        rec = self.session(session_id)
+        if rec is not None:
+            return rec["cwd"]
+        if session_key:
+            try:
+                con = _connect(self.home())
+                try:
+                    routes = [r for r in _routes(con) if r[0] == session_key]
+                finally:
+                    con.close()
+            except (OSError, ValueError, sqlite3.Error):
+                routes = []
+            for _, sid, cwd in routes:
+                rec = self.session(sid)
+                found = cwd if cwd and os.path.isdir(cwd) else rec and rec["cwd"]
+                if found:
+                    return found
+        cwd = self.session_cwd()
+        return cwd if cwd and os.path.isdir(cwd) else None
+
+    def command(self, raw_args="", session_id="", session_key="", platform="", source=None, **_):
+        """`/te ...` for the calling session. Hermes passes the arguments a handler declares."""
+        try:
+            argv = shlex.split(raw_args or "")
+            if any(a == "--cwd" or a.startswith("--cwd=") for a in argv):
+                return te_command(raw_args)           # the person named a repository
+            cwd = self.command_cwd(session_id, session_key)
+        except (ValueError, sqlite3.Error) as e:
+            return f"te: {e}"
+        if not cwd and argv[:1] not in (["repos"], ["doctor"]):
+            return "te: no working directory for this session; pass --cwd PATH"
+        return te_command(raw_args, cwd)
+
+def te_command(raw_args="", cwd=None):
+    """`/te ...`: the command line, as `te --host hermes ...`, and its output as the reply."""
+    try:
+        argv = shlex.split(raw_args or "")
+        where = ["--cwd", cwd] if cwd else []
+        out = subprocess.run([os.environ.get("TE_PYTHON") or sys.executable, BOOTSTRAP, "cli",
+                              "--host", "hermes", *where, *argv],
+                             cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=HOOK_TIMEOUT_S, stdin=subprocess.DEVNULL,
+                             env=dict(os.environ, PYTHONUTF8="1", HERMES_HOME=hermes_home()),
+                             **HIDDEN)
+        return ((out.stdout or "") + (out.stderr or "")).strip() or "te: no output"
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return f"te: {e}"
+
 def register(ctx):
-    bridge = Bridge()
+    # `ctx.session_cwd()` is the calling session's directory, task-local to its turn.
+    bridge = Bridge(session_cwd=getattr(ctx, "session_cwd", scoped_cwd))
     ctx.register_system_prompt_section(SECTION_ID, bridge.section, position="after_memory",
                                        max_chars=4000)
     ctx.register_hook("pre_llm_call", bridge.pre_llm_call)
     ctx.register_hook("transform_tool_result", bridge.transform_tool_result)
     ctx.register_hook("on_session_end", bridge.on_session_end)
     ctx.register_hook("on_session_finalize", bridge.on_session_finalize)
+    ctx.register_hook("on_session_reset", bridge.on_session_reset)
+    if hasattr(ctx, "register_command"):              # older Hermes has none
+        ctx.register_command("te", bridge.command, description="TokenEconomizer status and settings")

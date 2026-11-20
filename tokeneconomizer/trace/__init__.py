@@ -32,8 +32,9 @@ from .antigravity import (antigravity_prompt_count, antigravity_read,
                           antigravity_session_to_claude, antigravity_session_usage)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
 from .droid import (droid_log_head, droid_prompt_count, droid_prompt_turns,
-                    droid_safe_session_id, droid_session_header, droid_session_to_claude,
-                    droid_session_usage, droid_sessions)
+                    droid_safe_session_id, droid_session_calls, droid_session_header,
+                    droid_session_to_claude, droid_session_usage, droid_sessions,
+                    droid_version)
 from .grok import (grok_json_reply, grok_prompt_count, grok_result, grok_session_to_claude,
                    grok_session_usage, grok_tool)
 from .hermes import (hermes_export, hermes_find_session, hermes_prompt_count, hermes_result,

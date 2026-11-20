@@ -1005,3 +1005,236 @@ def test_powershell_slash_command_reports_cleanly_when_te_json_missing(tmp_path,
     assert out.returncode != 0
     assert "not initialized yet" in out.stderr
     assert "Cannot find path" not in out.stderr
+
+
+def _run_opencode_v2_script(tmp_path, driver_js, hook_script_body):
+    """Run an offline Node script against a copy of `plugin/opencode/tokeneconomizer.ts` with a
+    mock `te-hook` / `te_bootstrap.py` dispatcher."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    root = tmp_path / "oc-plugin"
+    (root / "opencode").mkdir(parents=True)
+    (root / "scripts").mkdir(parents=True)
+    plugin_copy = root / "opencode" / "tokeneconomizer.ts"
+    shutil.copyfile(os.path.join(PLUGIN, "opencode", "tokeneconomizer.ts"), plugin_copy)
+    bootstrap = root / "scripts" / "te_bootstrap.py"
+    bootstrap.write_text(hook_script_body, encoding="utf-8")
+    te_hook = root / "scripts" / "te-hook"
+    te_hook.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bootstrap}" hook "$@"\n',
+                       encoding="utf-8")
+    os.chmod(te_hook, 0o755)
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    env = dict(os.environ,
+               TOKENECONOMIZER_HOME=str(tmp_path / "te-home"),
+               TE_PYTHON=sys.executable,
+               TE_OPENCODE_MODE="tui")
+    env.pop("TE_DISABLE", None)
+    env.pop("TE_SIDECALL", None)
+    run = subprocess.run(
+        [node, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e",
+         driver_js, str(plugin_copy), str(work)],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+def test_opencode_v2_delivers_redirect_on_failed_tool_and_holds_when_immutable(tmp_path):
+    """opencode 2.x `execute.after` must deliver loop-guard redirects even when `status !==
+    'completed'`, and hold an undeliverable redirect until the next tool call in the same turn
+    (never leaking across turns)."""
+    hook_py = (
+        "import json, sys\n"
+        "p = json.loads(sys.stdin.read())\n"
+        "if p.get('hook_event_name') == 'PostToolUse' and p.get('tool_use_id') in ('c_mut', 'c_frz', 'c_obj'):\n"
+        "    print(json.dumps({'hookSpecificOutput': {'additionalContext': 'REDIRECT:' + p['tool_use_id']}}))\n"
+        "else:\n"
+        "    print('{}')\n"
+    )
+    driver = """
+const { pathToFileURL } = await import("node:url");
+const plugin = (await import(pathToFileURL(process.argv[1]).href)).default;
+const work = process.argv[2];
+const hooks = {};
+const events = [];
+let wake;
+const teardown = await plugin.setup({
+  location: { directory: work },
+  session: { hook: async (n, fn) => { hooks["session." + n] = fn; } },
+  tool: { hook: async (n, fn) => { hooks["tool." + n] = fn; } },
+  event: {
+    subscribe: async function* ({ signal }) {
+      while (!signal.aborted) {
+        if (events.length) { yield events.shift(); continue; }
+        await new Promise((r) => { wake = r; });
+      }
+    },
+  },
+});
+const push = async (ev) => { events.push(ev); wake?.(); await new Promise((r) => setTimeout(r, 20)); };
+
+await hooks["session.prompt"]({ sessionID: "s1", messageID: "m1", prompt: { text: "p1" } });
+const errMut = { sessionID: "s1", status: "failed", tool: "edit", id: "c_mut",
+  input: {}, error: { message: "Edit failed" } };
+await hooks["tool.execute.after"](errMut);
+
+const errFrz = { sessionID: "s1", status: "failed", tool: "bash", id: "c_frz",
+  input: {}, error: Object.freeze({ message: "Frozen error" }) };
+await hooks["tool.execute.after"](errFrz);
+
+const okNext = { sessionID: "s1", status: "completed", tool: "read", id: "c_ok",
+  input: {}, result: { content: "file text", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okNext);
+
+// Non-string, non-array object `result.content` must not be overwritten; hold for next call.
+const okObj = { sessionID: "s1", status: "completed", tool: "custom", id: "c_obj",
+  input: {}, result: { content: { structured: 1 }, metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okObj);
+
+const okAfterObj = { sessionID: "s1", status: "completed", tool: "read", id: "c_after_obj",
+  input: {}, result: { content: "after obj", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okAfterObj);
+
+// An undelivered redirect from turn 1 must not spill into turn 2.
+const errFrz2 = { sessionID: "s1", status: "failed", tool: "bash", id: "c_frz",
+  input: {}, error: Object.freeze({ message: "Frozen again" }) };
+await hooks["tool.execute.after"](errFrz2);
+await push({ type: "session.idle", properties: { sessionID: "s1" } });
+await hooks["session.prompt"]({ sessionID: "s1", messageID: "m2", prompt: { text: "p2" } });
+const okTurn2 = { sessionID: "s1", status: "completed", tool: "read", id: "c_t2",
+  input: {}, result: { content: "clean turn2", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okTurn2);
+
+teardown();
+wake?.();
+console.log(JSON.stringify({
+  mutError: errMut.error.message,
+  frozenError: errFrz.error.message,
+  okNextContent: okNext.result.content,
+  okObjContent: okObj.result.content,
+  okAfterObjContent: okAfterObj.result.content,
+  okTurn2Content: okTurn2.result.content,
+}));
+"""
+    got = _run_opencode_v2_script(tmp_path, driver, hook_py)
+    assert got["mutError"] == "Edit failed\n\nREDIRECT:c_mut"
+    assert got["frozenError"] == "Frozen error"
+    assert got["okNextContent"] == "file text\n\nREDIRECT:c_frz"
+    assert got["okObjContent"] == {"structured": 1}
+    assert got["okAfterObjContent"] == "after obj\n\nREDIRECT:c_obj"
+    assert got["okTurn2Content"] == "clean turn2"
+
+
+def test_opencode_v2_exports_session_before_cleaning_state_on_end(tmp_path):
+    """In opencode 2.x's long-lived service, `session.deleted` exports the recorded session
+    messages first and clears per-session state afterwards so daemon memory stays bounded."""
+    hook_py = (
+        "import json, sys\n"
+        "p = json.loads(sys.stdin.read())\n"
+        "if p.get('hook_event_name') == 'SessionStart':\n"
+        "    print(json.dumps({'hookSpecificOutput': {'additionalContext': 'LEARNED MANUAL'}}))\n"
+        "else:\n"
+        "    print('{}')\n"
+    )
+    driver = """
+const { pathToFileURL } = await import("node:url");
+const plugin = (await import(pathToFileURL(process.argv[1]).href)).default;
+const work = process.argv[2];
+const hooks = {};
+const events = [];
+let wake;
+const baseExitListeners = process.listenerCount("exit");
+const teardown = await plugin.setup({
+  location: { directory: work },
+  session: { hook: async (n, fn) => { hooks["session." + n] = fn; } },
+  tool: { hook: async (n, fn) => { hooks["tool." + n] = fn; } },
+  event: {
+    subscribe: async function* ({ signal }) {
+      while (!signal.aborted) {
+        if (events.length) { yield events.shift(); continue; }
+        await new Promise((r) => { wake = r; });
+      }
+    },
+  },
+});
+const push = async (ev) => { events.push(ev); wake?.(); await new Promise((r) => setTimeout(r, 25)); };
+
+await hooks["session.prompt"]({ sessionID: "s_del", messageID: "u1", prompt: { text: "fix bug" } });
+await push({ type: "session.step.started", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", model: { id: "m-test" } } });
+await push({ type: "session.tool.input.started", properties: {
+  sessionID: "s_del", id: "tc1", name: "bash" } });
+await push({ type: "session.tool.input.started", properties: {
+  sessionID: "s_del", id: "tc_orphan", name: "leaked_tool" } });
+await push({ type: "session.tool.called", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", id: "tc1", input: { command: "pytest" } } });
+await push({ type: "session.tool.success", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", id: "tc1", content: "ok", metadata: { exit: 0 } } });
+await push({ type: "session.step.ended", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", cost: 0.01, tokens: { input: 10, output: 2 } } });
+
+const sysBefore = [];
+hooks["session.context"]({ sessionID: "s_del", system: sysBefore });
+
+await push({ type: "session.deleted", properties: { sessionID: "s_del" } });
+
+const sysAfter = [];
+hooks["session.context"]({ sessionID: "s_del", system: sysAfter });
+
+// Reusing the same assistant/call ids in a new session must not hit leftover `steps`/`names`.
+await hooks["session.prompt"]({ sessionID: "s_next", messageID: "u2", prompt: { text: "next task" } });
+await push({ type: "session.step.started", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", model: { id: "m-test" } } });
+await push({ type: "session.tool.called", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", input: {} } });
+await push({ type: "session.tool.success", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", content: "ok", metadata: { exit: 0 } } });
+await push({ type: "session.step.ended", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", cost: 0.01, tokens: { input: 10, output: 2 } } });
+await push({ type: "session.deleted", properties: { sessionID: "s_next" } });
+
+teardown();
+wake?.();
+const v2After = process.listenerCount("exit");
+
+// v1 `exit` listener should attach only while sessions are open and detach on close.
+const v1 = await plugin.server({ client: { tui: { showToast: async () => {} } }, directory: work });
+const v1Before = process.listenerCount("exit");
+await v1.event({ event: { type: "session.created", properties: { info: { id: "s_v1" } } } });
+const v1During = process.listenerCount("exit");
+await v1.event({ event: { type: "session.deleted", properties: { info: { id: "s_v1" } } } });
+const v1After = process.listenerCount("exit");
+
+console.log(JSON.stringify({
+  sysBefore,
+  sysAfter,
+  baseExitListeners,
+  v2After,
+  v1Before,
+  v1During,
+  v1After,
+}));
+"""
+    got = _run_opencode_v2_script(tmp_path, driver, hook_py)
+    assert got["sysBefore"] == [{"type": "text", "text": "LEARNED MANUAL"}]
+    assert got["sysAfter"] == []
+    assert got["v2After"] == got["baseExitListeners"]
+    assert got["v1Before"] == got["baseExitListeners"]
+    assert got["v1During"] == got["baseExitListeners"] + 1
+    assert got["v1After"] == got["baseExitListeners"]
+    exported = json.loads(
+        (tmp_path / "te-home" / "opencode-sessions" / "s_del.json").read_text(encoding="utf-8")
+    )
+    assert exported["info"]["id"] == "s_del"
+    assert len(exported["messages"]) == 2
+    assert exported["messages"][0]["parts"][0]["text"] == "fix bug"
+    assert exported["messages"][1]["parts"][0]["tool"] == "bash"
+    assert exported["messages"][1]["parts"][0]["state"]["status"] == "completed"
+    next_exported = json.loads(
+        (tmp_path / "te-home" / "opencode-sessions" / "s_next.json").read_text(encoding="utf-8")
+    )
+    assert len(next_exported["messages"]) == 2
+    assert next_exported["messages"][1]["parts"][0]["tool"] == ""
