@@ -108,6 +108,13 @@ _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|nohup|command(?:\s+-p)?(?:\s+--)?|"
                         # the environment's name or path, and the other options that take a value
                         r"(?:conda|mamba|micromamba)\s+run(?:\s+(?:(?:-[npr]|--name|--prefix|"
                         r"--root-prefix|--cwd)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
+                        # `pixi run -e test`: pixi's options, of which these take a value, but
+                        # not its dry run (`-n`, `--dry-run`), which only prints the command
+                        r"pixi\s+run(?:\s+(?:(?:-[epmws]|--(?:environment|platform|manifest-path|"
+                        r"workspace|script|config-file|auth-file|concurrent-downloads|"
+                        r"concurrent-solves|pinning-strategy|pypi-keyring-provider|"
+                        r"tls-root-certs))(?:=|\s*)[^\s-]\S*|"
+                        r"(?!-n(?:\s|$)|--dry-run(?:\s|$))-[-\w]*(?:=\S*)?))*|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
                         r"(?:\s+-\S+)*|"
