@@ -134,6 +134,13 @@ and date it was verified on; §5 says what has not been exercised.
   `<session>/subagents/`, and their calls and tokens are counted with their session.
 * A `claude -p` session's hooks see `CLAUDE_CODE_SESSION_ATTENDED=0` and
   `CLAUDE_CODE_ENTRYPOINT=sdk-cli`; `mode: auto` uses them to tell headless from interactive.
+* **Side calls run with `--safe-mode`** where `claude --help` lists it (verified on 2.1.329,
+  2026-11-19, against a local listener standing in for the API): a `SessionStart` and a
+  `UserPromptSubmit` hook in the person's settings ran in a plain `claude -p` and in neither under
+  `--safe-mode`, whose request also left out the person's `CLAUDE.md` (8.8 kB, 6.5 kB without).
+  The settings file's `env` (`ANTHROPIC_BASE_URL` and a key) still applied, so a provider set
+  there is still the one called. `toolprune measure` and `refresh-catalog` keep the person's
+  setup: they measure the real session.
 
 **Codex 0.153.1 — verified live with `codex exec`** (`gpt-5.6-sol`, direct OpenAI API key, an
 isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`; 2026-09-30):
