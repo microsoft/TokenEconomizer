@@ -14,6 +14,7 @@ What a job spends is charged to the ledger the moment it is spent, as its own `o
 for the session: a verdict that lands after its turn -- or its session -- has ended was still paid
 for, and must not drop out of the account.
 """
+import inspect
 import time
 
 from . import sidecall
@@ -68,17 +69,27 @@ def run_job(ctx, session_id, job_id):
     if req.get("id") != job_id:                       # superseded by a newer request
         return None
     paused = sidecall.paused(ctx.host.name, ctx.root)
+    has_http = sidecall.http_routes(ctx.config)
     # Each call asks for its own runner: `local_roles` may put the judge on-device and leave
     # the redirect on the agent's CLI, or the other way round. A paused host's CLI is skipped,
-    # but a local runner (which needs no login) still answers.
-    runner = sidecall.runner_for(ctx.host.name, ctx.config, role="judge") if not paused \
-        else sidecall.local_runner("judge", ctx.config)
-    writer = sidecall.runner_for(ctx.host.name, ctx.config, role="nudge") if not paused \
-        else sidecall.local_runner("nudge", ctx.config)
+    # while a local runner or configured HTTP side-call endpoint still answers.
+    runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="judge")
+              if (not paused or has_http)
+              else sidecall.local_runner("judge", ctx.config))
+    writer = (sidecall.runner_for(ctx.host.name, ctx.config, role="nudge")
+              if (not paused or has_http)
+              else sidecall.local_runner("nudge", ctx.config))
     verdict, written = None, None
     if runner is not None:
+        same_route = (writer is not None and not getattr(runner, "local", None)
+                      and not getattr(writer, "local", None))
         try:
-            verdict = loop_judge.llm_stuck_judge(req.get("digest") or "", runner, model="agent")
+            kw = ({"with_nudge": True}
+                  if same_route and "with_nudge" in inspect.signature(
+                      loop_judge.llm_stuck_judge).parameters
+                  else {})
+            verdict = loop_judge.llm_stuck_judge(req.get("digest") or "", runner,
+                                                 model="agent", **kw)
         except Exception:
             verdict = None
         if verdict and getattr(runner, "answered_locally", False):
@@ -92,14 +103,15 @@ def run_job(ctx, session_id, job_id):
                                      + str(verdict.get("reason") or ""))[:160]
         conf = float((verdict or {}).get("confidence") or 0)
         if verdict and verdict.get("stuck") and conf >= float(req.get("threshold") or 0):
-            try:
-                written = (loop_judge.llm_nudge_writer(req.get("digest") or "", writer,
-                                                       model="agent")
-                           if writer is not None else None)
-            except Exception:
-                written = None
-            if written and (written.get("text") or "").strip():
-                verdict["_nudge"] = written["text"].strip()
+            if not (verdict.get("_nudge") or "").strip():
+                try:
+                    written = (loop_judge.llm_nudge_writer(req.get("digest") or "", writer,
+                                                           model="agent")
+                               if writer is not None else None)
+                except Exception:
+                    written = None
+                if written and (written.get("text") or "").strip():
+                    verdict["_nudge"] = written["text"].strip()
     spend = {"spiral_judge_tokens": float((verdict or {}).get("_tokens") or 0),
              "spiral_nudge_writer_tokens": float((written or {}).get("_tokens") or 0)}
     if any(spend.values()):

@@ -83,9 +83,10 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
     runner = None
     if icfg.paid and not imported:
-        runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
-                  if not sidecall.paused(ctx.host.name, ctx.root)
-                  else sidecall.local_runner("proposer", ctx.config))
+        if not sidecall.paused(ctx.host.name, ctx.root) or sidecall.http_routes(ctx.config):
+            runner = sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
+        else:
+            runner = sidecall.local_runner("proposer", ctx.config)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
