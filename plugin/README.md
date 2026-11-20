@@ -100,7 +100,8 @@ behaviour, run `claude plugin update tokeneconomizer@tokeneconomizer`.
 
 **Uninstall.**
 
-1. In each repository where the plugin left tools out: `/tokeneconomizer:toolprune restore`.
+1. In each repository where the plugin left tools out (`/tokeneconomizer:repos` lists them):
+   `/tokeneconomizer:toolprune restore`.
 2. `claude plugin uninstall tokeneconomizer@tokeneconomizer`, then
    `claude plugin marketplace remove tokeneconomizer`.
 3. Optional: `rm -rf ~/.tokeneconomizer` to delete what it learned. (A line the plugin added to a
@@ -162,8 +163,9 @@ starts the hook with the `python` on PATH (3.10 or later), which `TE_PYTHON` doe
 
 **Uninstall.**
 
-1. In each repository where the plugin turned packages off:
-   `~/.tokeneconomizer/bin/te --host codex toolprune restore` (it leaves an empty `.codex/`).
+1. In each repository where the plugin turned packages off (`~/.tokeneconomizer/bin/te --host
+   codex repos` lists them): `~/.tokeneconomizer/bin/te --host codex toolprune restore` (it
+   leaves an empty `.codex/`).
 2. `codex plugin remove tokeneconomizer@tokeneconomizer`, then
    `codex plugin marketplace remove tokeneconomizer`.
 3. Optional: `rm -rf ~/.tokeneconomizer`.
@@ -282,7 +284,8 @@ redirect shows "● TokenEconomizer: …" in the conversation (and on stdout und
 
 **Uninstall.**
 
-1. In each repository where the plugin turned a server off: `/tokeneconomizer:toolprune restore`.
+1. In each repository where the plugin turned a server off (`/tokeneconomizer:repos` lists them):
+   `/tokeneconomizer:toolprune restore`.
 2. `copilot plugin uninstall tokeneconomizer@tokeneconomizer`, then
    `copilot plugin marketplace remove tokeneconomizer`.
 3. Optional: `rm -rf ~/.tokeneconomizer`.
