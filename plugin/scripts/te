@@ -6,6 +6,11 @@ if [ "${OS:-}" = Windows_NT ]; then
   case $self in *\\*) self=$(printf '%s' "$self" | tr '\\' '/') ;; esac
 fi
 dir=$(CDPATH= cd -- "${self%/*}" && pwd)
+# Git Bash: `pwd` gives /c/Users/...; native Python reads that as C:\c\Users\... once MSYS path
+# conversion is off (MSYS_NO_PATHCONV=1, as in hooks), so pass it the Windows form instead.
+if [ "${OS:-}" = Windows_NT ]; then
+  dir=$(CDPATH= cd -- "$dir" && pwd -W 2>/dev/null) || dir=$(CDPATH= cd -- "${self%/*}" && pwd)
+fi
 # Session logs are UTF-8; without this, Python on Windows reads them in the ANSI code page.
 export PYTHONUTF8=1
 outside_windowsapps() {
