@@ -37,7 +37,7 @@
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +49,53 @@ const HERE = (() => {
     return __dirname;
   }
 })();
-const SCRIPTS = join(HERE, "..", "scripts");
+/**
+ * The directory holding the dispatcher (`te_bootstrap.py` / `te-hook`). Where it sits depends on
+ * how the plugin was put where opencode loads it from: the checkout keeps it at
+ * `<root>/plugin/scripts`, an installed plugin at `<dir>/scripts`. Resolve rather than assume, so
+ * a move of the install is not a move of the dispatcher -- and the hook fails open rather than
+ * pointing at a path that is not there.
+ *
+ * Only the shipped layouts and the launcher the plugin writes itself are anchors. Nothing walks
+ * up from the plugin's directory: on Windows that walk ends at `C:\`, where a standard user can
+ * create folders by default, so a planted `scripts/te_bootstrap.py` would run in every hook --
+ * and any unrelated ancestor would win over the dispatcher the plugin actually ships with.
+ */
+const findScripts = (): string => {
+  const wanted = (p: string) => existsSync(join(p, "te_bootstrap.py"));
+  // Named explicitly: `TE_PLUGIN_ROOT` is the package (`<root>/scripts`), `TE_CORE_PATH` the
+  // checkout the bootstrap already documents (`<root>/plugin/scripts`). A fresh install has no
+  // launcher yet, so these are what make the first hook work.
+  const explicit: string[] = [];
+  const pluginRoot = process.env.TE_PLUGIN_ROOT;
+  if (pluginRoot) explicit.push(join(pluginRoot, "scripts"));
+  const core = process.env.TE_CORE_PATH;
+  if (core) explicit.push(join(core, "plugin", "scripts"));
+  for (const c of explicit) {
+    if (wanted(c)) return c;
+  }
+  // The layout the plugin ships in: `<plugin>/opencode/<file>` next to `<plugin>/scripts`.
+  const shipped = join(HERE, "..", "scripts");
+  if (wanted(shipped)) return shipped;
+  const state = process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer");
+  const launcher = join(state, "bin", "te");
+  try {
+    if (existsSync(launcher)) {
+      // The launcher is `exec <plugin>/scripts/te "$@"`, so its own directory is the dispatcher's.
+      const body = readFileSync(launcher, "utf8");
+      const m = /exec\s+(.+?)\s+"\$@"/.exec(body);
+      if (m) {
+        const target = m[1].replace(/^['"]|['"]$/g, "");
+        const scripts = dirname(target);
+        if (wanted(scripts)) return scripts;
+      }
+    }
+  } catch {
+    /* an unreadable launcher is no anchor */
+  }
+  return shipped;
+};
+const SCRIPTS = findScripts();
 const HOOK_TIMEOUT_MS = 60_000;
 
 const truthy = (v: string | undefined) =>
