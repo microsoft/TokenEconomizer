@@ -906,7 +906,9 @@ def cmd_doctor(args):
         if pause:
             print(f"{h:11s} model calls paused since "
                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: "
-                  f"`{sidecall.call_name(h)}` said it is not signed in; "
+                  f"`{sidecall.call_name(h)}` said it is not signed in"
+                  + (" (or its model's provider comes from an extension the calls do not load: "
+                     "`pi_extensions`, `pi_cli`)" if h == "pi" else "") + "; "
                   f"`config set microskills=on` (or `loopguard=on`) tries again")
     if "claude" in agents:
         cat = os.path.join(root, "hosts", "claude", "catalog.json")
