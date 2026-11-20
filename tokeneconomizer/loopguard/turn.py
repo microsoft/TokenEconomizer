@@ -39,6 +39,9 @@ _SLOTS = SpiralState.__slots__
 # `python -X dev -m pytest`, `python -u tests/runtests.py`); they are case-sensitive.
 _PYTHON = (r"python\d?(?:\.\d+)?"
            r"(?-i:(?:\s+(?:-[bBdEiIOPqsSuvx]+|-[WX]\s*[^\s\-]\S*))*)")
+# A value of one of make's options or variables: a word, or a `$(...)`/`${...}` whose brackets
+# `_pieces` has turned into spaces (`-j$(nproc)` reads `-j$ nproc`).
+_MAKE_VALUE = r"(?:\$\s*\w+|[^\s\-]\S*)"
 VERIFY_RE = re.compile(
     r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
     r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|"
@@ -51,7 +54,17 @@ VERIFY_RE = re.compile(
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
-    r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    # make's own options and variables before the target (`make -j8 check`, `make -C build
+    # test`, `make V=1 test`, `make -j$(nproc) check`, whose `$(nproc)` reaches here as
+    # `$ nproc`). They are case-sensitive. `-C`, `-f`, `-I`, `-o` and `-W` always take a value,
+    # `-j` and `-l` may; the generic option does not also read one of them with its value, so
+    # a long line of options does not backtrack exponentially.
+    r"make(?-i:(?:\s+(?:-[CfIjloW]\s*" + _MAKE_VALUE + r"|"
+    r"--(?:directory|file|makefile|include-dir|jobs|load-average|old-file|assume-old|"
+    r"what-if|new-file|assume-new)\s+" + _MAKE_VALUE + r"|"
+    r"-(?![CfIoW]|[jl][^\s\-])[-\w]+(?:=(?:\$\s*\w+|\S*))?|\w+=(?:\$\s*\w+|\S*)))*)"
+    r"\s+(?:test|check)|"
+    r"ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
     # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
