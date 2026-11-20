@@ -6,6 +6,7 @@ tuples, so a mechanism never needs to know which agent wrote the file. A Codex r
 session are converted into one of these first (`codex.codex_rollout_to_exec`,
 `pi.pi_session_to_claude`).
 """
+import fnmatch
 import os
 import re
 
@@ -21,10 +22,42 @@ from .copilot import copilot_event_calls, copilot_session_cwd
 # unfiltered, still tracked); a bare `rtk` with no command is left alone. `RTK_WORDS` is the
 # wrapper alone, for a classifier that passes over it among other prefixes (`loopguard.turn`).
 RTK_WORDS = r"rtk(?:\s+proxy)?"
+RTK_PREFIX_RE = re.compile(r"^" + RTK_WORDS + r"\s+(?=\S)")
+
 # The tools whose `command` argument is shell text, lower-cased: Claude Code's Bash, and its
 # PowerShell tool on Windows, Codex's shell, the Copilot CLI's stop_bash.
 SHELL_TOOLS = frozenset({"bash", "powershell", "shell", "stop_bash"})
-RTK_PREFIX_RE = re.compile(r"^" + RTK_WORDS + r"\s+(?=\S)")
+
+# Roles a person can give a tool the mechanisms do not know by name (the `tool_roles`
+# setting), such as an MCP server's shell or edit tool, and the built-in tool each role reads
+# as. The plugin sets them once per process from its configuration (`set_tool_roles`).
+TOOL_ROLES = {"shell": "bash", "edit": "edit", "read": "read"}
+_tool_roles = ()
+
+
+def parse_tool_role(entry):
+    """`"mcp__serena__replace_content=edit"` -> `("mcp__serena__replace_content", "edit")`;
+    None when the entry names no tool or no known role. A tool may be a glob (`mcp__x__*`)."""
+    pattern, sep, role = str(entry).rpartition("=")
+    pattern, role = pattern.strip().lower(), role.strip().lower()
+    return (pattern, role) if sep and pattern and role in TOOL_ROLES else None
+
+
+def set_tool_roles(entries):
+    """Use these `tool_roles` entries from now on in this process; malformed ones are skipped."""
+    global _tool_roles
+    _tool_roles = tuple(r for r in map(parse_tool_role, entries or ()) if r)
+
+
+def tool_kind(name):
+    """A tool's name as the mechanisms read it: lower-cased, or, for a tool the person gave a
+    role, the built-in tool of that role (`bash`, `edit`, `read`). The first matching entry
+    wins."""
+    low = (name or "").lower()
+    for pattern, role in _tool_roles:
+        if fnmatch.fnmatchcase(low, pattern):
+            return TOOL_ROLES[role]
+    return low
 
 
 def strip_rtk_prefix(command):

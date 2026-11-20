@@ -21,7 +21,7 @@ import os
 import re
 
 from ..names import repo_filename
-from ..trace import SHELL_TOOLS, call_cwds
+from ..trace import SHELL_TOOLS, call_cwds, tool_kind
 from ..trace.claude import CONVERSATION
 from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
@@ -66,7 +66,7 @@ def load_calls(fp):
                     break
         if is_codex or is_copilot:
             from ..trace import load_trajectory
-            return [(name.lower(), args, out)
+            return [(tool_kind(name), args, out)
                     for name, args, out, _ok in load_trajectory(fp)]
     except OSError:
         return []
@@ -107,7 +107,7 @@ def load_calls(fp):
                 else:
                     txt = cont if isinstance(cont, str) else json.dumps(cont)
                 res[tid] = txt
-    return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
+    return [(tool_kind(uses[t][0]), uses[t][1], res.get(t, "")) for t in order]
 
 
 def bash_cmds(calls):

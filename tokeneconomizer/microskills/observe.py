@@ -15,7 +15,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 
-from ..trace import SHELL_TOOLS, call_cwds, load_trajectory, strip_rtk_prefix
+from ..trace import SHELL_TOOLS, call_cwds, load_trajectory, strip_rtk_prefix, tool_kind
 from .lifecycle import edited_files, edited_pyfiles
 
 
@@ -661,7 +661,7 @@ def observe_task(transcript_path, vocab=None):
     triples = []
     env_calls = []
     for idx, (name, args, out, ok) in enumerate(calls):
-        tool = (name or "").lower()
+        tool = tool_kind(name)
         triples.append((tool, args if isinstance(args, dict) else {}, out or ""))
         if tool not in SHELL_TOOLS:
             continue
