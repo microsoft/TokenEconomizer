@@ -39,6 +39,17 @@ _SLOTS = SpiralState.__slots__
 # `python -X dev -m pytest`, `python -u tests/runtests.py`); they are case-sensitive.
 _PYTHON = (r"python\d?(?:\.\d+)?"
            r"(?-i:(?:\s+(?:-[bBdEiIOPqsSuvx]+|-[WX]\s*[^\s\-]\S*))*)")
+# Gradle's options and other tasks before the test task (`./gradlew clean test`, `./gradlew
+# --offline test`), but not a task it is told to leave out: `./gradlew build -x test` runs no
+# tests. The option is case-sensitive, as the other option letters here are.
+_GRADLE_EXCLUDE = r"(?-i:-x|--exclude-task)"
+_GRADLE_TASKS = (r"(?:\s+(?:" + _GRADLE_EXCLUDE + r"\s+\S+|(?!" + _GRADLE_EXCLUDE + r"\s)\S+))*"
+                 r"\s+")
+# Unless Maven is told to skip the tests (`mvn test -DskipTests`, `-D skipTests`,
+# `--define=maven.test.skip=TRUE`): it then passes without running any. Gradle reads no such
+# property: `./gradlew test -DskipTests` runs them. Read within the one command.
+_UNLESS_MVN_SKIPS_TESTS = (r"(?![^;&|\n]*\s(?-i:(?:-D\s*|--define[=\s]\s*)"
+                           r"(?:skipTests|maven\.test\.skip(?:\.exec)?)(?:=(?i:true))?)(?!\S))")
 # A value of one of make's options or variables: a word, or a `$(...)`/`${...}` whose brackets
 # `_pieces` has turned into spaces (`-j$(nproc)` reads `-j$ nproc`).
 _MAKE_VALUE = r"(?:\$\s*\w+|[^\s\-]\S*)"
@@ -53,7 +64,10 @@ VERIFY_RE = re.compile(
     r"(?:-m\s+(?:pytest|unittest)|(?:[\w.\-]+/)*(?:manage\.py\s+test|runtests(?:\.py)?))|"
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
-    r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
+    r"(?:mvn|mvnw|\./mvnw)" + _UNLESS_MVN_SKIPS_TESTS + r"\s+(?:\S+\s+)*test|"
+    # also a Gradle subproject's test task by its path, `./gradlew :app:test`, but not an
+    # option's value (`--exclude-task=:app:test`) or a task of a subproject named `test`
+    r"(?:gradle|gradlew|\./gradlew)" + _GRADLE_TASKS + r"(?!-)(?:\S*:)?test(?!:)|"
     # make's own options and variables before the target (`make -j8 check`, `make -C build
     # test`, `make V=1 test`, `make -j$(nproc) check`, whose `$(nproc)` reaches here as
     # `$ nproc`). They are case-sensitive. `-C`, `-f`, `-I`, `-o` and `-W` always take a value,
