@@ -284,10 +284,10 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 
 | Agent | Supported | Older versions |
 |---|---|---|
-| Claude Code | 2.1.300 to 2.1.310 | not supported |
-| Codex | 0.153.1 to 0.164.0 | not supported |
-| Copilot CLI | 1.0.83 to 1.0.102 | not supported |
-| Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
+| Claude Code | 2.1.300 to 2.1.329 | not supported |
+| Codex | 0.153.1 to 0.171.0 | not supported |
+| Copilot CLI | 1.0.83 to 1.0.114 | not supported |
+| Pi | 1.2.0 to 1.5.2 | 0.99.x: load the extension by path (below) |
 | Cursor Agent (experimental) | 3.24.9 and cursor-agent 2026.11.05, macOS and Linux (below) | not tested |
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
