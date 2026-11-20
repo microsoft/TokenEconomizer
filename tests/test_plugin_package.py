@@ -954,6 +954,132 @@ def test_text_io_names_its_encoding():
     assert not missing, missing
 
 
+def _copy_plugin_with_stub(dest):
+    shutil.copytree(PLUGIN, str(dest), symlinks=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
+    (dest / "lib").mkdir()
+    (dest / "lib" / "tokeneconomizer").write_text("../../tokeneconomizer", encoding="utf-8")
+    return dest
+
+
+def test_copilot_and_vscode_plugin_copies_find_the_core(tmp_path):
+    """#265: Copilot `installed-plugins/<market>/<plugin>` and VS Code `agentPlugins/file-...`
+    mirrors with a plain-file `lib/tokeneconomizer` stub find the core via Copilot marketplace
+    checkouts/config, `~/.claude/plugins/known_marketplaces.json`, or `<TOKENECONOMIZER_HOME>/src`."""
+    user = tmp_path / "user"
+    copilot = user / ".copilot"
+    copy = _copy_plugin_with_stub(copilot / "installed-plugins" / "tokeneconomizer" / "tokeneconomizer")
+    vscode_copy = _copy_plugin_with_stub(
+        user / "AppData" / "Roaming" / "Code" / "agentPlugins"
+        / "file-c-3A-Users-test-copilot-installed-plugins-tokeneconomizer-tokeneconomizer"
+        / "1a1eddd1a4c")
+
+    base_env = dict(os.environ, HOME=str(user), USERPROFILE=str(user),
+                    TOKENECONOMIZER_HOME=str(tmp_path / "te-home"),
+                    TE_CORE_PATH="", PYTHONPATH="")
+
+    def doctor(plugin_dir, env=None):
+        return subprocess.run(SH + [str(plugin_dir / "scripts" / "te"), "doctor"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60,
+                              cwd=str(tmp_path), env=env or base_env)
+
+    # 1. Nothing configured yet: fails cleanly and writes errors.log.
+    out = doctor(copy)
+    assert out.returncode == 1 and "core package was not found" in out.stderr
+
+    # 2. Copilot `config.json` (JSONC with //, /* ... */, trailing comma, and string-leading //).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "te_bootstrap_under_test", os.path.join(PLUGIN, "scripts", "te_bootstrap.py"))
+    boot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boot)
+    copilot.mkdir(parents=True, exist_ok=True)
+    (copilot / "config.json").write_text(
+        "// Copilot CLI config\n"
+        "{\n"
+        '  /* inline block comment */\n'
+        '  "note": "line 1\n//not-a-comment",\n'
+        '  "marketplaces": {\n'
+        f'    "tokeneconomizer": {json.dumps(REPO)}, // inline comment\n'
+        "  },\n"
+        "}\n",
+        encoding="utf-8")
+    parsed_cfg = boot._json_load_relaxed(str(copilot / "config.json"))
+    assert parsed_cfg["note"] == "line 1\n//not-a-comment"
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    (copilot / "config.json").unlink()
+
+    # 3. Cross-cache fallback via `~/.claude/plugins/known_marketplaces.json` (#167 / #265).
+    claude_plugins = user / ".claude" / "plugins"
+    claude_plugins.mkdir(parents=True)
+    (claude_plugins / "known_marketplaces.json").write_text(
+        json.dumps({"tokeneconomizer": {"source": {"path": REPO}}}), encoding="utf-8")
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    (claude_plugins / "known_marketplaces.json").unlink()
+
+    # 4. Copilot `<copilot_home>/marketplaces/<market>` directory layout (#265).
+    mkt_dir = copilot / "marketplaces" / "tokeneconomizer"
+    mkt_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(os.path.join(REPO, "tokeneconomizer"), mkt_dir / "tokeneconomizer",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    shutil.rmtree(mkt_dir)
+
+    # 5. State-root `<TOKENECONOMIZER_HOME>/src` fallback (#167).
+    te_home = tmp_path / "te-home-src"
+    te_home.mkdir()
+    try:
+        os.symlink(REPO, str(te_home / "src"))
+    except OSError:
+        shutil.copytree(os.path.join(REPO, "tokeneconomizer"), te_home / "src" / "tokeneconomizer",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    src_env = dict(base_env, TOKENECONOMIZER_HOME=str(te_home))
+    assert doctor(copy, src_env).returncode == 0
+    assert doctor(vscode_copy, src_env).returncode == 0
+
+
+def test_te_bootstrap_stays_python30_compatible():
+    """`plugin/scripts/te_bootstrap.py` must parse on Python <3.6 so old interpreters can still
+    fail open cleanly instead of dying with a SyntaxError."""
+    import ast
+    src = open(os.path.join(PLUGIN, "scripts", "te_bootstrap.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        assert not isinstance(node, ast.JoinedStr), "f-string not allowed in te_bootstrap.py"
+        assert not isinstance(node, ast.AnnAssign), "type annotation not allowed in te_bootstrap.py"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            assert node.returns is None, "return annotation not allowed in te_bootstrap.py"
+            for a in node.args.args + node.args.kwonlyargs:
+                assert a.annotation is None, "arg annotation not allowed in te_bootstrap.py"
+
+
+def test_powershell_slash_commands_guard_missing_te_json():
+    """#265: PowerShell slash commands check `Test-Path` on `bin\\te.json` before reading it."""
+    templates = set()
+    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
+        block = _powershell_block(name)
+        assert "Test-Path -LiteralPath $meta" in block
+        assert "COPILOT_PLUGIN_ROOT" in block
+        templates.add(re.sub(r"--cwd \(Get-Location\)\.Path .+", "--cwd (Get-Location).Path <CMD>",
+                             block))
+    assert len(templates) == 1
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_slash_command_reports_cleanly_when_te_json_missing(tmp_path, shell):
+    work, env, run = _powershell_copilot(tmp_path, shell, None)
+    env.pop("COPILOT_PLUGIN_ROOT", None)
+    out = run(_powershell_block("status"))
+    assert out.returncode != 0
+    assert "not initialized yet" in out.stderr
+    assert "Cannot find path" not in out.stderr
+
+
 def _run_opencode_v2_script(tmp_path, driver_js, hook_script_body):
     """Run an offline Node script against a copy of `plugin/opencode/tokeneconomizer.ts` with a
     mock `te-hook` / `te_bootstrap.py` dispatcher."""
