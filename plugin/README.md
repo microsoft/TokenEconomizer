@@ -129,9 +129,10 @@ Name the skill rather than asking in plain words: a question such as *"what has 
 learned here?"* may be answered from the plugin's files without running its command. Commands
 that change something (`config set` or `unset`, `toolprune apply` or `restore`, `repos migrate`
 or `merge`) write to `~/.tokeneconomizer`, which Codex's sandbox keeps read-only, so Codex asks
-first: choose **Yes, proceed**. From a terminal, inside the repository:
-`~/.tokeneconomizer/bin/te --host codex <command>` (the launcher appears after the first
-session).
+first: choose **Yes, proceed**. In a Bash terminal inside the repository, run
+`~/.tokeneconomizer/bin/te --host codex <command>` after the first session. In Windows
+PowerShell, follow the [native PowerShell example](codex-skills/status/SKILL.md#windows-powershell)
+to run the Python interpreter and bootstrap named in `bin/te.json`.
 
 **4. Work normally.** See [What to expect](#what-to-expect). On Codex the deny list can turn off
 the sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only after it

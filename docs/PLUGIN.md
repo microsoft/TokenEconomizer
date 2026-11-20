@@ -166,6 +166,10 @@ isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`; 2026-09-30):
   variables, which is why the host is detected from the payload (`turn_id`), never the env.
 * `CODEX_HOME` under `/tmp` makes Codex refuse to install its helper binaries, and its sandbox then
   fails every command (`codex-linux-sandbox: No such file`); keep it out of temporary dirs.
+* As of 2026-11-20, the five Codex skills select a launcher by shell. On Windows, PowerShell
+  reads `bin/te.json` in the state directory and calls the recorded Python and bootstrap with
+  `cli --host codex`. This keeps Windows from opening the shell script in an editor. Bash
+  continues to run `bin/te`.
 * Codex also turns a plugin's `commands/` folder into skills of its own (`source-command-status`,
   …), which listed every command twice in its skill picker beside `codex-skills/`. The slash
   commands therefore live in `slash-commands/`, which the Claude Code and Copilot manifests name
