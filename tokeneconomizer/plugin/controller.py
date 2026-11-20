@@ -28,11 +28,19 @@ import time
 import traceback
 
 from .. import loopguard
+from ..trace import droid as droid_trace
 from . import denylist, fold, history, hookqueue, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
 TURN_HISTORY = 200
+
+# Droid versions whose PostToolUse drops failed tool calls (#231), as [first,
+# past-last): 1.12.0 and 1.12.1 are the versions verified to drop them. 0.233.0
+# still dispatches failures, and a later release may restore the dispatch, so the
+# range is bounded rather than open-ended: outside it the log is never read for
+# failures, and a failure PostToolUse already folded is never counted twice.
+_DROID_DROPS_FAILURES = ((1, 12, 0), (1, 13, 0))
 
 
 class LiveController:
@@ -306,6 +314,16 @@ class LiveController:
             # outcome is unknown, so it is recorded but does not feed the envelope.
             self._close_turn(s, stopped_normally=False)
             s["turn"] = loopguard.TurnGuard(turn_key=self.host.turn_key(self.p)).to_dict()
+            if self.host.name == "droid":
+                # The log's calls so far belong to turns already closed: the new turn
+                # reconciles only what comes after this mark (#231). Only a Droid that drops
+                # failed calls has its log read here.
+                path = self._droid_log(s)
+                try:
+                    s["droid_log_seen"] = len(droid_trace.droid_session_calls(path)) \
+                        if path else 0
+                except OSError:
+                    s.pop("droid_log_seen", None)
         self._save(s)
         return merge_outputs(*outputs) if outputs else {}
 
@@ -313,11 +331,63 @@ class LiveController:
         if self.cfg.loopguard == "off" or self.p.get("stop_hook_active"):
             return {}
         s = self._session()
+        data = s.get("turn")
+        if data:
+            g = loopguard.TurnGuard(data=data)
+            self._reconcile_droid_failures(s, g)
+            s["turn"] = g.to_dict()
         summary = self._close_turn(s, stopped_normally=self.host.stopped_normally(self.p))
         if summary:
             self._log("turn", **summary)
         self._save(s)
         return {}
+
+    def _droid_log(self, s):
+        """This Droid session's log -- the payload's transcript, else the one the session
+        state kept from an earlier hook -- when it was written by a Droid whose PostToolUse
+        drops failed calls (#231); "" otherwise, so other versions never read it."""
+        if self.host.name != "droid":
+            return ""
+        path = self.host.transcript(self.p) or (s or {}).get("transcript") or ""
+        if not path or not os.path.exists(path):
+            return ""
+        version = droid_trace.droid_version(path)
+        if version is None or not (_DROID_DROPS_FAILURES[0] <= version < _DROID_DROPS_FAILURES[1]):
+            return ""
+        return path
+
+    def _reconcile_droid_failures(self, s, g, thr=None):
+        """Fold the failed calls of this Droid session that PostToolUse never
+        delivered (#231): on Droid 1.12.x it fires only for successes, so a failed
+        call is invisible to the live guard unless the session log is read. Only the
+        failures are folded -- a success in the log already has its own hook, or is
+        about to get one. `s["droid_log_seen"]` counts the log's calls already
+        accounted for, so a failure is folded exactly once across the session's
+        hooks. Judge-free and envelope-free, with the backstop nulled: the fold
+        only accumulates the failure signals, and the call that follows (or the
+        turn's close) decides on them -- a reconcile never spends a nudge or an
+        abort itself."""
+        path = self._droid_log(s)
+        if not path:
+            return
+        try:
+            calls = droid_trace.droid_session_calls(path)
+        except OSError:
+            return
+        seen = s.get("droid_log_seen")
+        if not isinstance(seen, int) or seen < 0:
+            # No turn opened one (a resumed session, or a turn whose UserPromptSubmit
+            # the plugin never saw): skip what came before rather than pulling an
+            # old turn's failures into this one.
+            seen = len(calls)
+        for name, args, text, ok in calls[seen:]:
+            if ok:
+                continue
+            g.fold(name, args, text, 1,
+                   envelope=None,
+                   thr=dict(thr, backstop_turns=None) if thr is not None else None,
+                   judge=None)
+        s["droid_log_seen"] = len(calls)
 
     # ---- PostToolUse ---------------------------------------------------------------------
     def _judge(self, thr, envelope):
@@ -368,6 +438,10 @@ class LiveController:
         # agents ran under a turn cap, hence their envelope gate).
         thr = dict(thr, gate_over_envelope=False,
                    gate_min_turns=max(thr["gate_min_turns"], thr["min_turns"]))
+        # On Droid 1.12.x PostToolUse fires only for successes, so a failed call
+        # never reaches this fold: recover the failures the session log shows
+        # before judging this call, or the judge never wakes on a failure loop.
+        self._reconcile_droid_failures(s, g, thr)
         decision = g.fold(name, args, text, code, envelope=envelope, thr=thr,
                           judge=self._judge(thr, envelope),
                           nudge_budget=self.cfg.loopguard_nudges)
