@@ -25,7 +25,7 @@ import tempfile
 import time
 
 from .. import trace
-from . import accounting, denylist, sidecall
+from . import accounting, denylist, portable, sidecall
 from . import adapter as live_adapter
 from .adapter import LiveAdapter, load_catalog
 from .hosts import FoldLater
@@ -72,11 +72,44 @@ def _microskills_config(ctx, profile):
                            max_tokens=ctx.config.microskills_max_tokens)
 
 
+def _run_microskills_fold(ctx, adapter, run_dir, session_id, icfg, runner,
+                          injected=None, imported=False):
+    from tokeneconomizer.microskills import PrefixStage
+    ms_store = ctx.microskills_store
+    mech_dir = ctx.microskills_mech_dir
+    agent = "shared" if ms_store is not ctx.store else ctx.host.name
+    stage = PrefixStage(icfg, ctx.repo.label, mech_dir, False, runner=runner,
+                        optimizer_model="agent", adapter=adapter, agent=agent)
+    srow = {"resolved": None}
+    task = {"instance_id": session_id}
+    if injected is not None:
+        task["injected_ids"] = injected
+    opt_tokens, reason = stage.after_task(task, {}, run_dir, srow)
+    rendered = stage.render() or ""
+    prior = ms_store.read("injection.json") or {}
+    inj_doc = {
+        "profile": icfg.profile, "reason": reason, "rendered": rendered,
+        "rendered_ids": stage.injected_ids(),
+        "facts": srow.get("manual_facts"), "updated": time.time(),
+        "sessions": int(prior.get("sessions", 0)) + 1,
+        "imported_sessions": int(prior.get("imported_sessions", 0)) + bool(imported)}
+    ms_store.write("injection.json", inj_doc)
+    if not imported and portable.is_active(ctx.repo.root, ctx.config):
+        try:
+            existing = portable.read_facts(ctx.repo.root, env=ctx.env)
+            extracted = portable.extract_facts(inj_doc, env=ctx.env)
+            merged = dict(existing, **extracted)
+            if merged:
+                portable.write_facts(ctx.repo.root, merged, env=ctx.env)
+        except RuntimeError:
+            pass
+    return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
+
+
 def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False):
     profile = ctx.config.microskills
     if profile == "off":
         return None
-    from tokeneconomizer.microskills import PrefixStage
     icfg = _microskills_config(ctx, profile)
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns. A session read from the agent's history never calls a model: the free
@@ -86,22 +119,13 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
         runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
                   if not sidecall.paused(ctx.host.name, ctx.root)
                   else sidecall.local_runner("proposer", ctx.config))
-    stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
-                        optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
-    srow = {"resolved": None}
-    task = {"instance_id": session_id}
-    if injected is not None:
-        task["injected_ids"] = injected
-    opt_tokens, reason = stage.after_task(task, {}, run_dir, srow)
-    rendered = stage.render() or ""
-    prior = ctx.store.read("injection.json") or {}
-    ctx.store.write("injection.json", {
-        "profile": profile, "reason": reason, "rendered": rendered,
-        "rendered_ids": stage.injected_ids(),
-        "facts": srow.get("manual_facts"), "updated": time.time(),
-        "sessions": int(prior.get("sessions", 0)) + 1,
-        "imported_sessions": int(prior.get("imported_sessions", 0)) + bool(imported)})
-    return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
+    ms_store = ctx.microskills_store
+    if ms_store is not ctx.store:
+        with ms_store.locked("mechanisms"):
+            return _run_microskills_fold(ctx, adapter, run_dir, session_id, icfg, runner,
+                                         injected=injected, imported=imported)
+    return _run_microskills_fold(ctx, adapter, run_dir, session_id, icfg, runner,
+                                 injected=injected, imported=imported)
 
 
 class Busy(RuntimeError):
@@ -118,23 +142,26 @@ def forget_microskills(ctx, ids, undo=False):
     adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
                           catalog={}, protect=ctx.config.toolprune_protect)
     vocab = adapter.env_vocabulary()
-    with ctx.store.locked("mechanisms") as got:
+    ms_store = ctx.microskills_store
+    mech_dir = ctx.microskills_mech_dir
+    agent = "shared" if ms_store is not ctx.store else ctx.host.name
+    with ms_store.locked("mechanisms") as got:
         if not got:
             raise Busy("a fold of this repository's sessions holds its state")
-        out = forget_facts(ctx.repo.label, ctx.mech_dir, ids, vocab=vocab, undo=undo)
-        prior = ctx.store.read("injection.json")
+        out = forget_facts(ctx.repo.label, mech_dir, ids, vocab=vocab, undo=undo)
+        prior = ms_store.read("injection.json")
         profile = (ctx.config.microskills if ctx.config.microskills != "off"
                    else (prior or {}).get("profile"))
         if not any(changed for _, changed, _ in out) or prior is None or not profile:
             return out
-        stage = PrefixStage(_microskills_config(ctx, profile), ctx.repo.label, ctx.mech_dir,
-                            False, adapter=adapter, agent=ctx.host.name)
+        stage = PrefixStage(_microskills_config(ctx, profile), ctx.repo.label, mech_dir,
+                            False, adapter=adapter, agent=agent)
         rendered = stage.render() or ""
         facts = dict(stage.distiller.debug_row()) if stage.distiller else {}
         # What only a fold knows (the last session's verdicts) stays as the fold left it.
         facts.update({k: v for k, v in (prior.get("facts") or {}).items()
                       if k.startswith("_") and k not in facts})
-        ctx.store.write("injection.json", dict(
+        ms_store.write("injection.json", dict(
             prior, rendered=rendered, rendered_ids=stage.injected_ids(), facts=facts,
             updated=time.time()))
     return out

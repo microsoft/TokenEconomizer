@@ -55,8 +55,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall,
-               toolcheck)
+from . import (accounting, denylist, fold, history, hosts, paths, portable, repomap, repos,
+               sidecall, toolcheck)
 from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -214,7 +214,7 @@ def cmd_status(args):
            "identified_by": ctx.repo.how, "host": ctx.host.name,
            "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings,
            "session_note": _session_note(ctx)}
-    inj = ctx.store.read("injection.json") or {}
+    inj = ctx.microskills_store.read("injection.json") or {}
     unt = ctx.store.read("untool.json") or {}
     env_tracker = loopguard.load_envelope(ctx.store, cfg.loopguard_aggr,
                                           cfg.loopguard_thresholds)
@@ -307,14 +307,48 @@ def cmd_microskills(args):
               f"{' '.join(args.ids)}`?")
         return 2
     ctx = _ctx(args)
-    inj = ctx.store.read("injection.json") or {}
-    if ctx.config.microskills == "off":
+    ms_store = ctx.microskills_store
+    inj = ms_store.read("injection.json") or {}
+    from tokeneconomizer.microskills import forgotten_facts
+    gone = forgotten_facts(ctx.repo.label, ctx.microskills_mech_dir)
+    if args.action == "export":
+        try:
+            extracted = portable.extract_facts(inj, env=ctx.env)
+            path, written = portable.write_facts(ctx.repo.root, extracted, env=ctx.env)
+        except RuntimeError as e:
+            print(f"not exported: {e}")
+            return 1
+        print(f"exported {len(written)} sanitized fact(s) to {path}")
+        return 0
+    if args.action == "import":
+        p_facts = portable.read_facts(ctx.repo.root, env=ctx.env)
+        if not p_facts:
+            print(f"no sanitized facts found at {portable.facts_path(ctx.repo.root)}")
+            return 0
+        merged = portable.merge_rendered(
+            ctx.repo.label, inj.get("rendered") or "", p_facts, forgotten_ids=gone,
+            max_facts=ctx.config.microskills_max_facts,
+            max_tokens=ctx.config.microskills_max_tokens)
+        ms_store.write("injection.json", dict(
+            inj, rendered=merged, updated=time.time(),
+            profile=inj.get("profile") or ctx.config.microskills))
+        print(f"imported {len(p_facts)} portable fact(s) from "
+              f"{portable.facts_path(ctx.repo.root)}")
+        return 0
+    has_portable = portable.is_active(ctx.repo.root, ctx.config)
+    p_facts = portable.read_facts(ctx.repo.root, env=ctx.env) if has_portable else {}
+    if ctx.config.microskills == "off" and not p_facts:
         print(f"micro-skills is off here (the default). `config set microskills=on` turns it on: "
               f"facts are then learned from finished sessions, and a model proposes more every "
               f"{ctx.config.microskills_propose_every} sessions, through this agent")
         if not inj:
             return 0
-    text = inj.get("rendered") or ""
+    text = (inj.get("rendered") or "") if ctx.config.microskills != "off" or inj else ""
+    if p_facts:
+        text = portable.merge_rendered(
+            ctx.repo.label, text, p_facts, forgotten_ids=gone,
+            max_facts=ctx.config.microskills_max_facts,
+            max_tokens=ctx.config.microskills_max_tokens)
     print(text.rstrip() or "(nothing injected yet: no fact has cleared its firing gate)")
     facts = inj.get("facts") or {}
     rows = [(k, v) for k, v in facts.items() if isinstance(v, dict) and "state" in v]
@@ -323,8 +357,8 @@ def cmd_microskills(args):
         for k, v in sorted(rows):
             print(f"  {v.get('state', '?'):9s} fire={v.get('fire', '?'):>5s} "
                   f"{'INJECTED' if v.get('inject') else '        '} {k}")
-    from tokeneconomizer.microskills import forgotten_facts
-    gone = forgotten_facts(ctx.repo.label, os.path.join(ctx.store.base, "mechanisms"))
+    if p_facts:
+        print(f"\nportable ({portable.facts_path(ctx.repo.root)}): {len(p_facts)} fact(s)")
     if gone:
         print("\nforgotten (`microskills unforget ID` brings one back):")
         for k, claim in sorted(gone.items()):
@@ -1008,9 +1042,11 @@ def build_parser():
                    help="briefly explain current settings and saved state (no model calls)")
     p.set_defaults(fn=cmd_status)
     p = add("microskills", "facts")
-    p.add_argument("action", nargs="?", default="show", choices=("show", "forget", "unforget"),
+    p.add_argument("action", nargs="?", default="show",
+                   choices=("show", "forget", "unforget", "export", "import"),
                    help="show the facts (default); forget: stop injecting them and never learn "
-                        "them again; unforget: bring forgotten facts back")
+                        "them again; unforget: bring forgotten facts back; export/import: sync "
+                        "<repo>/.tokeneconomizer/facts.json")
     p.add_argument("ids", nargs="*", metavar="ID", help="fact ids, as `te microskills` lists them")
     p.set_defaults(fn=cmd_microskills)
     p = add("toolprune", "untool")

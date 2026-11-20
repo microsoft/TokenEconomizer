@@ -115,6 +115,8 @@ LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
 MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
+MICROSKILLS_SCOPES = ("host", "repo")
+PORTABLE_STATES = ("off", "auto", "on")
 
 # What `on` turns each mechanism to, and the words read as on / off.
 ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard": "nudge",
@@ -191,6 +193,8 @@ class LiveConfig:
     microskills_max_facts: int = 4
     microskills_max_tokens: int = 150
     microskills_propose_every: int = 3
+    microskills_scope: str = "host"
+    portable_state: str = "auto"
     toolprune: str = "auto"
     toolprune_evidence: int = 10
     toolprune_min_sessions: int = 2
@@ -235,7 +239,8 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
-                "local_model": LOCAL_MODELS,
+                "local_model": LOCAL_MODELS, "microskills_scope": MICROSKILLS_SCOPES,
+                "portable_state": PORTABLE_STATES,
                 "vocabulary": ("auto", "generic", "python-git", "node-web"),
                 # Each CLI's own words (Claude Code 2.1.319, Codex 0.167.0); whether a model
                 # takes one is the CLI's to say.
@@ -365,6 +370,8 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_MICROSKILLS": "microskills", "TE_MICROSKILLS_MAX_FACTS": "microskills_max_facts",
         "TE_MICROSKILLS_MAX_TOKENS": "microskills_max_tokens",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
+        "TE_MICROSKILLS_SCOPE": "microskills_scope",
+        "TE_PORTABLE_STATE": "portable_state",
         "TE_TOOLPRUNE": "toolprune", "TE_TOOLPRUNE_EVIDENCE": "toolprune_evidence",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",

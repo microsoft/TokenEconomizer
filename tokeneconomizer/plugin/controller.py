@@ -29,7 +29,7 @@ import traceback
 
 from .. import loopguard
 from ..trace import droid as droid_trace
-from . import denylist, fold, history, hookqueue, repomap, repos, sidecall
+from . import denylist, fold, history, hookqueue, portable, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -121,9 +121,20 @@ class LiveController:
         seen = self.store.read("notices.json") or {}
         seen_before = dict(seen)
 
-        if self.cfg.microskills != "off":
-            inj = self.store.read("injection.json") or {}
-            text = inj.get("rendered") or ""
+        has_portable = portable.is_active(self.ctx.repo.root, self.cfg)
+        if self.cfg.microskills != "off" or has_portable:
+            ms_store = self.ctx.microskills_store
+            inj = ms_store.read("injection.json") or {}
+            text = (inj.get("rendered") or "") if self.cfg.microskills != "off" else ""
+            if has_portable:
+                p_facts = portable.read_facts(self.ctx.repo.root, env=self.ctx.env)
+                if p_facts:
+                    from ..microskills import forgotten_facts
+                    gone = forgotten_facts(self.ctx.repo.label, self.ctx.microskills_mech_dir)
+                    text = portable.merge_rendered(
+                        self.ctx.repo.label, text, p_facts, forgotten_ids=gone,
+                        max_facts=self.cfg.microskills_max_facts,
+                        max_tokens=self.cfg.microskills_max_tokens)
             # A resumed or forked conversation already carries what the first start injected,
             # where the agent replays it; a cleared or compacted one has lost it. ("new" is
             # Copilot's word for "startup".)
