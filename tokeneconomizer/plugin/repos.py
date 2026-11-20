@@ -32,6 +32,7 @@ import time
 import traceback
 
 from ..names import repo_filename
+from . import denylist
 from . import hosts as hosts_mod
 from .paths import (BY_PATH, BY_REMOTE, RepoId, _slug, digest, home_dir, is_git_entry,
                     normalize_remote, origin_url, repo_identity, state_root)
@@ -812,7 +813,8 @@ def ignored_git_entries(cwd, env=None):
 
 
 def listing(root, env=None, current=None):
-    """One row per state directory: identity, agents and sessions, checkouts, notes."""
+    """One row per state directory: identity, agents and sessions, checkouts, what tool pruning
+    left out where, notes."""
     idx = Store(root).read(INDEX) or {}
     checkouts = {}
     for path, v in (idx.get("checkouts") or {}).items():
@@ -828,9 +830,14 @@ def listing(root, env=None, current=None):
         if not os.path.isdir(d):
             continue
         doc = Store(d).read("repo.json") or {}
-        agents, imported, cwds, last = {}, {}, set(), 0.0
+        agents, imported, cwds, last, pruned = {}, {}, set(), 0.0, {}
         for h in _host_dirs(d):
             st = Store(os.path.join(d, h))
+            # What the deny list wrote, per settings file: which checkouts are missing tools,
+            # without running a command in each one (#219).
+            by_path = denylist.applied_by_path(st.read(denylist.APPLIED) or {})
+            if any(by_path.values()):
+                pruned[h] = {p: len(t) for p, t in sorted(by_path.items()) if t}
             sess = _sessions(st)
             folded = st.read("folded.json") or {}
             # Sessions imported from the agent's history are counted apart.
@@ -855,6 +862,7 @@ def listing(root, env=None, current=None):
         rows.append({"key": key, "label": doc.get("label") or dir_label(d) or key,
                      "how": doc.get("how", ""), "remote": doc.get("remote", ""),
                      "agents": agents, "imported": imported, "last": last, "state": d,
+                     "pruned": pruned,
                      "checkouts": sorted(checkouts.get(key, [])), "cwds": sorted(cwds),
                      "current": bool(current and current.key == key), "notes": notes})
     try:

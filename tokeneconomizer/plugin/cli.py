@@ -30,7 +30,8 @@
                                       it by itself)
     te history [import --status]      what that import did here
     te repos                          every repository with state here: how it was identified,
-                                      its agents and sessions, the checkouts seen
+                                      its agents and sessions, the checkouts seen, and the
+                                      tools left out of each one's settings
     te repos migrate                  send state recorded under earlier keys where it belongs
                                       now (runs by itself, once, after an upgrade)
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
@@ -854,8 +855,15 @@ def cmd_repos(args):
         elif row["cwds"]:
             print("  ran in       " + ", ".join(row["cwds"][:3])
                   + (f" (+{len(row['cwds']) - 3})" if len(row["cwds"]) > 3 else ""))
+        for h, by_path in sorted(row["pruned"].items()):
+            for path, n in by_path.items():
+                print(f"  left out     {h} {n} {denylist.unit(h, plural=n != 1)}"
+                      + (f" in {path}" if path else ""))
         for n in row["notes"]:
             print(f"  note         {n}")
+    if any(row["pruned"] for row in rows):
+        print("\n`te toolprune show` in a checkout lists what was left out there, and "
+              "`te toolprune restore` gives it back")
     if merged:
         print(f"\n{merged} earlier state director{'y' if merged == 1 else 'ies'} merged into "
               f"the above, kept under {os.path.join(root, 'merged')}")
