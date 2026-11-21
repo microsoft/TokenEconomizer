@@ -264,8 +264,11 @@ def codex_session_usage(rollout_path):
             continue
         info = p.get("info") or {}
         if info.get("total_token_usage"):
+            # Codex re-sends the totals it has when nothing new was used (a rate-limit snapshot,
+            # the estimate after compaction); a model call always adds to them.
+            if info["total_token_usage"] != total:
+                requests += 1
             total = info["total_token_usage"]
-            requests += 1
     meta = codex_session_meta(rollout_path)
     if not total:
         return {"input_tokens": None, "cache_read_input_tokens": None,
