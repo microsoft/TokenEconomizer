@@ -12,6 +12,7 @@ A compressed rollout (`.jsonl.zst`) cannot be read with the standard library; it
 unreadable rather than half-read.
 """
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -99,6 +100,14 @@ _ROLLOUT_ITEM_TYPES = {
 
 def _command_text(command):
     if isinstance(command, list):
+        if len(command) >= 3:
+            executable = ntpath.basename(str(command[0])).lower()
+            startup_switches = {"-nologo", "-noprofile", "-noninteractive"}
+            if (executable in {"pwsh.exe", "powershell.exe"}
+                    and all(str(arg).lower() in startup_switches for arg in command[1:-2])
+                    and str(command[-2]).lower() == "-command"):
+                # Preserve the script verbatim; POSIX shell quoting hides it from envfacts.
+                return str(command[-1])
         return shlex.join(str(c) for c in command)
     return str(command or "")
 
