@@ -187,8 +187,10 @@ def resolve_model(rec):
         # the tail's. Stripping it here is safe because no MODEL_WEIGHTS key contains a
         # slash -- it can only affect an id that would otherwise hard-fail below, and
         # hard-failing a correctly-configured BYOK row at the END of a paid rollout is the
-        # outcome this avoids.
-        return m.rsplit("/", 1)[-1] if "/" in m else m
+        # outcome this avoids. OpenRouter also adds a variant after a colon (`openai/gpt-4:free`,
+        # `:nitro`, `:floor`, `:online`), which chooses the route or the billing, not the model:
+        # it is dropped with the provider. A colon in an id no router named is left alone.
+        return m.rsplit("/", 1)[-1].split(":", 1)[0] if "/" in m else m
     return AGENT_DEFAULT_MODEL.get((rec.get("agent") or "").lower())
 
 
