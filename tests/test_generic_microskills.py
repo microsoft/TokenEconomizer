@@ -25,6 +25,16 @@ def test_the_generic_reading_knows_builds_and_other_ecosystems():
     assert _form("go test ./...", GENERIC) == ("run_tests", "go test")
     assert _form("./gradlew test", GENERIC) == ("run_tests", "gradlew test")
     assert _form("bundle install", GENERIC) == ("package_tool", "bundle")
+    assert _form("zig test src/main.zig", GENERIC) == ("run_tests", "zig test")
+    assert _form("zig build test", GENERIC) == ("run_tests", "zig build test")
+    assert _form("zig build", GENERIC) == ("run_build", "zig build")
+    assert _form("meson test", GENERIC) == ("run_tests", "meson test")
+    assert _form("meson compile", GENERIC) == ("run_build", "meson compile")
+    assert _form("dart test", GENERIC) == ("run_tests", "dart test")
+    assert _form("flutter test", GENERIC) == ("run_tests", "flutter test")
+    assert _form("forge test", GENERIC) == ("run_tests", "forge test")
+    assert _form("ninja test", GENERIC) == ("run_tests", "ninja test")
+    assert _form("ninja check", GENERIC) == ("run_tests", "ninja check")
     # The experiments' vocabularies read as they did.
     assert _form("tsc -p .", PYTHON_GIT) is None and _form("npm run build", NODE_WEB) == (
         "package_tool", "npm")

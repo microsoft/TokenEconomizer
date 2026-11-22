@@ -65,7 +65,7 @@ NODE_WEB = Vocabulary(
                             "karma"}),
     runner_scripts=(),
     runner_modules=frozenset(),
-    package_tools=frozenset({"npm", "yarn", "pnpm", "corepack", "apt", "apt-get"}),
+    package_tools=frozenset({"npm", "yarn", "pnpm", "bun", "deno", "corepack", "apt", "apt-get"}),
 )
 
 # The plugin's: every ecosystem at once, since a repository a person works in may mix them.
@@ -82,11 +82,12 @@ GENERIC = Vocabulary(
     | frozenset({"gem", "bundle", "composer", "cargo", "go", "mvn", "gradle", "dotnet", "brew",
                  "rustup", "pyenv", "nvm", "asdf"}),
     task_heads=frozenset({"make", "npm", "yarn", "pnpm", "cargo", "go", "mvn", "gradle",
-                          "gradlew", "dotnet", "mix", "swift", "rake"}),
+                          "gradlew", "dotnet", "mix", "swift", "rake", "zig", "meson", "dart",
+                          "flutter", "forge"}),
     build_heads=frozenset({"make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier",
                            "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
                            "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite",
-                           "pre-commit", "shellcheck"}),
+                           "pre-commit", "shellcheck", "zig", "meson", "forge"}),
     generic=True,
 )
 # `<tool> build`, `npm run lint`, ...: what a generic reading counts as building or checking.
@@ -479,6 +480,35 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
     if base in vocab.interpreters or _INTERP_VERSIONED_RE.match(base):
         if rest and all(t in ("--version", "-V", "-VV", "-v") for t in rest):
             return Observation(call, "probe_env", form(head), head, prefix, seg)
+        if base == "node" and "--test" in rest:
+            return Observation(call, "run_tests", form(f"{head} --test"), head, prefix, seg)
+        if base == "deno" and rest:
+            if rest[0] == "test":
+                return Observation(call, "run_tests", form(f"{head} test"), head, prefix, seg)
+            if vocab.generic and rest[0] in BUILD_SUBS:
+                return Observation(call, "run_build", form(f"{head} {rest[0]}"), head, prefix, seg)
+            if rest[0] in ("add", "install"):
+                hosts = _URL_HOST_RE.findall(body)
+                return Observation(call, "fetch_remote", form(f"{head} {rest[0]}"), head, prefix,
+                                   seg, hosts=hosts)
+        if base == "bun" and rest:
+            if rest[0] == "test":
+                return Observation(call, "run_tests", form(f"{head} test"), head, prefix, seg)
+            if rest[0] == "run" and len(rest) > 1:
+                script = rest[1]
+                kind = script.split(":", 1)[0]
+                if kind == "test":
+                    return Observation(call, "run_tests", form(f"{head} run {script}"), head,
+                                       prefix, seg)
+                if vocab.generic and kind in BUILD_SUBS:
+                    return Observation(call, "run_build", form(f"{head} run {script}"), head,
+                                       prefix, seg)
+            if rest[0] in ("install", "add"):
+                hosts = _URL_HOST_RE.findall(body)
+                return Observation(call, "fetch_remote", form(f"{head} {rest[0]}"), head, prefix,
+                                   seg, hosts=hosts)
+            if rest[0] in ("remove", "rm", "update", "upgrade"):
+                return Observation(call, "package_tool", form(head), head, prefix, seg)
         if "-m" in rest:
             mod = rest[rest.index("-m") + 1] if rest.index("-m") + 1 < len(rest) else ""
             after = rest[rest.index("-m") + 2:]
@@ -509,6 +539,11 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
                                head, prefix, seg)
     if base in vocab.task_heads and rest and rest[0] == "test":
         return Observation(call, "run_tests", form(f"{base} test"), head, prefix, seg)
+    if base == "zig" and len(rest) >= 2 and rest[:2] == ["build", "test"]:
+        return Observation(call, "run_tests", form("zig build test"), head, prefix, seg)
+    if base == "ninja" and rest and any(t in ("test", "check") for t in rest):
+        target = "test" if "test" in rest else "check"
+        return Observation(call, "run_tests", form(f"ninja {target}"), head, prefix, seg)
     if vocab.generic:
         if base in _RUN_SCRIPT_HEADS and len(rest) > 1 and rest[0] == "run":
             script = rest[1]
@@ -540,7 +575,7 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
                                    seg, probe=kind)
         return None
     if base in vocab.package_tools:
-        if base.startswith(("pip", "npm", "yarn", "pnpm")) and rest and rest[0] in (
+        if (base in ("npm", "yarn", "pnpm", "bun", "deno") or base.startswith("pip")) and rest and rest[0] in (
                 "install", "download", "add", "ci"):
             hosts = _URL_HOST_RE.findall(body)
             return Observation(call, "fetch_remote", form(f"{base} {rest[0]}"), head, prefix,

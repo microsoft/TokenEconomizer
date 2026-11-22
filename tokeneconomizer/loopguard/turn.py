@@ -64,7 +64,9 @@ VERIFY_RE = re.compile(
     r"what-if|new-file|assume-new)\s+" + _MAKE_VALUE + r"|"
     r"-(?![CfIoW]|[jl][^\s\-])[-\w]+(?:=(?:\$\s*\w+|\S*))?|\w+=(?:\$\s*\w+|\S*)))*)"
     r"\s+(?:test|check)|"
+    r"(?:ninja|samu)(?:\s+(?:-C\s*\S+|-[jlk]\s*\d+|\S+=\S+))*\s+(?:test|check)|"
     r"ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    r"zig\s+(?:build\s+)?test|meson\s+(?:\S+\s+)*test|(?:dart|flutter)\s+test|forge\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
     # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
@@ -233,6 +235,8 @@ _RUN_FAILED_RE = re.compile("|".join((
     r"^\d+ (?:runs|tests), \d+ assertions, (?:[1-9]\d* failures, \d+ errors|\d+ failures, "
     r"[1-9]\d* errors)\b",
     r"Tests run: \d+, Failures: (?:[1-9]|0, Errors: [1-9])",        # JUnit (Maven, Gradle)
+    r"\bFail:\s+[1-9]\d*\b",                                        # Meson
+    r"Some tests failed\.",                                         # Dart / Flutter
     r"BUILD FAIL(?:URE|ED)")), re.MULTILINE)
 _RUN_PASSED_RE = re.compile("|".join((
     r"\b\d+ passed\b.*\bin \d+(?:\.\d+)?s\b",
@@ -247,6 +251,7 @@ _RUN_PASSED_RE = re.compile("|".join((
     r"^test result: ok\.",
     r"\b\d+ examples?, 0 failures\b",
     r"^\d+ (?:runs|tests), \d+ assertions, 0 failures, 0 errors\b",   # minitest, test-unit
+    r"All tests passed!",                                           # Dart / Flutter
     r"BUILD SUCCESS")), re.MULTILINE)
 
 
