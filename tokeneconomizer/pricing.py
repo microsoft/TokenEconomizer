@@ -121,6 +121,15 @@ MODEL_WEIGHTS = {
     "gemini-4-argon":          dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
     "gemini-4-carbon":         dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
     "gemini-4-hydrogen":       dict(input=1.0, cache_read=0.05,   cache_write=0.0,   output=5.0),
+    # DeepSeek, https://api-docs.deepseek.com/quick_start/pricing. No cache-write charge.
+    # deepseek-chat (V3): $0.14 in / $0.014 cached (0.10x) / $0.28 out (2.0x).
+    # deepseek-reasoner (R1): $0.55 in / $0.14 cached (0.2545x) / $2.19 out (3.982x).
+    "deepseek-chat":           dict(input=1.0, cache_read=0.10,   cache_write=0.0,   output=2.0),
+    "deepseek-reasoner":       dict(input=1.0, cache_read=0.2545, cache_write=0.0,   output=3.982),
+    # Alibaba Qwen, https://www.alibabacloud.com/help/en/model-studio/developer-reference/pricing.
+    "qwen-2.5-coder-32b":      dict(input=1.0, cache_read=0.20,   cache_write=0.0,   output=4.0),
+    "qwen-plus":               dict(input=1.0, cache_read=0.20,   cache_write=0.0,   output=3.0),
+    "qwen-max":                dict(input=1.0, cache_read=0.25,   cache_write=0.0,   output=4.0),
 }
 
 # Billed model id for an agent when a row does NOT pin one (rec['model'] is None).
