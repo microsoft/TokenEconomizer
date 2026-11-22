@@ -241,6 +241,29 @@ def codex_session_meta(rollout_path):
     return meta
 
 
+_USAGE_FIELDS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+                 "output_tokens", "total_tokens", "reasoning_output_tokens")
+
+
+def _usage_key(total):
+    """A hashable identity for a cumulative `total_token_usage` snapshot.
+
+    Only the counters that can move when a model call happens. A change in any one of
+    them means the session spent a request; an unchanged snapshot is Codex re-sending
+    the totals it already had. Compared as a tuple of the numeric fields rather than
+    the raw dict so a harmless extra field does not register as a new request.
+    """
+    out = []
+    for f in _USAGE_FIELDS:
+        v = total.get(f)
+        try:
+            v = int(v) if v is not None else None
+        except (TypeError, ValueError):
+            v = str(v)
+        out.append(v)
+    return tuple(out)
+
+
 def codex_session_usage(rollout_path):
     """Token breakdown of a Codex session from its last cumulative `token_count`.
 
@@ -250,6 +273,13 @@ def codex_session_usage(rollout_path):
     as information only."""
     total = None
     requests = 0
+    key_counts = {}
+    # A model call always adds to `total_token_usage`, so a token_count event whose
+    # cumulative total was already seen carries no model call: Codex re-sends the
+    # totals it already has on a compaction's rate-limit snapshot
+    # (`update_rate_limits`) and on the local estimate after compaction
+    # (`recompute_token_usage`), and persists those events in the rollout. Counting
+    # every event reports more requests than the session made.
     for line in _lines(rollout_path):
         if '"token_count"' not in line:
             continue
@@ -265,7 +295,15 @@ def codex_session_usage(rollout_path):
         info = p.get("info") or {}
         if info.get("total_token_usage"):
             total = info["total_token_usage"]
-            requests += 1
+            key = _usage_key(total)
+            # Count the FIRST occurrence of a total as the request it represents. A
+            # later re-send of a total already seen is not a request, even when other
+            # events sit between the two: a compaction can land between a model call
+            # and the re-send of that call's total.
+            if key not in key_counts:
+                key_counts[key] = 0
+                requests += 1
+            key_counts[key] += 1
     meta = codex_session_meta(rollout_path)
     if not total:
         return {"input_tokens": None, "cache_read_input_tokens": None,

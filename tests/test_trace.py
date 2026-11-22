@@ -1,5 +1,6 @@
 """Trace seam: load_trajectory / tool_usage / parse_catalog over synthetic transcripts."""
 import os
+import json
 
 from tokeneconomizer import trace
 from fixtures import write_claude_transcript, write_codex_transcript
@@ -330,3 +331,54 @@ def test_the_loop_guard_and_the_capability_audit_skip_a_non_object_line(tmp_path
     p = tmp_path / "exec.jsonl"
     p.write_text("\n".join(_around_non_objects([reconnect])))
     assert inspect_usage(str(p))["reconnects"] == 1
+
+
+def _token_count(inp, out, **extra):
+    total = {"input_tokens": inp, "cached_input_tokens": 0,
+             "output_tokens": out, "total_tokens": inp + out}
+    total.update(extra)
+    return {"type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": total}}}
+
+
+def _write_rollout(tmp_path, events, name="rollout.jsonl"):
+    p = tmp_path / name
+    p.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    return str(p)
+
+
+def test_a_resent_codex_total_is_not_a_request(tmp_path):
+    """Codex re-sends unchanged totals on a compaction's rate-limit snapshot and on the
+    local estimate after compaction, and persists those events. Counting every
+    token_count event reports more requests than the session made."""
+    path = _write_rollout(tmp_path, [_token_count(1000, 40), _token_count(3000, 90),
+                                     _token_count(3000, 90),   # rate-limit snapshot
+                                     _token_count(3000, 90),   # post-compaction estimate
+                                     _token_count(5200, 130)])
+    usage = trace.codex_session_usage(path)
+    assert usage["requests"] == 3
+    assert (usage["input_tokens"], usage["output_tokens"]) == (5200, 130)
+
+
+def test_a_resent_codex_total_after_a_later_call_is_still_not_a_request(tmp_path):
+    """A compaction can land between a model call and the re-send of that call's total,
+    so "identical to the previous event" is the wrong test; "already seen" is right.
+    The last cumulative total still wins, because it is the one the session reached."""
+    path = _write_rollout(tmp_path, [_token_count(1000, 40), _token_count(3000, 90),
+                                     _token_count(5200, 130), _token_count(3000, 90)],
+                          name="rollout-out-of-order.jsonl")
+    assert trace.codex_session_usage(path)["requests"] == 3
+
+
+def test_every_new_codex_total_is_a_request(tmp_path):
+    """The guard must not swallow real calls: three distinct totals are three requests,
+    and reasoning tokens alone moving is still a request."""
+    path = _write_rollout(tmp_path, [_token_count(1000, 40), _token_count(3000, 90),
+                                     _token_count(3000, 90, reasoning_output_tokens=10)],
+                          name="rollout-distinct.jsonl")
+    assert trace.codex_session_usage(path)["requests"] == 3
+
+
+def test_a_single_codex_total_is_one_request(tmp_path):
+    path = _write_rollout(tmp_path, [_token_count(1000, 40)], name="rollout-one.jsonl")
+    assert trace.codex_session_usage(path)["requests"] == 1
