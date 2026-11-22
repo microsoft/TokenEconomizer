@@ -22,6 +22,7 @@ _SKIP_OPERAND = {"<", "<<", "<<<", "<&", ">&", "<>"}   # input, heredoc tags, fd
 # `| tee /tmp/run.txt` -- capturing output -- is not mistaken for an edit.
 _SOURCE_FILE = re.compile(
     r"\.(?:py|pyi|pyx|pxd|js|jsx|mjs|cjs|ts|tsx|rs|go|java|kt|kts|scala|c|cc|cpp|cxx|h|hh|hpp|"
+    r"cu|cuh|zig|dart|sol|proto|graphql|gql|astro|cmake|"
     r"rb|php|cs|swift|m|mm|sh|bash|zsh|lua|jl|ex|exs|erl|hs|ml|clj|sql|toml|ya?ml|json|cfg|ini|"
     r"conf|md|rst|html?|css|scss|vue|svelte|xml|gradle|properties|in)$", re.I)
 _PYTHON = re.compile(r"(?:^|[\s/;&|(])python\d?(?:\.\d+)?\b")
