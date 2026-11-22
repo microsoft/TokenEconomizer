@@ -282,6 +282,14 @@ def test_host_detection():
     assert hosts.detect({"turn_id": "t"}, hint="claude").name == "claude"
     assert hosts.detect({"transcript_path": "/h/.copilot/session-state/s/events.jsonl"}
                         ).name == "copilot"
+    assert hosts.detect({
+        "transcript_path": "/Users/u/Library/Application Support/Code/User/workspaceStorage/h/"
+                           "GitHub.copilot-chat/transcripts/s.jsonl"
+    }).name == "copilot"
+    assert hosts.detect({
+        "transcript_path": r"C:\Users\u\AppData\Roaming\Code\User\workspaceStorage\h"
+                           r"\GitHub.copilot-chat\transcripts\s.jsonl"
+    }).name == "copilot"
     # Copilot sends no transcript before Stop, and marks its hook processes; a Claude Code
     # session started from inside Copilot inherits the marker but always sends a transcript.
     copilot_env = {"COPILOT_PLUGIN_ROOT": "/p", "COPILOT_CLI": "1"}
@@ -344,6 +352,20 @@ def test_the_copilot_payloads_observed_live_are_read():
     name, args, text, code = c.tool_call(COPILOT_FAILURE)
     assert (name, args["path"], code) == ("Read", "/w/repo/nope.py", None)
     assert "Path does not exist" in text
+    vscode_post = {
+        "hook_event_name": "PostToolUse", "session_id": "s1",
+        "transcript_path": "/h/workspaceStorage/x/GitHub.copilot-chat/transcripts/s1.jsonl",
+        "tool_name": "run_in_terminal", "tool_input": {"command": "pytest"},
+        "tool_response": "FAILED tests/test_a.py\nExit code 1",
+    }
+    vc = hosts.detect(vscode_post)
+    assert vc.name == "copilot"
+    name, args, text, code = vc.tool_call(vscode_post)
+    assert (name, args["command"], code) == ("run_in_terminal", "pytest", 1)
+    assert "FAILED" in text
+    assert vc.context("SessionStart", "x") == {
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "x"}}
+    assert vc.notice("n") == {"systemMessage": "n"}
     # Copilot reads a TOP-LEVEL additionalContext and ignores hookSpecificOutput, and shows a
     # notice only as a progress line ahead of the output (both verified in its TUI)
     assert c.context("SessionStart", "x") == {"additionalContext": "x"}
@@ -360,6 +382,13 @@ def test_a_copilot_session_log_is_found_from_the_session_id(monkeypatch, tmp_pat
     assert c.transcript({"session_id": "abc", "transcript_path": "/x/events.jsonl"}) == \
         "/x/events.jsonl"
     assert c.cwd({}, {"COPILOT_PROJECT_DIR": "/w/repo"}) == "/w/repo"
+    vscode_log = tmp_path / "GitHub.copilot-chat" / "transcripts" / "abc.jsonl"
+    vscode_log.parent.mkdir(parents=True)
+    vscode_log.write_text('{"type":"session.start"}\n', encoding="utf-8")
+    slept = []
+    monkeypatch.setattr(hosts.time, "sleep", slept.append)
+    c.settle(str(vscode_log), wait_s=5.0)
+    assert slept == []
 
 
 def test_claude_tool_results_and_outputs():
