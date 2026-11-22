@@ -44,8 +44,8 @@ _PYTHON = (r"python\d?(?:\.\d+)?"
 _MAKE_VALUE = r"(?:\$\s*\w+|[^\s\-]\S*)"
 VERIFY_RE = re.compile(
     r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
-    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|"
-    + _PYTHON + r"\s+-m\s+(?:pytest|unittest|tox|nox)|"
+    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|nosetests|trial|"
+    + _PYTHON + r"\s+-m\s+(?:pytest|unittest|tox|nox|nose|django\s+test)|"
     # coverage.py measuring a test run (`coverage run -m pytest`, `python -m coverage run
     # manage.py test`), past its own options, of which these take a value
     r"(?:-m\s+)?coverage\s+run(?:\s+(?:--(?:rcfile|source|omit|include|data-file|context|"
