@@ -219,6 +219,17 @@ def exit_status_covers(cmd):
     return True
 
 
+# A command spelled the Windows way (`C:\repo\.venv\Scripts\python.exe -m pytest`,
+# `.venv\Scripts\pytest.exe`) is read with forward slashes, no drive letter and no `.exe`, as the
+# micro-skills observer reads it.
+_DRIVE_RE = re.compile(r"(?<![\w/])[A-Za-z]:/")
+_EXE_RE = re.compile(r"\.exe(?=\s|$)", re.I)
+
+
+def _posix_spelling(stage):
+    return _EXE_RE.sub("", _DRIVE_RE.sub("/", stage.replace("\\", "/")))
+
+
 def status_of_tests(cmd):
     """What `cmd`'s exit status says of the test runs in it: None when it runs none; "own" when
     it is theirs (a run is last, or followed only by `&&`, or piped under `pipefail`); "hidden"
@@ -231,7 +242,8 @@ def status_of_tests(cmd):
     found = None
     for i in range(0, len(pieces), 2):
         stage = pieces[i]
-        if not VERIFY_RE.match(_PREFIX_RE.sub("", stage)) or _NOT_A_RUN_RE.search(stage):
+        if (not VERIFY_RE.match(_PREFIX_RE.sub("", _posix_spelling(stage)))
+                or _NOT_A_RUN_RE.search(stage)):
             continue
         status = "own"
         for sep, then in zip(pieces[i + 1::2], pieces[i + 2::2]):
