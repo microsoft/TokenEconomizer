@@ -288,6 +288,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Codex | 0.153.1 to 0.171.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.114 | not supported |
 | Pi | 1.2.0 to 1.5.2 | 0.99.x: load the extension by path (below) |
+| oh-my-pi (`omp`, experimental) | 19.1.1 | not tested |
 | Cursor Agent (experimental) | 3.24.9 and cursor-agent 2026.11.05, macOS and Linux (below) | not tested |
 | Grok Build (experimental) | 1.0.70 | not tested |
 | opencode (experimental) | 1.19.5 and 2.2.0 | not tested |
