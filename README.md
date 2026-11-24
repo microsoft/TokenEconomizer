@@ -511,7 +511,7 @@ agent's own limits; afterwards, `te status` counts the redirects and "still stuc
 | [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior), `ARCHITECTURE.md` (how the package fits together) and `DROID.md` (the Factory Droid adapter) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |
 
-The package is standard-library only. Run the tests with `python -m pytest tests` (add
+The package is standard-library only and needs Python 3.10 or later. Run the tests with `python -m pytest tests` (add
 `experiments/tests` for the benchmark side), and build a self-contained plugin bundle with
 `python3 scripts/build_plugin.py --out dist/marketplace`.
 
