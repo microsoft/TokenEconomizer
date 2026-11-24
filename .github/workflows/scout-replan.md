@@ -14,7 +14,7 @@ permissions:
   pull-requests: read
   copilot-requests: write
 engine: claude
-model: copilot/claude-opus-5.5
+model: copilot/claude-sonnet-5.5
 tools:
   github:
     toolsets: [default]
