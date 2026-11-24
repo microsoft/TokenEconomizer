@@ -3,3 +3,5 @@ plugin/scripts/te text eol=lf
 plugin/scripts/te-hook text eol=lf
 *.sh text eol=lf
 *.cmd text eol=crlf
+# gh-aw compiles each .github/workflows/*.md into this generated file; keep it out of diffs.
+.github/workflows/*.lock.yml linguist-generated=true
