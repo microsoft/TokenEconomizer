@@ -35,9 +35,9 @@ check against recorded sessions when what the plugin learns or decides changes.
 Only questions that block implementation; otherwise `None`.
 
 ---
-Reply `confirm` to have scout implement this plan and open a pull request (write access
-required). Reply `/scout` to plan again after editing the issue; text after the command is
-guidance for the new plan.
+Reply `confirm` to have scout implement this plan on a `scout/issue-<number>` branch and link a
+one-click pull request (write access required). Reply `/scout` to plan again after editing the
+issue; text after the command is guidance for the new plan.
 
 Keep the comment under 60 lines. If there is nothing to implement (a question, a duplicate,
 spam, nothing actionable), still post the comment: say so under **Understanding**, write
