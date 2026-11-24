@@ -44,6 +44,11 @@ re-tuned. Three things it adds:
   the hook. The hook starts the job and returns; a later PostToolUse picks up the verdict, with
   the redirect already written. Each job's spend is charged to the ledger when it is spent.
 
+**Missing Copilot logs.** A recently ended Copilot session whose `events.jsonl` is missing
+stays pending. The next session start in the same repository or
+`te --host copilot fold --session <id>` can retry it. If the log is still missing on an attempt
+at least ten minutes after the session ended, the fold records it as unreadable.
+
 **Earlier sessions** (`plugin/history.py`). Claude Code keeps every session's log, so the
 sessions a repository ran before the plugin was installed can be folded too: `te history
 import`, which the first session start in a repository runs by itself when `history_import` is

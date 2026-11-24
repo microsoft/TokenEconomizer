@@ -1138,6 +1138,7 @@ class Copilot(Host):
     # 1.0.102 rebuilds a resumed conversation's first message without it, dropping the facts
     # and missing the prompt cache; the same text given again rebuilds it as it was.
     keeps_start_context = False
+    FOLD_RETRY_S = 600
 
     def transcript(self, p):
         # Only Stop carries `transcript_path`; the log's location is fixed by the session id.
@@ -1165,6 +1166,15 @@ class Copilot(Host):
         args = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
         resp = _failure_response(p) or p.get("tool_result")
         return str(p.get("tool_name") or ""), args, response_text(resp), _exit_code(resp)
+
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
+        # Leave a newly ended session pending if its log is missing. Recording it as folded
+        # now would keep a later SessionStart or manual fold from reading the log once it appears.
+        ended = (session or {}).get("ended")
+        if (ended and transcript_path and time.time() - ended < self.FOLD_RETRY_S
+                and not os.path.exists(transcript_path)):
+            raise FoldLater(session_id)
+        return transcript_path
 
     def session_usage(self, transcript_path):
         return trace.copilot_session_usage(transcript_path)
