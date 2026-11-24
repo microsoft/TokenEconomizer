@@ -87,6 +87,15 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
 # A runner asked for its help, version or test list, not to run the tests.
 _NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
+# A launcher's own options, which stand between it and the command it runs. Some take a value,
+# which is then a word of its own: `uv run --extra test pytest`, `uv run --group dev pytest`,
+# `uv run --with pytest-cov pytest`. microskills already reads them before the command
+# (`observe._RUN_OPTION_RE`), so it learns those runs; the loop guard has to see past them too,
+# or a failing `uv run --extra test pytest` is no verification and its turn ends green.
+_LAUNCHER_OPTIONS = (r"(?:--with(?:-editable|-requirements)?|--extra|--(?:only-|no-)?group|"
+                     r"--python|-p|--package|--project|--directory|--env-file|--index|"
+                     r"--pyproject)(?:=|\s+)[^\s-]\S*"
+                     r"|--|--?[A-Za-z][\w-]*(?:=\S+)?")
 # What may precede the command itself: `FOO=1 timeout 60 npm test`, `env -u VAR`, `nice -n 10`,
 # `sudo -u bob`, `time -p`, and a launcher that runs it in the project's environment, `uv run
 # pytest`, `npx jest`, `bundle exec rspec`. `command -v pytest` looks the runner up; only
@@ -110,7 +119,7 @@ _PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|nohup|command(?:\s+-p)?(?:\s+--)?|"
                         r"--root-prefix|--cwd)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
-                        r"(?:\s+-\S+)*|"
+                        r"(?:\s+(?:" + _LAUNCHER_OPTIONS + r"))*|"
                         # rtk's prefix, `rtk pytest`, `rtk proxy npm test` (trace.RTK_WORDS)
                         + RTK_WORDS + r"(?=\s+\S)|"
                         # `dotenv -e .env.local -- npx vitest run`: dotenv-cli's options, then `--`
