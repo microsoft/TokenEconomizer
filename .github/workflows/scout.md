@@ -19,6 +19,7 @@ user-rate-limit:
 tools:
   github:
     toolsets: [default]
+    min-integrity: none
   bash:
     - "ls *"
     - "cat *"

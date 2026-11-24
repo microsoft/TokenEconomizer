@@ -41,6 +41,7 @@ steps:
 tools:
   github:
     toolsets: [default]
+    min-integrity: none
   edit:
   bash: true
 safe-outputs:

@@ -18,6 +18,7 @@ model: copilot/claude-sonnet-5.5
 tools:
   github:
     toolsets: [default]
+    min-integrity: none
   bash:
     - "ls *"
     - "cat *"
