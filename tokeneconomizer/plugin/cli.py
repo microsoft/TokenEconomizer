@@ -893,13 +893,13 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("antigravity", "claude", "codex", "copilot", "droid", "grok", "hermes",
-                          "opencode", "pi")
+    agents = [h for h in ("antigravity", "claude", "codex", "copilot", "droid", "dsh", "grok",
+                          "hermes", "opencode", "pi")
               if _sh.which(sidecall.claude_cli() if h == "claude" else
                            sidecall.hermes_cli() if h == "hermes" else
                            "agy" if h == "antigravity" else h)]
     print("agents      " + (', '.join(agents) or 'none of antigravity (agy), claude, codex, '
-                             'copilot, droid, grok, hermes, opencode, pi on PATH'))
+                             'copilot, droid, dsh, grok, hermes, opencode, pi on PATH'))
     ctx = _ctx(args)          # the per-agent lines below read the settings in effect
     for h in agents:
         pause = sidecall.paused(h, root)
@@ -945,6 +945,11 @@ def cmd_doctor(args):
             side = ("off (set `droid_sidecall=on` or TE_DROID_SIDECALL=1 to try them)")
         print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
               f"available in the TUI")
+    if "dsh" in agents:
+        side = ("on (TE_DSH_SIDECALL=1)" if sidecall.dsh_enabled()
+                else "off (set TE_DSH_SIDECALL=1 to try them)")
+        print(f"dsh         side calls {side}; the plugin is installed per profile with "
+              f"`dsh plugin --profile <name> add link:<plugin>/dsh`")
     if "hermes" in agents:
         link = os.path.join(sidecall.hermes_home(), "plugins", "tokeneconomizer")
         print(f"hermes      plugin {'linked at ' + link if os.path.exists(link) else 'not in ' + link}"

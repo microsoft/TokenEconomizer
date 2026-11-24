@@ -2,14 +2,16 @@
 
 How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi, Cursor
 (experimental), Grok Build (experimental), opencode (experimental), Hermes Agent (experimental),
-the Antigravity CLI (experimental) and Factory Droid (experimental). What the plugin does and
+the Antigravity CLI (experimental), Factory Droid (experimental) and DeepSeek Harness (dsh,
+experimental). What the plugin does and
 why is in the [main README](../README.md); its design and the verified behaviour of each agent are
 in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
   [Copilot CLI](#copilot-cli) · [Pi](#pi) · [Cursor](#cursor) · [Grok Build](#grok-build) · [opencode](#opencode) ·
-  [Hermes Agent](#hermes-agent) · [Antigravity CLI](#antigravity-cli) · [Factory Droid](#factory-droid)
+  [Hermes Agent](#hermes-agent) · [Antigravity CLI](#antigravity-cli) · [Factory Droid](#factory-droid) ·
+  [DeepSeek Harness](#deepseek-harness-dsh)
 - [What to expect](#what-to-expect) · [Commands](#commands) · [Settings](#settings)
 - [Repository map](#repository-map) · [Using with rtk](#using-with-rtk) ·
   [Model calls and API keys](#model-calls-and-api-keys) · [Troubleshooting](#troubleshooting)
@@ -713,6 +715,49 @@ Droid has no setting for none at all. With it off, `microskills=envfacts` still 
 model repeated it verbatim. The hook output is covered by tests; Droid appending it to the
 model's context has now been observed.
 
+## DeepSeek Harness (dsh)
+
+Experimental, tested on dsh 0.2.2-rc.5 (macOS) only.
+
+**1. Install.** dsh loads plugins from each profile's bundles. From the clone, add the plugin
+folder by link, once per profile you run (`headless`, `web`, ...):
+
+```sh
+dsh plugin --profile headless add "link:$PWD/plugin/dsh"
+```
+
+dsh installs plugins with pnpm, so pnpm must be on your `PATH`. Restart dsh afterwards. To check
+that the profile mounts it, `dsh --profile headless --dump-config` lists a `tokeneconomizer` row.
+
+**2. Check it.** From a terminal in the repository:
+`~/.tokeneconomizer/bin/te --host dsh status`. dsh has no slash command for it.
+
+**3. Turn on micro-skills.** Facts are only injected once micro-skills is on (it is off by
+default): `te --host dsh config set microskills=on`, or `TE_MICROSKILLS=envfacts` for the facts
+that need no model call.
+
+**What works.** Micro-skills, the loop guard and session cost. The plugin is a plain ES module
+(`plugin/dsh/index.js`) that imports no dsh package; it runs the same hook dispatcher as the other
+agents. Learned facts become a `tokeneconomizer` section of the system prompt, after dsh's own;
+prompt-time context enters that step as a user message; a redirect is appended to the tool result.
+Subagents are left alone. At the end of each turn the plugin writes the session's header and
+events to `~/.tokeneconomizer/dsh-sessions/<session id>.json`, and folds and prices the session
+from it. The pricing table has no DeepSeek models, so cost is labelled `fallback`.
+
+**What does not.** Tool pruning, and history import (dsh keeps no session log the plugin can
+read, so only sessions run with the plugin are learned from). **Model calls** run
+`dsh --profile headless --json` with a patch that turns off every tool row, and stay off unless
+`TE_DSH_SIDECALL=1` is set; `dsh_paid_model` (`provider/model`) picks their model.
+
+**Verified on 0.2.2-rc.5,** in headless runs with no model key: the profile mounts the plugin;
+one run fires `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd`, and the session is
+folded with one prompt; a learned fact appears in the system message dsh builds, after its own
+sections. **Verified live on 2026-11-24** in the web UI with a live model: a learned fact
+reached the model, which ran the command it names; sessions were folded and priced; a session
+reopened after a restart kept its turn count. **Not yet verified:** the loop guard redirecting a
+live turn, and the side call. The third-party `dsh-tui` 0.2.19 cannot connect to dsh 0.2.x (it
+speaks the older `/api` protocol).
+
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
@@ -801,6 +846,7 @@ How to run them:
 | Hermes Agent | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | Antigravity CLI | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` | `~/.tokeneconomizer/bin/te --host droid <command>` |
+| DeepSeek Harness | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host dsh <command>` |
 
 `doctor`, `history`, `repomap` and `microskills forget`/`unforget` run from a terminal (or as `/te …` on
 Pi); there is no slash command or Codex skill for them. Quote a fact id that holds spaces or shell

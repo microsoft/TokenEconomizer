@@ -1,7 +1,7 @@
 # The plugin: design and verified agent behaviour
 
 How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI, Pi,
-opencode, Cursor, Grok Build, Hermes Agent, Antigravity CLI and Factory Droid sessions, through the hooks (on Pi, the extension events) each agent
+opencode, Cursor, Grok Build, Hermes Agent, Antigravity CLI, Factory Droid and DeepSeek Harness (dsh) sessions, through the hooks (on Pi, the extension events; on dsh, its event bus) each agent
 exposes: what it does at each hook, what differs from the experiments and why, the agent
 behaviour each choice rests on, where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
 the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
@@ -736,6 +736,51 @@ was not.)
   call also writes a session log of its own, so side calls stay off until `droid_sidecall` is
   on (or `TE_DROID_SIDECALL=1`).
 
+**DeepSeek Harness (dsh) 0.2.2-rc.5 -- adapter built 2026-11-24, partially verified:**
+
+* dsh has no hook protocol: plugins are Cordis modules on its event bus, loaded from a profile's
+  bundles. `plugin/dsh/index.js` is a plain ES module that imports no dsh package (their peer
+  ranges pin one exact version), mounted by one `insert` row in its bundle patch. It turns
+  `agent/created` into `SessionStart`, the first `agent/pre-step` of a person's prompt into
+  `UserPromptSubmit`, `tools/post-execute` into `PostToolUse`, `agent/status` idle into `Stop`,
+  and `agent/disposed` (or a headless run's end) into `SessionEnd`, each one call of
+  `scripts/te-hook --host dsh`. Subagents (`header.origin` `subagent`, or a delegation depth)
+  are left alone.
+* **Context.** The session-start manual is registered as a system-prompt section (`order`
+  10100, after dsh's own), which dsh evaluates on every assemble. The system prompt is assembled
+  before `agent/pre-step`, so prompt-time context is added to that step as a user message with
+  `source.kind` `tokeneconomizer`. A redirect is appended to the accepted tool result as a text
+  block; a result another plugin blocked is left as it is.
+* **Transcript.** dsh's session store is not a file the plugin can read, so at `Stop` the plugin
+  writes `{header, events}` to `<state>/dsh-sessions/<session id>.json`, and
+  `tokeneconomizer/trace/dsh.py` reads it, mapping tool names to Claude Code's (`bash` to `Bash`,
+  `apply_patch` to `Edit`, `subagent` to `Task`, ...). A prompt is a user message whose source is
+  `user`. Usage is the sum of each step's `TokenUsage`, whose counts are disjoint;
+  `reasoningTokens` is not added to output. No DeepSeek price is in the table, so cost is the
+  labelled fallback. Nothing imports sessions from before the plugin.
+* **Offline, tested here:** the reader, tool names, usage, the headless reply, the host, the side
+  call's switch and patch, and, driving the plugin under node with a fake dsh, a fact folded from
+  five sessions reaching the sixth session's section, a redirect reaching the tool result, and
+  the plugin doing nothing for a subagent or under `TE_SIDECALL`. `tests/test_dsh.py` and
+  `tests/test_live_hooks.py` cover each.
+* **Verified on 0.2.2-rc.5,** headless with no model key: `--dump-config` lists the plugin's row;
+  a run fires all four events and the session is folded with one prompt; with a fact in place
+  and `TE_MICROSKILLS=envfacts`, the fact is in the system message dsh builds, after its own
+  sections.
+* **Verified live on 2026-11-24,** in the web UI (`dsh web`) with a live model: a new session
+  received the 154-character block at the end of its system message and the model ran the test
+  command the fact names; each turn was recorded with its tool calls; both sessions were folded
+  when the server exited and priced on the fallback. A session reopened after a restart is a
+  resume: its turn keys continue from its saved prompts, and one that started without facts gets
+  none (dsh replays the system message it saved). **Not verified:** the loop guard redirecting a
+  live turn, and the side call. The third-party `dsh-tui` 0.2.19 speaks the pre-0.1.5 `/api`
+  protocol and cannot connect to 0.2.x.
+* **Side call.** `dsh --profile headless --patch <overlay> --json -`, the prompt on stdin, the
+  overlay turning off every tool row (shell, files, search, skills, subagents, web, MCP resources
+  and the rest); all 18 ids match the rows `--dump-config` lists on 0.2.2-rc.5. It stays off
+  unless `TE_DSH_SIDECALL=1`.
+* **Tool pruning** is not available yet.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
@@ -798,8 +843,8 @@ by default with the guard), of micro-skills (its proposer, when it is on), and, 
 it, of `toolprune measure` on Claude Code. Those calls send
 **digests** — command templates, edited file basenames, error lines with paths and numbers
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
-`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat` / `droid exec`, the last only with
-`droid_sidecall` on), billed where your session is. The proposer keeps the digests of the last eight
+`copilot -p` / `pi -p` / `opencode run` / `grok -p` / `hermes chat` / `droid exec` / `dsh --profile headless`, the last two only with
+`droid_sidecall` on or `TE_DSH_SIDECALL=1`), billed where your session is. The proposer keeps the digests of the last eight
 sessions with its state, raw commands and output capped, so that each run sees more than the
 session that just ended. Sessions imported from Claude Code's history call no model, but their
 digests join that window, so the proposer's next call can include digests of sessions from
@@ -882,6 +927,9 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
   (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
   calls are off until `droid_sidecall` is on; see `docs/DROID.md`.
+* **DeepSeek Harness (experimental)** — micro-skills, the loop guard and session cost, on dsh
+  0.2.2-rc.5 (macOS, headless runs). No tool pruning and no history import. Side calls are off
+  unless `TE_DSH_SIDECALL=1`.
 * **Known gaps:**
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s

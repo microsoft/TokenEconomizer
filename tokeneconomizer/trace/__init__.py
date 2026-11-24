@@ -6,8 +6,8 @@ here and nowhere else:
   * `calls`    -- `load_trajectory`: any agent's log as ordered `(name, args, result, ok)` calls;
                   `call_cwds`, `tool_usage`, `strip_rtk_prefix`;
   * `catalog`  -- the tool list a session loaded, from whichever source the agent publishes;
-  * `antigravity`, `claude`, `codex`, `copilot`, `cursor`, `droid`, `grok`, `hermes`,
-                  `opencode`, `pi` -- each agent's own session file: usage, metadata,
+  * `antigravity`, `claude`, `codex`, `copilot`, `cursor`, `droid`, `dsh`, `grok`,
+                  `hermes`, `opencode`, `pi` -- each agent's own session file: usage, metadata,
                   prompt-turns, and the conversions that let the readers above handle it.
 
 Stdlib only.
@@ -36,6 +36,8 @@ from .droid import (droid_log_head, droid_prompt_count, droid_prompt_turns,
                     droid_safe_session_id, droid_session_calls, droid_session_header,
                     droid_session_to_claude, droid_session_usage, droid_sessions,
                     droid_version)
+from .dsh import (TOOL_NAMES as DSH_TOOL_NAMES, dsh_headless_reply, dsh_prompt_count,
+                  dsh_session_header, dsh_session_to_claude, dsh_session_usage)
 from .grok import (grok_json_reply, grok_prompt_count, grok_result, grok_session_to_claude,
                    grok_session_usage, grok_tool)
 from .hermes import (hermes_export, hermes_find_session, hermes_prompt_count, hermes_result,
@@ -65,6 +67,8 @@ __all__ = [
     "cursor_events_to_claude", "cursor_prompt_count",
     "droid_log_head", "droid_prompt_count", "droid_prompt_turns", "droid_safe_session_id",
     "droid_session_header", "droid_session_to_claude", "droid_session_usage", "droid_sessions",
+    "DSH_TOOL_NAMES", "dsh_headless_reply", "dsh_prompt_count", "dsh_session_header",
+    "dsh_session_to_claude", "dsh_session_usage",
     "grok_json_reply", "grok_prompt_count", "grok_result", "grok_session_to_claude",
     "grok_session_usage", "grok_tool",
     "hermes_export", "hermes_find_session", "hermes_prompt_count", "hermes_result",

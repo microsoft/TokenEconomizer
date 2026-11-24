@@ -70,7 +70,7 @@ mechanisms:
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
 with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent**,
-the **Antigravity CLI** and **Factory Droid**. Each italic
+the **Antigravity CLI**, **Factory Droid** and **DeepSeek Harness (dsh)**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the
@@ -190,6 +190,22 @@ micro-skills' paid proposer and the loop guard's judge stay off until `droid_sid
 (when on, they may use only Droid's read-only `Read` tool).
 See **[`docs/DROID.md`](docs/DROID.md)** for what works and how to import earlier sessions.
 
+**DeepSeek Harness (dsh)** (experimental; micro-skills, the loop guard and session cost, not tool pruning)
+
+```sh
+git clone https://github.com/microsoft/TokenEconomizer.git
+cd TokenEconomizer
+dsh plugin --profile headless add "link:$PWD/plugin/dsh"
+```
+
+Run the last line once for each dsh profile you use (it installs with pnpm), then restart dsh.
+Facts are added as a section of dsh's system prompt, and a redirect is appended to the tool
+result the model reads next. dsh keeps no session log the plugin can read, so the plugin writes
+its own record of each session to `~/.tokeneconomizer/dsh-sessions/`; earlier dsh sessions cannot
+be imported. Micro-skills' paid proposer and the loop guard's judge run `dsh --profile headless`
+with every tool off, and stay off unless `TE_DSH_SIDECALL=1` is set.
+See [its section](plugin/README.md#deepseek-harness-dsh) for what was verified.
+
 **Cursor Agent** (experimental)
 
 ```sh
@@ -272,6 +288,7 @@ To update:
 |---|---|
 | Claude Code, Copilot CLI, opencode | `git pull` in the clone |
 | Factory Droid | `git pull` in the clone, then the `build_plugin.py --droid` and install lines again |
+| DeepSeek Harness (dsh) | `git pull` in the clone, then restart dsh (the plugin is linked) |
 | Hermes Agent | `git pull` in the clone, then `hermes gateway restart` |
 | Antigravity CLI | build the bundle again and `agy plugin install` it |
 | Codex | `git pull` in the clone, then the `codex plugin add` line again |
@@ -294,6 +311,7 @@ uninstalling, using Copilot with your own model key, and troubleshooting.
 | Hermes Agent (experimental) | 0.22.5 | not tested |
 | Antigravity CLI (experimental) | agy 1.5.1 and 1.5.2, Windows 11, macOS and Linux | not tested |
 | Factory Droid (experimental) | 0.233.0, macOS (below) | not tested |
+| DeepSeek Harness (experimental) | dsh 0.2.2-rc.5, macOS (below) | not tested |
 
 The commands above were tested on the oldest and newest version in each range; newer versions
 have not been tested yet.
@@ -330,6 +348,11 @@ have not been tested yet.
   repeated it). Droid's TUI has no persistent per-tool setting (Factory issue #65), so tool
   pruning is not available; its session logs are read for micro-skills and the loop guard, and
   priced from the usage Droid writes beside each log. See [its notes](docs/DROID.md).
+- **DeepSeek Harness (dsh)** support is experimental: it was tested on 0.2.2-rc.5 only, on
+  macOS, in headless runs and in the web UI with a live model. A learned fact reaching the model
+  (which then ran the command it names), folding, session cost and resumed sessions were
+  observed there; the loop guard redirecting a live turn and the side call were not. Tool
+  pruning is not available. See [its notes](plugin/README.md#deepseek-harness-dsh).
 
 ### Everyday commands
 
@@ -347,13 +370,14 @@ commands. They have the same names on every agent; only the way you type them di
 | Hermes Agent | from a terminal: `~/.tokeneconomizer/bin/te --host hermes <command>` |
 | Antigravity CLI | from a terminal: `~/.tokeneconomizer/bin/te --host antigravity <command>` (on Windows: `<plugin>\scripts\te.cmd --host antigravity <command>`, in the repository) |
 | Factory Droid | `/tokeneconomizer-<command>` (e.g. `/tokeneconomizer-status`) |
+| DeepSeek Harness | from a terminal: `~/.tokeneconomizer/bin/te --host dsh <command>` |
 | a terminal, in the repository | `~/.tokeneconomizer/bin/te <command>` |
 
 | Command | What it does |
 |---|---|
 | `status` | what it learned and did here, and what your sessions cost |
 | `microskills` | the facts it injects, and those still forming |
-| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode, Hermes Agent, the Antigravity CLI or Factory Droid) |
+| `toolprune` | the tools it left out, and the evidence (not on Pi, opencode, Hermes Agent, the Antigravity CLI, Factory Droid or DeepSeek Harness) |
 | `toolprune restore` | give them back; they will not be removed again |
 | `config` | every setting in effect |
 | `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
@@ -404,6 +428,9 @@ terminal). When on, they run with `--only-tools Read`, so `Read` is the only too
 With them off, `microskills=envfacts` still learns and the loop guard keeps its rule-based
 backstop; only the paid fact proposer and the judge wait.
 
+On DeepSeek Harness the same calls run `dsh --profile headless` with every tool off, and stay
+off unless `TE_DSH_SIDECALL=1` is set; `dsh_paid_model` (`provider/model`) picks their model.
+
 Tool pruning counts prompts so that long sessions weigh more, and requires *m* sessions so that a
 single session never decides alone. It writes the deny list only once your sessions in the
 repository have been idle for *q* minutes (or, at the latest, a day after the list formed): a
@@ -447,6 +474,7 @@ what it can leave out differs:
 | Hermes Agent | nothing yet | — |
 | Antigravity CLI | nothing yet | — |
 | Factory Droid | nothing (no persistent per-tool setting in the TUI) | — |
+| DeepSeek Harness | nothing yet | — |
 
 Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it
 creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that says
@@ -506,7 +534,7 @@ agent's own limits; afterwards, `te status` counts the redirects and "still stuc
 | [`tokeneconomizer/loopguard`](tokeneconomizer/loopguard/) | Failure-loop intervention: the per-call guard and its per-repository envelope |
 | [`tokeneconomizer/trace`](tokeneconomizer/trace/) | Each agent's session log, read into one shape |
 | [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
-| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode and Hermes plugins, the Droid bundle (`.factory-plugin/`) |
+| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension, the opencode, Hermes and dsh plugins, the Droid bundle (`.factory-plugin/`) |
 | [`experiments`](experiments/) | The harness, launchers and task sets behind the paper's results |
 | [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior), `ARCHITECTURE.md` (how the package fits together) and `DROID.md` (the Factory Droid adapter) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |

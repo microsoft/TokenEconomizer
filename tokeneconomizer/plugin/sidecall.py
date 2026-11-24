@@ -50,6 +50,10 @@ so no extra API key is needed and the call is billed where the session is:
     `TE_DROID_SIDECALL=1`): Droid writes a session log of its own for the call, and cannot be
     left with no tool at all. Its usage is read from the call's result or from the settings file
     beside that log.
+  * DeepSeek Harness: `dsh --profile headless --json -` in a throwaway directory, with a
+    `--patch` overlay that disables every tool row of the base profile (`dsh_overlay`), on the
+    profile's default model unless `dsh_paid_model` names one. OFF unless `TE_DSH_SIDECALL=1`:
+    the run writes a session log of its own under `~/.dsh/sessions`.
 
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
@@ -987,9 +991,62 @@ def droid_call(prompt, model="", cli="droid", timeout=TIMEOUT_S):
     return text, eff
 
 
+def dsh_enabled(env=None):
+    """Whether `TE_DSH_SIDECALL` allows dsh side calls. OFF by default: a headless dsh run
+    writes a session log of its own under `~/.dsh/sessions`, and the tool-free profile it runs
+    with is not yet verified against a live model."""
+    env = os.environ if env is None else env
+    return str(env.get("TE_DSH_SIDECALL") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# The base profile's rows that register model-facing tools (dsh 0.2.2-rc.5,
+# `@deepseek-ai/dsh-base/cordis.patch.yml`), each disabled for a side call, which only answers.
+# `tool-executor-native` stays: it runs tools rather than registering any.
+DSH_TOOL_ROWS = ("tool-plugin-manager", "tool-working-directory", "tool-bash", "tool-pwsh",
+                 "tool-jobs", "tool-fs", "tool-fs-search", "tool-skill", "plan-mode",
+                 "tool-agent-team", "tool-subagent-control", "tool-subagent",
+                 "tool-subagent-fork", "tool-workflow", "tool-todo", "tool-goal", "tool-web",
+                 "mcp-resources")
+
+
+def dsh_overlay(model=""):
+    """The `--patch` overlay of a dsh side call: every tool row disabled and, when `model`
+    names one (`provider/model`, or a DeepSeek model id), the default model row replaced."""
+    rows = [f"- id: {row}\n  disabled: true\n" for row in DSH_TOOL_ROWS]
+    if model:
+        provider, _, mid = model.rpartition("/")
+        rows.append("- id: agent-default-model\n  config:\n"
+                    f"    provider: {json.dumps(provider or 'deepseek-official')}\n"
+                    f"    model: {json.dumps(mid)}\n")
+    return "".join(rows)
+
+
+def dsh_call(prompt, model="", cli="dsh", timeout=TIMEOUT_S):
+    """A text-only completion through `dsh --profile headless --json`, in a throwaway directory,
+    with every tool row disabled (`dsh_overlay`). The prompt goes on stdin (`-`). `TE_SIDECALL=1`
+    makes this plugin a no-op inside the nested run, so a side call cannot recurse."""
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        overlay = os.path.join(cwd, ".te-overlay.yml")
+        with open(overlay, "w", encoding="utf-8") as fh:
+            fh.write(dsh_overlay(model))
+        out = subprocess.run([*program(cli), "--profile", "headless", "--patch", overlay,
+                              "--json", "-"],
+                             input=prompt, capture_output=True, encoding="utf-8",
+                             errors="replace", timeout=timeout, env=_env(), cwd=cwd)
+    text, usage, _sid, _reason = trace.dsh_headless_reply(out.stdout)
+    if not text:
+        _no_reply("dsh", out)
+    eff = None
+    if usage:
+        usage["model"] = model.rpartition("/")[2] if model else "deepseek-flash"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "droid": "droid exec", "opencode": "opencode run",
-          "cursor": "cursor-agent -p", "hermes": "hermes chat"}
+          "cursor": "cursor-agent -p", "hermes": "hermes chat",
+          "dsh": "dsh --profile headless"}
 
 
 def call_name(host_name):
@@ -1046,4 +1103,10 @@ def _host_call(host_name, config):
         if not (droid_enabled() or getattr(config, "droid_sidecall", False)):
             return None
         return lambda prompt, _m="agent": droid_call(prompt, model=model)
+    if host_name == "dsh":
+        # Off unless TE_DSH_SIDECALL=1: see `dsh_enabled`. `microskills=envfacts` learns
+        # without a runner.
+        if not dsh_enabled():
+            return None
+        return lambda prompt, _m="agent": dsh_call(prompt, model=model)
     return lambda prompt, _m="agent": claude_call(prompt, model=model or "haiku", **kw)
