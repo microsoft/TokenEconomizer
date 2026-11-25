@@ -334,6 +334,25 @@ class ClaudeCode(Host):
             return attended == "0"
         return str(env.get("CLAUDE_CODE_ENTRYPOINT", "")).startswith("sdk")
 
+    def mechanism_trace(self, transcript_path, workdir):
+        """The session's log, followed by each of its subagents' (`<session>/subagents/`): the
+        calls a subagent made are only there, and belong to the session that spawned it, as its
+        tokens and tools do."""
+        main = super().mechanism_trace(transcript_path, workdir)
+        subs = trace.claude_subagent_files(main) if main else []
+        if not subs:
+            return main
+        out = os.path.join(workdir, "claude_trace.jsonl")
+        with open(out, "wb") as dst:
+            for path in [main] + subs:
+                try:
+                    with open(path, "rb") as src:
+                        data = src.read()
+                except OSError:
+                    continue
+                dst.write(data if not data or data.endswith(b"\n") else data + b"\n")
+        return out
+
     def session_usage(self, transcript_path):
         return trace.claude_session_usage(transcript_path)
 

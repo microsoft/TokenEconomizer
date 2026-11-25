@@ -143,6 +143,36 @@ def test_a_learned_fact_reaches_the_next_session_and_is_announced_once(env, repo
     assert starts[5]["hookSpecificOutput"]["additionalContext"] == ctx
 
 
+def subagent_trap_session(path, repo, i):
+    """The trap above, met by a Task subagent: the session's log holds only its `Agent` call,
+    and Claude Code logs the subagent's calls in `<session>/subagents/agent-*.jsonl`."""
+    lines = [{"type": "user", "message": {"role": "user", "content": f"fix bug {i}"}},
+             {"type": "assistant", "message": {
+                 "id": f"msg_agent_{i}", "model": "claude-opus-5-5", "role": "assistant",
+                 "usage": {"input_tokens": 10, "output_tokens": 50},
+                 "content": [{"type": "tool_use", "id": "tu_agent", "name": "Agent",
+                              "input": {"description": "fix the bug", "prompt": f"fix bug {i}"}}]}},
+             {"type": "user", "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "tu_agent", "content": "fixed"}]}}]
+    with open(path, "w") as fh:
+        fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
+    sub = os.path.join(os.path.splitext(path)[0], "subagents")
+    os.makedirs(sub)
+    trap_session(os.path.join(sub, "agent-a1.jsonl"), repo, i)
+    return path
+
+
+def test_a_fact_is_learned_from_the_calls_a_subagent_made(env, repo, tmp_path):
+    starts = [run_session(env, repo, f"s{i}",
+                          subagent_trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
+              for i in range(6)]
+    assert all(s == {} for s in starts[:4])
+    assert ("`pytest …` fails here with command not found; `python -m pytest …` works."
+            in starts[4]["hookSpecificOutput"]["additionalContext"])
+    ledger = store_for(env, repo).read_lines("ledger.jsonl")
+    assert [r["prompts"] for r in ledger] == [1] * 6        # the subagent's prompt is not one
+
+
 def test_micro_skills_is_off_by_default_and_learns_nothing(env, repo, tmp_path, monkeypatch,
                                                            capsys):
     """The sessions that teach the fact above leave nothing behind unless it is turned on."""
