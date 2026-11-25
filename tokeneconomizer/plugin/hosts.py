@@ -1130,6 +1130,13 @@ def copilot_home(env=None):
     return env.get("COPILOT_HOME") or os.path.join(os.path.expanduser("~"), ".copilot")
 
 
+_VSCODE_COPILOT_CHAT_DIR = "/github.copilot-chat/transcripts/"
+
+
+def _is_vscode_copilot_transcript(transcript_path):
+    return _VSCODE_COPILOT_CHAT_DIR in str(transcript_path or "").replace("\\", "/").lower()
+
+
 class Copilot(Host):
     """The GitHub Copilot CLI, through `plugin/.github/plugin/plugin.json` and its hook file."""
     name = "copilot"
@@ -1138,6 +1145,9 @@ class Copilot(Host):
     # 1.0.102 rebuilds a resumed conversation's first message without it, dropping the facts
     # and missing the prompt cache; the same text given again rebuilds it as it was.
     keeps_start_context = False
+
+    def __init__(self, vscode_chat=False):
+        self._vscode_chat = vscode_chat
 
     def transcript(self, p):
         # Only Stop carries `transcript_path`; the log's location is fixed by the session id.
@@ -1149,9 +1159,13 @@ class Copilot(Host):
         return p.get("cwd") or env.get("COPILOT_PROJECT_DIR") or os.getcwd()
 
     def context(self, event, text):
+        if self._vscode_chat:
+            return super().context(event, text)
         return {"additionalContext": text}
 
     def notice(self, text):
+        if self._vscode_chat:
+            return super().notice(text)
         return {PROGRESS: [text]}
 
     def headless(self, env, transcript=None):
@@ -1163,7 +1177,7 @@ class Copilot(Host):
 
     def tool_call(self, p):
         args = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
-        resp = _failure_response(p) or p.get("tool_result")
+        resp = _failure_response(p) or p.get("tool_result") or p.get("tool_response")
         return str(p.get("tool_name") or ""), args, response_text(resp), _exit_code(resp)
 
     def session_usage(self, transcript_path):
@@ -1177,6 +1191,8 @@ class Copilot(Host):
         # SessionEnd hook returns (observed order: hook.end, then session.shutdown), so the
         # detached fold can arrive first. Wait for it while the log is still fresh; an old
         # log without one belongs to a killed session and will never get one.
+        if _is_vscode_copilot_transcript(transcript_path):
+            return
         deadline = time.time() + wait_s
         while time.time() < deadline:
             try:
@@ -1367,6 +1383,8 @@ def detect(payload, env=None, hint=None):
         return Codex()
     if "/session-state/" in sp and tp.endswith("events.jsonl"):
         return Copilot()
+    if _is_vscode_copilot_transcript(tp):
+        return Copilot(vscode_chat=True)
     # Droid's sessions live under `.factory/sessions/<workspace>/<id>.jsonl`; its plugin hooks
     # also mark the environment. The transcript test comes first, so a Droid session started
     # from inside another agent is still Droid's.
