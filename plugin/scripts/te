@@ -6,6 +6,11 @@ if [ "${OS:-}" = Windows_NT ]; then
   case $self in *\\*) self=$(printf '%s' "$self" | tr '\\' '/') ;; esac
 fi
 dir=$(CDPATH= cd -- "${self%/*}" && pwd)
+# Git Bash: `pwd` gives /c/Users/...; native Python reads that as C:\c\Users\... once MSYS path
+# conversion is off (MSYS_NO_PATHCONV=1, as in hooks), so pass it the Windows form instead.
+if [ "${OS:-}" = Windows_NT ]; then
+  dir=$(CDPATH= cd -- "$dir" && pwd -W 2>/dev/null) || dir=$(CDPATH= cd -- "${self%/*}" && pwd)
+fi
 # Session logs are UTF-8; without this, Python on Windows reads them in the ANSI code page.
 export PYTHONUTF8=1
 outside_windowsapps() {
@@ -32,10 +37,27 @@ if [ "${OS:-}" = Windows_NT ]; then
     exec "$py" "$dir/te_bootstrap.py" cli "$@"
   done
 else
-  for py in "${TE_PYTHON:-}" python3 python; do
-    [ -n "$py" ] && command -v "$py" >/dev/null 2>&1 || continue
-    exec "$py" "$dir/te_bootstrap.py" cli "$@"
+  # TE_PYTHON is the person's own choice: it runs as named. Otherwise the first python3 on PATH
+  # can be older than the bootstrap's minimum (macOS /usr/bin/python3 is 3.9, and an agent's
+  # hook PATH is often not a login shell's), which would make the plugin a silent no-op with a
+  # newer Python installed: take the first one new enough. With none, run the first one too old
+  # (the probe exits 1), so the bootstrap still fails open / says what it needs; a name that
+  # runs no Python (a pyenv shim with no version set exits 127) is passed over. The probe
+  # skips `site` (-E -S).
+  if [ -n "${TE_PYTHON:-}" ] && command -v "$TE_PYTHON" >/dev/null 2>&1; then
+    exec "$TE_PYTHON" "$dir/te_bootstrap.py" cli "$@"
+  fi
+  probe='import sys; sys.exit(sys.version_info < (3, 10))'
+  old=
+  for py in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -E -S -c "$probe" </dev/null >/dev/null 2>&1
+    case $? in
+      0) exec "$py" "$dir/te_bootstrap.py" cli "$@" ;;
+      1) [ -n "$old" ] || old=$py ;;
+    esac
   done
+  [ -n "$old" ] && exec "$old" "$dir/te_bootstrap.py" cli "$@"
 fi
 echo "te: no python3 on PATH (set TE_PYTHON)" >&2
 exit 1

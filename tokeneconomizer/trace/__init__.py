@@ -12,7 +12,9 @@ here and nowhere else:
 
 Stdlib only.
 """
-from .calls import RTK_PREFIX_RE, call_cwds, load_trajectory, strip_rtk_prefix, tool_usage
+from .calls import (RTK_PREFIX_RE, RTK_WORDS, SHELL_TOOLS, TOOL_ROLES, call_cwds,
+                    load_trajectory, parse_tool_role, set_tool_roles, strip_rtk_prefix,
+                    tool_kind, tool_usage)
 from .catalog import (CODEX_DEFAULT_TOOL_CATALOG, catalog_sources, parse_catalog,
                       parse_catalog_with_source, parse_tool_catalog, parse_tool_catalog_claude,
                       parse_tool_catalog_flat, parse_tool_names_copilot)
@@ -31,8 +33,9 @@ from .antigravity import (antigravity_prompt_count, antigravity_read,
                           antigravity_session_to_claude, antigravity_session_usage)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
 from .droid import (droid_log_head, droid_prompt_count, droid_prompt_turns,
-                    droid_safe_session_id, droid_session_header, droid_session_to_claude,
-                    droid_session_usage, droid_sessions)
+                    droid_safe_session_id, droid_session_calls, droid_session_header,
+                    droid_session_to_claude, droid_session_usage, droid_sessions,
+                    droid_version)
 from .grok import (grok_json_reply, grok_prompt_count, grok_result, grok_session_to_claude,
                    grok_session_usage, grok_tool)
 from .hermes import (hermes_export, hermes_find_session, hermes_prompt_count, hermes_result,
@@ -44,7 +47,8 @@ from .pi import (pi_active_branch, pi_json_reply, pi_prompt_count, pi_session_he
                  pi_session_to_claude, pi_session_usage)
 
 __all__ = [
-    "RTK_PREFIX_RE", "call_cwds", "load_trajectory", "strip_rtk_prefix", "tool_usage",
+    "RTK_PREFIX_RE", "RTK_WORDS", "SHELL_TOOLS", "TOOL_ROLES", "call_cwds", "load_trajectory",
+    "parse_tool_role", "set_tool_roles", "strip_rtk_prefix", "tool_kind", "tool_usage",
     "CODEX_DEFAULT_TOOL_CATALOG", "catalog_sources", "parse_catalog", "parse_catalog_with_source",
     "parse_tool_catalog", "parse_tool_catalog_claude", "parse_tool_catalog_flat",
     "parse_tool_names_copilot",

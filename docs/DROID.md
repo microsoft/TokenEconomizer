@@ -1,7 +1,16 @@
 # TokenEconomizer on Factory Droid
 
 Droid support is experimental. It was built and tested against Droid `0.233.0` on macOS; no
-other version has been tested.
+other version has been tested. The log-based mechanisms (history import, folding, session
+cost, envelope learning) were also tested against Droid `1.12.0` and `1.12.1` on macOS.
+
+On Droid `1.12.0` and `1.12.1`, `PostToolUse` fires only for successful tool calls: a failed
+call produces no hook event at all, so the loop guard's live path cannot see failure loops
+as they happen. The plugin recovers the failures from the session log instead -- at the
+next hook, and at `Stop` -- so turn records stay correct and the judge can still fire, one
+call late, on a mixed turn. On an all-failure turn no hook fires at all, so there is no
+mid-turn intervention there, only a correct turn record. This is a Droid 1.12.x behavior,
+not a plugin bug: the session log still carries `is_error` for every failed call.
 
 ## What works, and what does not
 

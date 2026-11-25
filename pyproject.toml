@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Experience-driven black-box cost control for coding agents (Claude Code, Codex, Copilot CLI, Pi), as a plugin."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 authors = [{ name = "TokenEconomizer authors" }]
 keywords = ["llm-agents", "cost-optimization", "swe-bench", "token-economy"]
 

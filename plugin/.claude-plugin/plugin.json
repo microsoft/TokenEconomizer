@@ -7,7 +7,7 @@
     "name": "TokenEconomizer authors"
   },
   "repository": "https://github.com/microsoft/TokenEconomizer",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "commands": "./slash-commands/",
   "keywords": [
     "cost",
