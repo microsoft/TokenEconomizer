@@ -1,0 +1,26 @@
+{
+  "name": "tokeneconomizer-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TokenEconomizer for DeepSeek Harness (dsh): short repository facts learned from earlier sessions, added to the system prompt, and a guard that redirects a turn stuck in a failing loop.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cost",
+    "tokens"
+  ],
+  "license": "MIT",
+  "repository": "https://github.com/microsoft/TokenEconomizer",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

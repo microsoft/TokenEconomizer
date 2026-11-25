@@ -73,7 +73,7 @@ def build_droid(out):
                         "__pycache__", "*.pyc", ".pytest_cache", "lib", ".DS_Store",
                         ".claude-plugin", ".codex-plugin", ".cursor-plugin", ".github",
                         ".antigravity-plugin", "hooks.json",
-                        "codex-skills", "hermes", "opencode", "pi", "slash-commands",
+                        "codex-skills", "dsh", "hermes", "opencode", "pi", "slash-commands",
                         "package.json", "*.md.bak"))
     shutil.copytree(os.path.join(REPO, "tokeneconomizer"),
                     os.path.join(plugin_out, "lib", "tokeneconomizer"), ignore=IGNORE)

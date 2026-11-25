@@ -342,6 +342,11 @@ def _stuck(host, n=40):
                 if k % 2 == 0 else ("bash", {"command": "pytest -q"},
                                     {"content": fail, "isError": True, "exit_code": 1})
                 for k in range(n)]
+    if host == "dsh":
+        return [("edit", {"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"},
+                 {"content": "ok", "isError": False}) if k % 2 == 0 else
+                ("bash", {"command": "pytest -q"},
+                 {"content": fail, "isError": True, "exit_code": 1}) for k in range(n)]
     return [("Edit", {"path": "/r/pkg/a.py"}, {"result_type": "success",
                                                 "text_result_for_llm": "ok"})
             if k % 2 == 0 else ("Bash", {"command": "pytest -q"}, {
@@ -350,7 +355,7 @@ def _stuck(host, n=40):
             for k in range(n)]
 
 
-@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi", "droid"])
+@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi", "droid", "dsh"])
 @pytest.mark.parametrize("mode", ["interactive", "headless"])
 @pytest.mark.parametrize("setting", ["nudge", "stop"])
 def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
@@ -380,9 +385,9 @@ def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
     assert len(stuck) == 1                                             # one notice
     hint = hosts.HOSTS[host]().stop_hint(mode == "headless")
     assert stuck[0].endswith(hint)
-    if host == "claude":
-        # Claude Code keeps hook messages out of the main view, so the notice also goes to the
-        # model, word for word, to pass on in its reply; the redirect comes first.
+    if host in ("claude", "dsh"):
+        # Claude Code and dsh keep hook messages out of the main view, so the notice also goes
+        # to the model, word for word, to pass on in its reply; the redirect comes first.
         redirect, relay = to_model
         assert "Process check (automated)" in redirect
         assert stuck[0] in relay and "it does not change your task" in relay

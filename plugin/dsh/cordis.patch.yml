@@ -1,0 +1,5 @@
+# Bundle patch for tokeneconomizer-dsh: one row that mounts the plugin. It injects no service,
+# so it starts in every profile (web, headless, sdk, acp).
+- insert:
+    - id: tokeneconomizer
+      name: tokeneconomizer-dsh

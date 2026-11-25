@@ -1317,9 +1317,63 @@ class Droid(Host):
         return folder == os.path.abspath(root).replace("\\", "-").replace("/", "-")
 
 
+class Dsh(Host):
+    """DeepSeek Harness (deepseek-ai/dsh), through the plugin in `plugin/dsh/`.
+
+    dsh has no hook protocol of its own -- plugins are Cordis modules on its event bus -- so
+    the plugin speaks THIS one on dsh's behalf, as the Pi extension does: it calls the same
+    dispatcher with a Claude-shaped payload per event and applies the answer with dsh's own
+    levers (a per-agent system-prompt section, the model-facing content of a tool result).
+    What it sends:
+
+      * `prompt_id`, which it numbers itself, for the turn identity dsh does not stamp;
+      * `transcript_path`, the session's events as JSON (`trace.dsh_session_to_claude`),
+        written at the end of every turn, since dsh's own log is Zstandard-compressed;
+      * dsh's tool names (`bash`, `read`, `edit`, ...) with their own arguments, and
+        `tool_response = {content, isError, exit_code}`, `exit_code` from the bash result;
+      * dsh's mode in `TE_DSH_MODE`: `headless` (`dsh --profile headless`) or `interactive`.
+
+    The person works in dsh's web or terminal UI, which does not show a plugin's messages, so
+    notices go through the model (`relays_notices`). A resumed session is a new agent whose
+    section is registered again; the same text rebuilds it as it was (`keeps_start_context`).
+    """
+    name = "dsh"
+    prompt_context = True              # the plugin adds it to the agent's section
+    relays_notices = True
+    keeps_start_context = False
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def tool_call(self, p):
+        name, args, text, code = super().tool_call(p)
+        if name in ("write", "edit", "read"):
+            path = args.get("file_path") or args.get("path") or ""
+            return ("create" if name == "write" else name), dict(args, path=path), text, code
+        if name == "apply_patch":
+            patch = args.get("input") if isinstance(args.get("input"), str) else ""
+            paths = _PATCH_FILE_RE.findall(patch)
+            return "edit", {"path": paths[0] if paths else "", "paths": paths}, text, code
+        return name, args, text, code
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_DSH_MODE", "")).strip() == "headless"
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "dsh_trace.jsonl")
+        n = trace.dsh_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.dsh_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.dsh_session_usage(transcript_path)
+
+
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
-         "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
-         "antigravity": Antigravity}
+         "dsh": Dsh, "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes,
+         "grok": Grok, "antigravity": Antigravity}
 
 
 def default_host(env=None, recent=None):
