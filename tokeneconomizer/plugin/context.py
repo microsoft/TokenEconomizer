@@ -10,6 +10,17 @@ from .config import LiveConfig, load_config
 from .paths import RepoId, repo_identity, repo_state_dir, state_root
 from .store import Store
 
+# The background `te` runs in the repository, and a checkout decides what sits there: with
+# `python -m` the working directory came first on sys.path, and an inherited PYTHONPATH with an
+# empty, `.` or relative element puts it there too, so a `json.py`, `runpy.py`,
+# `sitecustomize.py` or `tokeneconomizer/` it carries would run with the plugin's rights,
+# outside the agent's sandbox. `-E` ignores every PYTHON* variable (UTF-8 mode comes from
+# `-X utf8` instead), `-s` the user site, and the bootstrap drops the empty entry `-c` adds
+# and puts the plugin's own directory, its first argument, in front before anything is
+# imported. `-P` would do the last part only from Python 3.11 on.
+_RUN_CLI = ("import sys; sys.path[:] = [sys.argv.pop(1)] + [p for p in sys.path if p]; "
+            "import runpy; "
+            "runpy.run_module('tokeneconomizer.plugin.cli', run_name='__main__', alter_sys=True)")
 
 @dataclass
 class LiveContext:
@@ -83,8 +94,9 @@ class LiveContext:
         env["PYTHONPATH"] = core + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH")
                                     else "")
         # It reads session logs and the agents' output, which are UTF-8 whatever the locale.
+        # Both variables stay for what it starts in turn; `te` itself ignores them (`-E`).
         env["PYTHONUTF8"] = "1"
-        cmd = [sys.executable, "-m", "tokeneconomizer.plugin.cli", *argv,
+        cmd = [sys.executable, "-E", "-s", "-X", "utf8", "-c", _RUN_CLI, core, *argv,
                "--host", self.host.name, "--cwd", self.repo.root]
         self.store.ensure()
         if os.name == "nt":
