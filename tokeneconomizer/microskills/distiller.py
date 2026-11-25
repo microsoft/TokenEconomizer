@@ -21,6 +21,7 @@ import os
 import re
 
 from ..names import repo_filename
+from ..pricing import runner_effective_or_approx
 from ..trace import SHELL_TOOLS, call_cwds, tool_kind
 from ..trace.claude import CONVERSATION
 from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
@@ -667,8 +668,9 @@ class Distiller(Forgetting):
         except Exception:
             self.last_propose = self.now
             return
-        if eff is not None:
-            self.opt_tokens += eff
+        # Charged as every paid side call is: the usage the runner recovered, else an estimate on
+        # the same basis (prompt at 1x, reply at 5x), so a CLI that reports none is not free.
+        self.opt_tokens += runner_effective_or_approx(self.runner, prompt, raw or "", eff)
         exts, facts = parse_payload(raw)
         for e in exts:
             self._admit_extractor(e)              # append-only
