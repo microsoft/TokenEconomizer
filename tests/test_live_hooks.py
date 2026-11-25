@@ -1205,6 +1205,25 @@ def test_only_a_signed_out_answer_pauses_the_model_calls(env, monkeypatch):
     assert sidecall.resume("claude") and sidecall.paused("claude") is None
 
 
+PI_NO_PROVIDER = ("No API key found for the selected model.\n\nUse /login to log into a provider "
+                  "via OAuth or API key. See:\n  /pi/docs/providers.md\n  /pi/docs/models.md")
+
+
+def test_a_paused_pi_names_the_settings_for_a_provider_from_an_extension(env, repo, tmp_path,
+                                                                        monkeypatch):
+    """Pi answers with `/login` when it is not signed in, and also when the model's provider
+    comes from an extension, which the plugin's calls do not load. The notice at the next start
+    names the settings for the second."""
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", env["TOKENECONOMIZER_HOME"])
+    sidecall._no_reply("pi", subprocess.CompletedProcess([], 1, "", PI_NO_PROVIDER))
+    start = run_session(env, repo, "pi0", pi_trap_session(str(tmp_path / "p0.jsonl"), repo, 0),
+                        host="pi")
+    notice = start["systemMessage"]
+    assert "not signed in" in notice and "`pi_extensions`" in notice and "`pi_cli`" in notice
+
+
 def test_a_failed_copilot_tool_reaches_the_guard(env, repo, tmp_path, monkeypatch):
     copilot_session(env, repo, tmp_path, "f", [
         ("view", {"path": f"{repo}/nope.py"}, "Path does not exist", False)], monkeypatch)
