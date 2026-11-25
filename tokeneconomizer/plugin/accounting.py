@@ -68,7 +68,10 @@ def fmt_tokens(n):
     if n is None:
         return "n/a"
     n = float(n)
-    for unit, div in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
-        if abs(n) >= div:
-            return f"{n / div:.1f}{unit}"
-    return f"{n:.0f}"
+    units = (("", 1, 0), ("k", 1e3, 1), ("M", 1e6, 1), ("B", 1e9, 1))
+    i = max((j for j, (_, div, _) in enumerate(units) if abs(n) >= div), default=0)
+    # A figure that rounds up to 1000 of its unit is one of the next: 999,950 is 1.0M, not 1000.0k.
+    while i < len(units) - 1 and abs(round(n / units[i][1], units[i][2])) >= 1000:
+        i += 1
+    unit, div, places = units[i]
+    return f"{n / div:.{places}f}{unit}"
