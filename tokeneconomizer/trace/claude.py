@@ -95,16 +95,33 @@ def _is_notification(ev):
     return isinstance(origin, dict) and origin.get("kind") == "task-notification"
 
 
+def _is_local_command_caveat(ev):
+    """Is this the meta entry Claude Code writes before a local command it runs itself
+    (`/context`, `/usage`, `/clear`, ...)? The command's own entry is its child, and the
+    model never sees it (2.1.325: "was run directly in Claude Code, not sent to you")."""
+    if ev.get("type") != "user" or not ev.get("isMeta"):
+        return False
+    content = (ev.get("message") or {}).get("content")
+    return isinstance(content, str) and content.startswith("<local-command-caveat>")
+
+
 def claude_prompt_count(transcript_path):
     """How many prompts the person gave a Claude Code session (`_is_prompt`, less the
-    background-task notifications)."""
+    background-task notifications and the local commands Claude Code ran itself)."""
     n = 0
+    caveats = set()
     for line in _lines(transcript_path):
         try:
             ev = json.loads(line)
         except ValueError:
             continue
-        n += isinstance(ev, dict) and _is_prompt(ev) and not _is_notification(ev)
+        if not isinstance(ev, dict):
+            continue
+        if _is_local_command_caveat(ev) and isinstance(ev.get("uuid"), str):
+            caveats.add(ev["uuid"])
+        parent = ev.get("parentUuid")
+        n += (_is_prompt(ev) and not _is_notification(ev)
+              and not (isinstance(parent, str) and parent in caveats))
     return n
 
 
