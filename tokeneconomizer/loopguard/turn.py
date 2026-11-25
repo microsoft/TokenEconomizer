@@ -90,7 +90,12 @@ VERIFY_RE = re.compile(
     r"ruby(?-i:\s+(?:-[Ir](?:\S+|\s+[^\s\-]\S*)|-C\s*\S+|-W[0-2]?(?::\S+)?|"
     r"--[\w\-]+(?:=\S+)?|-[abdf-zABDF-Z]+))*\s+"
     r"(?:[\w.\-~]*/)*(?:test_[\w.\-]*|[\w.\-]*_(?:test|spec))\.rb|"
-    r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
+    r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test|"
+    # `hatch test` (Hatch 1.10+: pytest in its test environment), but not with `-s`/`--show`,
+    # which only shows the environments; short flags combine (`-ps`), and after `--` they are
+    # pytest's (`hatch test -- -s` runs the tests)
+    r"hatch\s+test(?!(?:\s+(?!--(?:\s|$))\S+)*?\s+(?:--show|-[rpca]*s[rpca]*)(?:\s|$)))"
+    r"(?![\w.\-/])")
 
 # A command line's exit status is its LAST command's, so it may not be the test run's: `npm test
 # 2>&1 | tail -n 8` exits with `tail`'s status, `pytest | grep FAILED` with `grep`'s, `python -m
