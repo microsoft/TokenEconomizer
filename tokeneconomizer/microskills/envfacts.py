@@ -184,7 +184,7 @@ def typed_ok(o):
 
 
 _RUN_WORDS = frozenset({"run", "npx", "uv", "uvx", "pipx", "poetry", "pipenv", "conda",
-                        "micromamba", "-m", "python", "python3"})
+                        "micromamba", "pixi", "-m", "python", "python3"})
 
 
 def _repairs(form, a_form, intent):
