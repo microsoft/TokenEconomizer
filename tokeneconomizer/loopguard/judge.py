@@ -26,18 +26,31 @@ STUCK_JUDGE_SYSTEM = (
     "\"reason\": \"<short leakage-safe justification>\"}."
 )
 
+STUCK_JUDGE_WITH_NUDGE_SYSTEM = (
+    STUCK_JUDGE_SYSTEM[:-1]
+    + " When stuck is true, also include \"nudge\": a SHORT 2-4 sentence redirect addressed "
+    "to the agent that (1) names the specific repetitive pattern in the digest and (2) "
+    "proposes a MATERIALLY DIFFERENT next step (without telling it to stop, naming line "
+    "numbers, or referencing unseen identifiers); set \"nudge\" to \"\" when stuck is false.\n"
+    "Return ONLY a JSON object: {\"stuck\": bool, \"confidence\": <0.0-1.0>, "
+    "\"reason\": \"<short leakage-safe justification>\", \"nudge\": \"<redirect or empty>\"}."
+)
 
-def llm_stuck_judge(digest, runner, model="agent"):
+
+def llm_stuck_judge(digest, runner, model="agent", with_nudge=False):
     """The sampled stuck judge. `digest` is a leakage-safe recent-process string
     (`SpiralState.recent_digest()`). Returns a verdict dict
     {stuck: bool|None, confidence: float, reason: str, _tokens: number}; stuck=None on any
     failure (the caller treats None/ambiguous by falling back to the envelope gate).
+    When `with_nudge` is true and the model includes a non-empty `nudge` alongside
+    `stuck=true`, `_nudge` carries it so callers can skip a second redirect-writer call.
     `_tokens` is the REAL token cost of this paid judge call (input+output+cache, from the
     runner's usage block; a char-based approximation if the runner couldn't recover it) so
     the caller can charge it to the ledger. 0 when no call was made."""
     if runner is None or not digest:
         return {"stuck": None, "confidence": 0.0, "reason": "no-runner", "_tokens": 0}
-    prompt = (STUCK_JUDGE_SYSTEM + "\n\nRecent process digest:\n" + digest
+    system = STUCK_JUDGE_WITH_NUDGE_SYSTEM if with_nudge else STUCK_JUDGE_SYSTEM
+    prompt = (system + "\n\nRecent process digest:\n" + digest
               + "\n\nReturn the JSON verdict:")
     try:
         raw, _real = runner(prompt, model)
@@ -58,6 +71,10 @@ def llm_stuck_judge(digest, runner, model="agent"):
                                 and obj["stuck"] is not None else None)
             verdict["confidence"] = max(0.0, min(1.0, float(obj.get("confidence", 0) or 0)))
             verdict["reason"] = str(obj.get("reason", ""))[:160]
+            if with_nudge and verdict["stuck"]:
+                nudge = str(obj.get("nudge") or "").strip()[:1200]
+                if nudge:
+                    verdict["_nudge"] = nudge
         except Exception:
             pass
     return verdict

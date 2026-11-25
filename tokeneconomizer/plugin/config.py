@@ -99,7 +99,9 @@ agent's hooks.
 import json
 import math
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
+from urllib.parse import urlsplit
 
 from ..trace import TOOL_ROLES, parse_tool_role
 
@@ -221,6 +223,9 @@ class LiveConfig:
     local_model: str = "off"
     local_roles: list = field(default_factory=lambda: ["judge"])
     local_judge_confidence: float = 0.9
+    sidecall_url: str = ""
+    sidecall_model: str = ""
+    sidecall_key_env: str = ""
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
@@ -309,6 +314,15 @@ class LiveConfig:
                 self.warnings.append(f"{source}: tool_roles {bad!r} not `tool=role` with a role "
                                      f"in {tuple(TOOL_ROLES)}")
                 return False
+        if key == "sidecall_url" and v:
+            parsed = urlsplit(v)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                self.warnings.append(f"{source}: sidecall_url={v!r} must be an http(s) URL")
+                return False
+        if key == "sidecall_key_env" and v and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", v):
+            self.warnings.append(
+                f"{source}: sidecall_key_env={v!r} must name an environment variable, not a key")
+            return False
         if key == "local_roles":
             bad = [r for r in v if r not in LOCAL_ROLES]
             if bad:
@@ -356,6 +370,8 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
         "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
         "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
+        "TE_SIDECALL_URL": "sidecall_url", "TE_SIDECALL_MODEL": "sidecall_model",
+        "TE_SIDECALL_KEY_ENV": "sidecall_key_env",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
         "TE_PROPOSE_EVERY": "microskills_propose_every",
