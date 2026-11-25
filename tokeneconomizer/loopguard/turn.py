@@ -102,8 +102,11 @@ VERIFY_RE = re.compile(
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
-# A runner asked for its help, version or test list, not to run the tests.
-_NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
+# A runner asked for its help, version or test list, not to run the tests; and pytest asked
+# only to show its fixtures, markers, setup plan or cache, or to set up fixtures, which runs none.
+_NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*|"
+                          r"--fixtures(?:-per-test)?|--funcargs|--markers|--setup-plan|"
+                          r"--setup-only|--cache-show(?:=\S*)?)(?!\S)")
 # What may precede the command itself: `FOO=1 timeout 60 npm test`, `env -u VAR`, `nice -n 10`,
 # `sudo -u bob`, `time -p`, and a launcher that runs it in the project's environment, `uv run
 # pytest`, `npx jest`, `bundle exec rspec`. `command -v pytest` looks the runner up; only
