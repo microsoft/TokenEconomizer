@@ -1158,6 +1158,44 @@ def test_copilot_learns_from_its_own_logs_and_injects_at_top_level(env, repo, tm
     assert len(turns) == 5 and all(t["tool_calls"] == 2 for t in turns)
 
 
+def test_copilot_folds_a_late_transcript_once(env, repo, tmp_path):
+    env["TE_TOOLPRUNE"] = "propose"
+    transcript = str(tmp_path / "late" / "events.jsonl")
+    run_session(env, repo, "late", transcript, "copilot")
+    st = store_for(env, repo, "copilot")
+    assert st.read_lines("ledger.jsonl") == []
+    assert "late" not in (st.read("folded.json") or {})
+
+    copilot_events(transcript, COPILOT_TRAP, cwd=repo, sid="late")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "next", "source": "new",
+               "cwd": repo}, "copilot")
+    ctx = LiveContext.build(hosts.Copilot(), repo, env)
+    assert fold.fold_session(ctx, "late") is None           # the manual fold also de-duplicates
+    (rec,) = st.read_lines("ledger.jsonl")
+    assert rec["session_id"] == "late" and "error" not in rec
+    assert rec["requests"] == 4 and rec["output_tokens"] == 80
+    assert st.read("injection.json")["sessions"] == 1
+    assert st.read("untool.json")["sessions"] == 1
+
+
+def test_copilot_records_an_unreadable_transcript_after_the_retry_window(env, repo, tmp_path):
+    transcript = str(tmp_path / "missing" / "events.jsonl")
+    run_session(env, repo, "missing", transcript, "copilot")
+    st = store_for(env, repo, "copilot")
+    assert st.read_lines("ledger.jsonl") == []
+
+    name = "sessions/missing.json"
+    session = st.read(name)
+    session["ended"] -= hosts.Copilot.FOLD_RETRY_S + 1
+    st.write(name, session)
+    ctx = LiveContext.build(hosts.Copilot(), repo, env)
+    assert fold.fold_session(ctx, "missing")["error"] == "transcript unreadable"
+    assert "missing" in st.read("folded.json")
+    assert "missing" not in fold.pending_sessions(ctx)
+    assert fold.fold_session(ctx, "missing") is None
+    assert len(st.read_lines("ledger.jsonl")) == 1
+
+
 SIGNED_OUT = ("Error: No authentication information found. Copilot can be authenticated with "
               "GitHub using an OAuth Token or a Fine-Grained Personal Access Token. To "
               "authenticate, you can use any of the following methods: Start 'copilot' and run "
