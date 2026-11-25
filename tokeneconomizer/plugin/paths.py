@@ -67,6 +67,8 @@ def ensure_launcher(env=None):
     changes, as an installed copy's path does across updates."""
     import shlex
     import sys
+    import threading
+    from .store import _replace
     env = os.environ if env is None else env
     plugin = env.get("TE_PLUGIN_ROOT")
     target = os.path.join(plugin, "scripts", "te") if plugin else ""
@@ -101,13 +103,16 @@ def ensure_launcher(env=None):
         except OSError:
             pass
         os.makedirs(os.path.dirname(launcher), exist_ok=True)
-        tmp = "%s.%d.tmp" % (launcher, os.getpid())
+        # The thread too: one Hermes gateway runs its sessions' hooks as threads of one process,
+        # and two of them sharing a temporary file would rename it out from under each other.
+        tmp = "%s.%d.%d.tmp" % (launcher, os.getpid(), threading.get_ident())
         # newline="\n": text mode on Windows would end each line with CRLF, and `sh` would pass
         # the trailing "\r" on as an argument.
         with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(body)
         os.chmod(tmp, 0o700)
-        os.replace(tmp, launcher)
+        # Windows refuses to replace a file another thread is reading or replacing.
+        _replace(tmp, launcher)
     return path
 
 
