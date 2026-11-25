@@ -25,9 +25,10 @@ import tempfile
 import time
 
 from .. import trace
+from ..pricing import approx_tokens
 from . import accounting, denylist, sidecall
 from . import adapter as live_adapter
-from .adapter import LiveAdapter, load_catalog
+from .adapter import LiveAdapter, load_catalog, load_catalog_tokens
 from .hosts import FoldLater
 
 STALE_S = 600          # an unfolded session whose transcript is quiet this long is over
@@ -212,6 +213,11 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     before = dict(stage.tool_unused_streaks)
     stage.after_task({"instance_id": session_id},
                      {"untooled_excluded": stage._exclude_tools}, run_dir, srow)
+    if host == "opencode":
+        for t in list(stage.catalog_tools):
+            if t.endswith("_*") and any(u != t and u.startswith(t[:-1]) for u in stage.used_tools):
+                stage.used_tools.add(t)
+                stage.tool_unused_streaks[t] = 0
     for t, n in stage.tool_unused_streaks.items():
         if n == 0:
             prompt_streaks[t] = 0                          # used
@@ -229,9 +235,18 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
                 live_streaks[t] = live_streaks.get(t, 0) + 1
                 live_prompts[t] = live_prompts.get(t, 0) + (1 if prompts is None else prompts)
     sessions = int(st.get("sessions", 0)) + 1
+    known_tokens = {} if imported else load_catalog_tokens(ctx.root, host)
+    tool_tokens = {}
+    for t in sorted(stage.catalog_tools):
+        if t in known_tokens:
+            tool_tokens[t] = known_tokens[t]
+        elif stage.catalog_desc.get(t):
+            tool_tokens[t] = approx_tokens(stage.catalog_desc[t])
+    min_tokens = getattr(ctx.config, "toolprune_min_tokens", 0) or 0
     raw = [t for t in stage.build_tools({"instance_id": f"after-{session_id}"}, sessions) or []
            if enough_evidence(stage.tool_unused_streaks.get(t, 0), prompt_streaks.get(t, 0),
-                              ctx.config, high_risk=t in live_adapter.HIGH_RISK)]
+                              ctx.config, high_risk=t in live_adapter.HIGH_RISK)
+           and (min_tokens <= 0 or t not in tool_tokens or tool_tokens[t] >= min_tokens)]
     doc = {"used_tools": sorted(stage.used_tools), "streaks": stage.tool_unused_streaks,
            "prompt_streaks": prompt_streaks,
            "catalog_tools": sorted(stage.catalog_tools), "catalog_desc": stage.catalog_desc,
@@ -240,6 +255,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
            "catalog_source": srow.get("untool_catalog_source") or st.get("catalog_source"),
            "sessions": sessions, "prompts": int(st.get("prompts", 0)) + (prompts or 0),
            "updated": time.time()}
+    if tool_tokens:
+        doc["tool_tokens"] = tool_tokens
     if imported_n:
         doc.update({"imported_sessions": imported_n,
                     "imported_prompts": int(st.get("imported_prompts", 0))
@@ -387,7 +404,7 @@ def unprotected(ctx, items):
     if ctx.host.name == "copilot":      # its lists name MCP servers, not tools
         return list(items)
     protected = LiveAdapter(ctx.host, ctx.repo.root,
-                            protect=ctx.config.toolprune_protect).protected_tools()
+                            protect=ctx.config.toolprune_protect, env=ctx.env).protected_tools()
     return [t for t in items if t not in protected]
 
 
@@ -541,7 +558,8 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
             # never today's catalog: a tool installed since would count as unused in it.
             catalog = {} if imported else load_catalog(ctx.root, ctx.host.name)
             adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
-                                  catalog=catalog, protect=ctx.config.toolprune_protect)
+                                  catalog=catalog, protect=ctx.config.toolprune_protect,
+                                  env=ctx.env)
             with ctx.store.locked("mechanisms"):
                 inj = _fold_microskills(ctx, adapter, run_dir, session_id,
                                         injected=sess.get("injected_ids"), imported=imported)

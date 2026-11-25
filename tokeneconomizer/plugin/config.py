@@ -196,6 +196,7 @@ class LiveConfig:
     toolprune_min_sessions: int = 2
     toolprune_sessions: int = 5
     toolprune_quiet_minutes: int = 60
+    toolprune_min_tokens: int = 0
     toolprune_protect: list = field(default_factory=list)
     tool_roles: list = field(default_factory=list)
     loopguard: str = "nudge"
@@ -243,7 +244,7 @@ class LiveConfig:
                 "codex_paid_effort": ("", "none", "minimal", "low", "medium", "high", "xhigh",
                                       "max")}
     # The smallest value a number setting takes, where it is not 1.
-    _MIN = {"toolprune_quiet_minutes": 0}
+    _MIN = {"toolprune_quiet_minutes": 0, "toolprune_min_tokens": 0}
 
     def as_dict(self):
         d = asdict(self)
@@ -367,6 +368,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
         "TE_TOOLPRUNE": "toolprune", "TE_TOOLPRUNE_EVIDENCE": "toolprune_evidence",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
+        "TE_TOOLPRUNE_MIN_TOKENS": "toolprune_min_tokens",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",
         "TE_TOOLPRUNE_SESSIONS": "toolprune_sessions",
         "TE_TOOLPRUNE_PROTECT": "toolprune_protect", "TE_TOOL_ROLES": "tool_roles",

@@ -424,16 +424,19 @@ def _toolprune_show(ctx, unt):
                          f"({e.get('unused_prompts', 0)} prompts)")
                 print(f"  {name:24s} {e['tools']:3d} tools, {state}")
     streaks = unt.get("streaks") or {}
-    if streaks and host == "claude":
+    if streaks and host in ("claude", "opencode"):
         cfg = ctx.config
         prompts = unt.get("prompt_streaks") or {}
+        toks = unt.get("tool_tokens") or {}
         print(f"how long each tool has gone unused (a tool never used is left out after "
               f"{cfg.toolprune_evidence} prompts over {cfg.toolprune_min_sessions}+ sessions, "
               f"or after {cfg.toolprune_sessions} sessions):")
         for t, n in sorted(streaks.items(), key=lambda kv: (-kv[1], -prompts.get(kv[0], 0)))[:30]:
             used = "used" if t in set(unt.get("used_tools", [])) else ""
-            print(f"  {n:4d} sessions {prompts.get(t, n):5d} prompts  {t} {used}")
-    if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
+            tok = f" (~{toks[t]} tok)" if toks.get(t) else ""
+            print(f"  {n:4d} sessions {prompts.get(t, n):5d} prompts  {t}{tok} {used}")
+    if host in ("claude", "copilot") and (
+            not unt.get("catalog_source") or unt.get("catalog_source") == "observed"):
         if os.path.exists(os.path.join(ctx.root, "hosts", host, "catalog.json")):
             # Recorded, but a repository reads the catalog when its next session is folded.
             print("note: the catalog `toolprune refresh-catalog` recorded joins this repository's "
@@ -632,6 +635,7 @@ def _config_view(cfg):
                       "toolprune_min_sessions": d.pop("toolprune_min_sessions"),
                       "toolprune_sessions": d.pop("toolprune_sessions"),
                       "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes"),
+                      "toolprune_min_tokens": d.pop("toolprune_min_tokens"),
                       "toolprune_protect": d.pop("toolprune_protect")},
         "loopguard": {
             "state": "off" if cfg.loopguard == "off" else "on",
