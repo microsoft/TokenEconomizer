@@ -78,6 +78,9 @@ VERIFY_RE = re.compile(
     r"what-if|new-file|assume-new)\s+" + _MAKE_VALUE + r"|"
     r"-(?![CfIoW]|[jl][^\s\-])[-\w]+(?:=(?:\$\s*\w+|\S*))?|\w+=(?:\$\s*\w+|\S*)))*)"
     r"\s+(?:test|check)|"
+    # the other Python runners the micro-skills observer reads as test runs: Twisted's `trial`,
+    # nose (`nosetests`, `python -m nose`) and `python -m django test`
+    r"trial|nosetests|" + _PYTHON + r"\s+-m\s+(?:nose|django\s+test)|"
     r"ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
