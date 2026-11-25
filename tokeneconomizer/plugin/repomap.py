@@ -31,6 +31,8 @@ import subprocess
 import sys
 import time
 
+from .store import _replace
+
 
 # The generator ships with the core; the experiments' repo-map baseline runs the same one.
 GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "repomap_gen.py")
@@ -68,9 +70,15 @@ def _write_state(ctx, d):
     path = _state_path(ctx)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, indent=2)
+        _replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def head_commit(root):
