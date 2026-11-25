@@ -63,3 +63,36 @@ def test_the_windows_launcher_runs_the_command_line(repo, tmp_path, monkeypatch)
     p = subprocess.run([git_sh() or "sh", ensure_launcher(env), "--cwd", repo, "config", "set",
                         "spiral=off"], env=run_env, capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
+
+
+def test_sessions_that_write_the_launcher_at_once_from_one_process_do_not_collide(
+        tmp_path, monkeypatch):
+    """A Hermes gateway runs every session's hooks as threads of one process, and the first
+    prompts of several sessions write the launcher together. Named by the process alone, their
+    temporary files were one file: the first rename took it, and the rest failed, each failure a
+    line in errors.log."""
+    import threading
+    monkeypatch.setattr(paths, "_WINDOWS", False)
+    together, first, lock = threading.Barrier(4, timeout=10), set(), threading.Lock()
+    real = os.replace
+
+    def replace(src, dst):
+        with lock:
+            waits = threading.get_ident() not in first
+            first.add(threading.get_ident())
+        if waits:                          # every writer is between its write and its rename
+            together.wait()                # (a retry on Windows renames again, unhindered)
+        return real(src, dst)
+    monkeypatch.setattr(os, "replace", replace)
+    env, errors = _env(tmp_path), []
+
+    def write():
+        try:
+            ensure_launcher(env)
+        except OSError as e:
+            errors.append(e)
+    threads = [threading.Thread(target=write) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []
+    assert sorted(os.listdir(os.path.dirname(paths.launcher_path(env)))) == ["te"]
