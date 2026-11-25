@@ -582,9 +582,12 @@ def fold_locked(ctx, session_id, transcript_path=None, imported=False, span=None
             entry["imported"] = True
         folded[session_id] = entry
         ctx.store.write("folded.json", folded)
-        if sess:
-            sess["folded"] = True
-            ctx.store.write(sess_name, sess)
+        # Re-read: the copy read above may be seconds old by now, and the same session, resumed
+        # while this fold ran, may have hooks that wrote to it since (its turn, its source).
+        cur = ctx.store.read(sess_name) if sess else None
+        if isinstance(cur, dict):
+            cur["folded"] = True
+            ctx.store.write(sess_name, cur)
         return record
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

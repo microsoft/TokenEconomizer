@@ -989,6 +989,34 @@ def test_a_fold_that_cannot_take_the_lock_skips_and_the_session_is_still_folded_
     assert len(st.read_lines("ledger.jsonl")) == 1
 
 
+def test_a_session_resumed_while_its_fold_runs_keeps_what_its_hooks_wrote(env, repo, tmp_path):
+    """The fold reads the session's document when it starts and marks it folded when it ends,
+    seconds later when the proposer runs. A `--resume` of the same session in between writes
+    its own turn and source there; marking the document folded must not put the old copy back."""
+    t = trap_session(str(tmp_path / "s.jsonl"), repo, 0)
+    base = {"session_id": "s", "transcript_path": t, "cwd": repo}
+    call(env, dict(base, hook_event_name="SessionStart", source="startup"))
+    call(env, dict(base, hook_event_name="UserPromptSubmit", prompt_id="p1", prompt="hi"))
+    call(env, dict(base, hook_event_name="Stop", prompt_id="p1"))
+    ctx = LiveContext.build(hosts.HOSTS["claude"](), repo, env)
+    usage = ctx.host.session_usage
+
+    def resumed_meanwhile(transcript):      # the fold's slow part, with the resume's hooks in it
+        call(env, dict(base, hook_event_name="SessionStart", source="resume"))
+        call(env, dict(base, hook_event_name="UserPromptSubmit", prompt_id="p2", prompt="again"))
+        for i in range(3):
+            call(env, dict(base, hook_event_name="PostToolUse", prompt_id="p2", tool_name="Bash",
+                           tool_input={"command": f"ls {i}"},
+                           tool_response={"stdout": "x", "stderr": "", "interrupted": False}))
+        return usage(transcript)
+    ctx.host.session_usage = resumed_meanwhile
+    assert fold.fold_session(ctx, "s") is not None
+    sess = store_for(env, repo).read(os.path.join("sessions", "s.json"))
+    assert sess["folded"] is True
+    assert sess["source"] == "resume"
+    assert (sess["turn"]["turn_key"], sess["turn"]["cum_turns"]) == ("p2", 3)
+
+
 def test_a_session_whose_end_was_missed_is_folded_by_the_next_start(env, repo, tmp_path):
     t = trap_session(str(tmp_path / "lost.jsonl"), repo, 0)
     call(env, {"hook_event_name": "SessionStart", "session_id": "lost", "source": "startup",
