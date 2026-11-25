@@ -108,11 +108,17 @@ def ensure_launcher(env=None):
         tmp = "%s.%d.%d.tmp" % (launcher, os.getpid(), threading.get_ident())
         # newline="\n": text mode on Windows would end each line with CRLF, and `sh` would pass
         # the trailing "\r" on as an argument.
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(body)
-        os.chmod(tmp, 0o700)
-        # Windows refuses to replace a file another thread is reading or replacing.
-        _replace(tmp, launcher)
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(body)
+            os.chmod(tmp, 0o700)
+            # Windows refuses to replace a file another thread is reading or replacing.
+            _replace(tmp, launcher)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
     return path
 
 

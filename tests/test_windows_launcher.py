@@ -73,11 +73,15 @@ def test_sessions_that_write_the_launcher_at_once_from_one_process_do_not_collid
     line in errors.log."""
     import threading
     monkeypatch.setattr(paths, "_WINDOWS", False)
-    together = threading.Barrier(4, timeout=10)
+    together, first, lock = threading.Barrier(4, timeout=10), set(), threading.Lock()
     real = os.replace
 
     def replace(src, dst):
-        together.wait()                    # every writer is between its write and its rename
+        with lock:
+            waits = threading.get_ident() not in first
+            first.add(threading.get_ident())
+        if waits:                          # every writer is between its write and its rename
+            together.wait()                # (a retry on Windows renames again, unhindered)
         return real(src, dst)
     monkeypatch.setattr(os, "replace", replace)
     env, errors = _env(tmp_path), []
