@@ -805,6 +805,24 @@ def test_te_history_dry_run_writes_nothing(env, repo, claude_home, monkeypatch, 
     assert cli.main(["--cwd", repo, "--host", "claude", "history", "import"]) == 1
 
 
+def test_a_failed_import_by_hand_says_why_and_fails_without_an_unhandled_error(
+        env, repo, claude_home, monkeypatch, capsys):
+    """A fatal error inside the import leaves `run` a reason and no `imported`
+    count. Reading the count raised `KeyError('imported')`; the reason is printed
+    instead and the command fails."""
+    history_log(claude_home, repo, "old0", trap(repo, 0))
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+    def broken(*a, **k):
+        raise RuntimeError("unreadable history")
+    monkeypatch.setattr(history, "plan", broken)
+    assert cli.main(["--cwd", repo, "--host", "claude", "history", "import"]) == 1
+    out = capsys.readouterr().out
+    assert "not imported: the import failed (see errors.log)" in out
+    assert "imported 0 earlier session(s)" not in out
+
+
 def test_no_hook_reads_history_on_another_agent(env, repo, claude_home, tmp_path):
     history_log(claude_home, repo, "old0", trap(repo, 0))
     t = str(tmp_path / "rollout-x.jsonl")

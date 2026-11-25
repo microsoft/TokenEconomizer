@@ -298,6 +298,143 @@ def test_the_session_start_hook_returns_the_learned_fact(tmp_path):
     assert "`python runtests.py" in out["hookSpecificOutput"]["additionalContext"]
 
 
+# ---- #231: Droid 1.12.x drops failed calls from PostToolUse ------------------------------
+def _write_session_head(root, sid, cwd, workspace="ws", version="1.12.1"):
+    """The start of a live Droid session: header + prompt, no calls yet. The calls are
+    appended as the turn runs, the way a live Droid writes them."""
+    folder = os.path.join(str(root), workspace)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{sid}.jsonl")
+    lines = [{"type": "session_start", "id": sid, "cwd": cwd, "version": version},
+             {"type": "message", "message": {"role": "user", "content": [
+                 {"type": "text", "text": "run the commands"}]}}]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
+    return path
+
+
+def _append_call(path, i, name, inp, res, is_error):
+    tid = f"t{i}"
+    with open(path, "a", encoding="utf-8") as fh:
+        for rec in ({"type": "message", "message": {"role": "assistant", "content": [
+                        {"type": "tool_use", "id": tid, "name": name, "input": inp}]}},
+                    {"type": "message", "message": {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": tid,
+                         "is_error": is_error, "content": res}]}}):
+            fh.write(json.dumps(rec) + "\n")
+
+
+def _run_droid_turn(env, transcript, sid, repo, calls, successes):
+    """Drive one Droid turn through the real hooks, appending each call to the log as it
+    happens and dispatching PostToolUse only for `successes` -- on Droid 1.12.x the
+    failed calls get no hook at all. Returns the turn summary Stop recorded."""
+    from test_live_hooks import call, store_for
+
+    base = {"session_id": sid, "transcript_path": transcript, "cwd": str(repo)}
+    call(env, dict(base, hook_event_name="SessionStart", source="startup"), "droid")
+    call(env, dict(base, hook_event_name="UserPromptSubmit",
+                   prompt="run the commands"), "droid")
+    for i, (name, inp, res, is_error) in enumerate(calls):
+        _append_call(transcript, i, name, inp, res, is_error)
+        if i in successes:
+            call(env, dict(base, hook_event_name="PostToolUse", tool_name=name,
+                           tool_input=inp, tool_response=res), "droid")
+    call(env, dict(base, hook_event_name="Stop"), "droid")
+    s = store_for(env, repo, "droid").read(f"sessions/{sid}.json")
+    return (s.get("turns") or [])[-1]
+
+
+def test_droid_112_recovers_failed_calls_from_the_session_log(tmp_path):
+    """#231: on Droid 1.12.x PostToolUse fires only for successes, so the loop guard
+    never sees a failed call live. The session log still carries is_error, so the
+    plugin folds the failures it finds there: the mixed turn counts all three
+    calls, and the all-failure turn counts all eight."""
+    state, sessions = tmp_path / "state", tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = dict(_env(state), DROID_SESSIONS_DIR=str(sessions))
+    mixed = [("execute", {"command": "echo mixed-ok-1"}, "mixed-ok-1", False),
+             ("execute", {"command": "ls /nonexistent-path"},
+              "ls: /nonexistent-path: No such file or directory", True),
+             ("execute", {"command": "echo mixed-ok-3"}, "mixed-ok-3", False)]
+    transcript = _write_session_head(sessions, "s-mixed", str(repo))
+    turn = _run_droid_turn(env, transcript, "s-mixed", repo, mixed, successes={0, 2})
+    assert turn["tool_calls"] == 3
+
+    allfail = [("execute", {"command": "sleep 5; ls /nonexistent-path"},
+                "ls: /nonexistent-path: No such file or directory", True)] * 8
+    transcript = _write_session_head(sessions, "s-fail", str(repo))
+    turn = _run_droid_turn(env, transcript, "s-fail", repo, allfail, successes=set())
+    assert turn["tool_calls"] == 8
+
+
+def test_droid_112_failed_pytest_flips_the_ended_green_proxy(tmp_path):
+    """The same recovery, for the proxy: a failed test run hidden from PostToolUse
+    must mark the turn as not ended green, so it does not feed the envelope as a
+    resolved turn."""
+    state, sessions = tmp_path / "state", tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = dict(_env(state), DROID_SESSIONS_DIR=str(sessions))
+    calls = [("execute", {"command": "python -m pytest -q"},
+              "FAILED tests/test_x.py::test_y - assert 1 == 2", True),
+             ("execute", {"command": "echo ok"}, "ok", False)]
+    transcript = _write_session_head(sessions, "s-py", str(repo))
+    turn = _run_droid_turn(env, transcript, "s-py", repo, calls, successes={1})
+    assert turn["tool_calls"] == 2
+    assert turn["resolved_proxy"] is False
+
+
+def test_droid_0233_does_not_reconcile_failures(tmp_path):
+    """The version gate: on 0.233.0 PostToolUse still dispatches failures, so the log
+    is not read for them -- reconciling there would count each failure twice. (The
+    failure's own PostToolUse is not simulated here; the point is the plugin does
+    not invent the missing call.) The mixed turn therefore still records only the
+    two successes' hooks."""
+    state, sessions = tmp_path / "state", tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = dict(_env(state), DROID_SESSIONS_DIR=str(sessions))
+    mixed = [("execute", {"command": "echo mixed-ok-1"}, "mixed-ok-1", False),
+             ("execute", {"command": "ls /nonexistent-path"},
+              "ls: /nonexistent-path: No such file or directory", True),
+             ("execute", {"command": "echo mixed-ok-3"}, "mixed-ok-3", False)]
+    transcript = _write_session_head(sessions, "s-old", str(repo), version="0.233.0")
+    turn = _run_droid_turn(env, transcript, "s-old", repo, mixed, successes={0, 2})
+    assert turn["tool_calls"] == 2
+
+
+def test_droid_version_parses_string_and_int_headers(tmp_path):
+    for version, want in ((2, (2, 0, 0)), ("1.12.1", (1, 12, 1)),
+                          ("v1.12.0", (1, 12, 0)), ("1.12", (1, 12, 0)),
+                          ("0.233.0", (0, 233, 0))):
+        path = tmp_path / f"v-{want[0]}-{want[1]}-{want[2]}.jsonl"
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "session_start", "id": "s",
+                                 "cwd": str(tmp_path), "version": version}) + "\n")
+        assert trace.droid_version(path) == want
+    # No version, or one that does not parse: None, and the plugin does not reconcile.
+    path = tmp_path / "v-none.jsonl"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "session_start", "id": "s",
+                             "cwd": str(tmp_path)}) + "\n")
+    assert trace.droid_version(path) is None
+
+
+def test_droid_session_calls_skips_unpaired_calls(tmp_path):
+    path = _write_session(tmp_path, "s1", str(tmp_path), TEST_CALLS)
+    calls = trace.droid_session_calls(path)
+    assert [c[0] for c in calls] == ["Bash", "Bash"]
+    assert calls[0][3] is False and calls[1][3] is True
+    assert calls[0][1]["command"] == "python tests/runtests.py"
+    # A call whose result is not in the log yet is left out, not guessed at.
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "message", "message": {"role": "assistant",
+            "content": [{"type": "tool_use", "id": "t9", "name": "execute",
+                         "input": {"command": "sleep 5"}}]}}) + "\n")
+    assert [c[0] for c in trace.droid_session_calls(path)] == ["Bash", "Bash"]
+
+
 # ---- packaging --------------------------------------------------------------------------------
 def test_droid_plugin_packaging(tmp_path):
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -318,8 +455,10 @@ def test_droid_plugin_packaging(tmp_path):
     built_hooks = json.load(open(plugin / "hooks" / "hooks.json"))
     assert set(built_hooks) == {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop",
                                 "SessionEnd"}
-    command = (plugin / "commands" / "tokeneconomizer-status.md").read_text()
-    assert "${DROID_PLUGIN_ROOT}" in command and "Execute tool" in command
+    for name in ("config", "facts", "microskills", "repos", "status", "toolprune", "untool"):
+        command = (plugin / "commands" / f"tokeneconomizer-{name}.md").read_text(encoding="utf-8")
+        assert "${DROID_PLUGIN_ROOT}" in command and "Execute tool" in command
+        assert "Bash tool" not in command
     assert (plugin / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
     # Antigravity's files, which sit at the plugin root beside Droid's: Droid reads neither (its
     # hooks are `hooks/hooks.json`), and the bundle ships only what Droid loads.

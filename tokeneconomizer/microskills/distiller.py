@@ -21,9 +21,10 @@ import os
 import re
 
 from ..names import repo_filename
-from ..trace import call_cwds
+from ..pricing import runner_effective_or_approx
+from ..trace import SHELL_TOOLS, call_cwds, tool_kind
 from ..trace.claude import CONVERSATION
-from .lifecycle import Lifecycle, edited_files, edited_pyfiles
+from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
 # ---- proposer cadence / caps / gates ---------------------------------------
 PROPOSE_EVERY  = 8      # one LLM proposer call per this many tasks (PrefixStage rebinds
@@ -66,7 +67,7 @@ def load_calls(fp):
                     break
         if is_codex or is_copilot:
             from ..trace import load_trajectory
-            return [(name.lower(), args, out)
+            return [(tool_kind(name), args, out)
                     for name, args, out, _ok in load_trajectory(fp)]
     except OSError:
         return []
@@ -79,6 +80,8 @@ def load_calls(fp):
             d = json.loads(line)
         except Exception:
             continue
+        if not isinstance(d, dict):
+            continue
         m = d.get("message")
         if not isinstance(m, dict) or d.get("type", "assistant") not in CONVERSATION:
             continue
@@ -88,23 +91,30 @@ def load_calls(fp):
         for b in c:
             if not isinstance(b, dict):
                 continue
-            if b.get("type") == "tool_use" and b.get("id") not in uses:
-                uses[b.get("id")] = (b.get("name", ""), b.get("input") or {})
-                order.append(b.get("id"))
+            tid = b.get("id") if b.get("type") == "tool_use" else b.get("tool_use_id")
+            if not isinstance(tid, str):
+                continue
+            if b.get("type") == "tool_use" and tid not in uses:
+                name = b.get("name")
+                inp = b.get("input")
+                uses[tid] = (name if isinstance(name, str) else "",
+                             inp if isinstance(inp, dict) else {})
+                order.append(tid)
             elif b.get("type") == "tool_result":
                 cont = b.get("content")
                 if isinstance(cont, list):
-                    txt = "\n".join(x.get("text", "") for x in cont if isinstance(x, dict))
+                    txt = "\n".join(x.get("text") for x in cont
+                                    if isinstance(x, dict) and isinstance(x.get("text"), str))
                 else:
                     txt = cont if isinstance(cont, str) else json.dumps(cont)
-                res[b.get("tool_use_id")] = txt
-    return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
+                res[tid] = txt
+    return [(tool_kind(uses[t][0]), uses[t][1], res.get(t, "")) for t in order]
 
 
 def bash_cmds(calls):
     out = []
     for tool, args, res in calls:
-        if tool in ("bash", "shell", "stop_bash"):
+        if tool in SHELL_TOOLS:
             out.append(((args.get("command") or args.get("cmd") or ""), res))
     return out
 
@@ -261,7 +271,7 @@ def proposer_view(dg):
 
 
 def _rx(pat):
-    if not pat:
+    if not pat or not isinstance(pat, str):
         return None
     try:
         return re.compile(pat)
@@ -526,11 +536,21 @@ def parse_payload(raw):
         obj = json.loads(m.group(0))
     except Exception:
         return [], []
-    exts = [e for e in obj.get("extractors", [])
-            if isinstance(e, dict) and e.get("name") and e.get("pattern")]
-    facts = [f for f in obj.get("facts", [])
-             if isinstance(f, dict) and f.get("id") and f.get("detector")]
+    exts, facts = obj.get("extractors"), obj.get("facts")
+    exts = [e for e in (exts if isinstance(exts, list) else [])
+            if isinstance(e, dict) and isinstance(e.get("name"), str) and e.get("name")
+            and isinstance(e.get("pattern"), str) and e.get("pattern")]
+    facts = [f for f in (facts if isinstance(facts, list) else [])
+             if isinstance(f, dict) and isinstance(f.get("id"), str) and f.get("id")
+             and isinstance(f.get("detector"), dict) and f.get("detector")
+             and _detector_fields_ok(f["detector"])
+             and (f.get("cite") is None or isinstance(f.get("cite"), list))]
     return exts, facts
+
+
+def _detector_fields_ok(det):
+    return all(det.get(k) is None or isinstance(det.get(k), str)
+               for k in ("scope", "fired", "confirm", "contradict"))
 
 
 def _reparse_cmds(dg):
@@ -543,7 +563,16 @@ def _reparse_cmds(dg):
 
 
 # ---- distiller -------------------------------------------------------------
-class Distiller:
+def _forgotten_evidence(rec):
+    """The tasks a forgotten fact stood on when it was forgotten. An entry saved before they
+    were recorded falls back to the tasks the fact cited when it was admitted."""
+    ev = rec.get("evidence")
+    if ev is None:
+        ev = ((rec.get("record") or {}).get("spec") or {}).get("cite")
+    return [i for i in (ev if isinstance(ev, list) else []) if isinstance(i, str)]
+
+
+class Distiller(Forgetting):
     """Learns and injects a per-repo operating manual over the task stream.
 
     Public surface (the injection Stage calls these):
@@ -553,6 +582,8 @@ class Distiller:
         d.update(transcript_path, iid=..., resolved=...) # fold in the finished task
         d.save(root)
     """
+    FACT_CLS = Fact
+
     def __init__(self, repo, runner=None, model="agent", external_facts=None, vocab=None):
         self.repo = repo
         # The plugin's generic reading (`Vocabulary.generic`): the generic digest and prompt.
@@ -569,6 +600,7 @@ class Distiller:
         self.last_propose = -1
         self.extractors = {}            # name -> Extractor
         self.raw_window = []            # bounded recent [(cmd,out)] per task
+        self.forgotten = {}             # id -> {claim, record}: never admitted again
 
     # ---- featurization -----------------------------------------------------
     def _observe_fact(self, fact, now, dg, files):
@@ -636,11 +668,14 @@ class Distiller:
         except Exception:
             self.last_propose = self.now
             return
-        if eff is not None:
-            self.opt_tokens += eff
+        # Charged as every paid side call is: the usage the runner recovered, else an estimate on
+        # the same basis (prompt at 1x, reply at 5x), so a CLI that reports none is not free.
+        self.opt_tokens += runner_effective_or_approx(self.runner, prompt, raw or "", eff)
         exts, facts = parse_payload(raw)
         for e in exts:
             self._admit_extractor(e)              # append-only
+        # A forgotten id is refused at admission anyway: keep it from taking a candidate slot.
+        facts = [f for f in facts if f.get("id") not in self.forgotten]
         for spec in facts[:MAX_CANDS]:
             self._admit(spec)
         self.last_propose = self.now
@@ -659,11 +694,44 @@ class Distiller:
         return True
 
     # ---- fact admission: new id = append; existing id = contradict-only revise --
+    def _confirms(self, detector):
+        """The window's task ids on which `detector` confirms, under the CURRENT features."""
+        out = set()
+        for dg in self.window:
+            det = DetectorV3Scope(detector or {}, dg.get("features", {}))
+            if det.verdict(dg)[0] == "confirm":
+                out.add(dg["iid"])
+        return out
+
+    def _evidence(self, fact):
+        """The window's tasks the fact's detector confirms on as it is forgotten: the evidence
+        a restatement under a new id would be grounded on (see _restates_forgotten)."""
+        return sorted(self._confirms(fact.spec.get("detector")))
+
+    def _restates_forgotten(self, spec):
+        """The forgotten fact a new-id candidate restates, if any: the candidate confirms on at
+        least MIN_CITE of the tasks that fact stood on when it was forgotten, and on no other
+        task in the window. Only that evidence counts, not what the forgotten detector would
+        confirm on now: it leaves the window as tasks come in, so a fact that later tasks
+        show (a corrected one, or another about the same commands) still gets in, where a
+        broad forgotten detector would otherwise keep it out for good."""
+        mine = self._confirms(spec.get("detector"))
+        if len(mine) < MIN_CITE:
+            return None
+        for fid, rec in self.forgotten.items():
+            theirs = set(_forgotten_evidence(rec))
+            if len(mine & theirs) >= MIN_CITE and mine <= theirs:
+                return fid
+        return None
+
     def _ground(self, spec):
         """#window cites whose confirm regex fires under the CURRENT features."""
         by_iid = {d["iid"]: d for d in self.window}
         hits = 0
-        for iid in (spec.get("cite") or []):
+        cites = spec.get("cite")
+        for iid in (cites if isinstance(cites, list) else []):
+            if not isinstance(iid, str):
+                continue
             dg = by_iid.get(iid)
             if dg is None:
                 continue
@@ -695,10 +763,14 @@ class Distiller:
 
     def _admit(self, spec):
         fid = spec.get("id")
+        if fid in self.forgotten:
+            return False, "forgotten"
         if fid not in self.facts:
             hits = self._ground(spec)
             if hits < MIN_CITE:
                 return False, f"grounding-fail({hits}/{MIN_CITE})"
+            if self.forgotten and self._restates_forgotten(spec):
+                return False, "restates-forgotten"
             spec.setdefault("rev", 1)
             self.facts[fid] = self._build_fact(spec)
             return True, "admitted"
@@ -771,13 +843,14 @@ class Distiller:
         window = [dict(dg, _cmd_blob=dg.get("_cmd_blob", "")[-BLOB_CAP:],
                        _out_blob=dg.get("_out_blob", "")[-2 * BLOB_CAP:])
                   for dg in self.window[-WINDOW:]]
-        json.dump({"repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
-                   "last_propose": self.last_propose,
-                   "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
-                   "facts": {k: f.to_dict() for k, f in self.facts.items()},
-                   "window": window,
-                   "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]},
-                  open(self._path(root, self.repo), "w", encoding="utf-8"), indent=2)
+        write_json_atomic(self._path(root, self.repo), {
+            "repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
+            "last_propose": self.last_propose,
+            "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
+            "facts": {k: f.to_dict() for k, f in self.facts.items()},
+            "forgotten": self.forgotten,
+            "window": window,
+            "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]})
 
     @classmethod
     def load(cls, repo, root, runner=None, model="agent", external_facts=None, vocab=None):
@@ -793,6 +866,8 @@ class Distiller:
         self.facts = {k: Fact.from_dict(v) for k, v in d.get("facts", {}).items()}
         self.window = list(d.get("window") or [])[-WINDOW:]
         self.raw_window = [[(c, "") for c in cmds] for cmds in d.get("raw_cmds") or []]
+        self.forgotten = dict(d.get("forgotten") or {})
+        self.drop_forgotten()
         return self
 
     def debug_row(self):

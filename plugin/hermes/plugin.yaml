@@ -7,3 +7,4 @@ provides_hooks:
   - transform_tool_result
   - on_session_end
   - on_session_finalize
+  - on_session_reset

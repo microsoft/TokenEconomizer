@@ -44,7 +44,7 @@ PROTECTED_TOOLS = frozenset({
     # Codex's complete native work surface (fixed; neither schema is removable).
     "shell", "apply_patch",
     # Claude Code work-surface names:
-    "Bash", "Edit", "Write", "Read", "Grep", "Glob", "MultiEdit",
+    "Bash", "PowerShell", "Edit", "Write", "Read", "Grep", "Glob", "MultiEdit",
 })
 
 

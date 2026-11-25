@@ -601,6 +601,42 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
 
 
+def _listing(path, tools):
+    """Prepend Claude Code's deferred-tool listing for `tools` to a transcript."""
+    lines = open(path).read()
+    with open(path, "w") as fh:
+        fh.write(json.dumps({"type": "attachment", "attachment": {
+            "type": "deferred_tools_delta", "addedNames": list(tools)}}) + "\n" + lines)
+    return path
+
+
+@pytest.mark.parametrize("route", ["listed", "refresh-catalog"])
+def test_a_tool_that_appears_after_a_deny_list_is_written_joins_the_catalog(
+        env, repo, tmp_path, route):
+    """A deny list written by `auto` must not freeze the catalog: an MCP server added later
+    (listed by the session, or recorded by `toolprune refresh-catalog`) gets its own streak
+    and is left out once it has gone unused long enough."""
+    _catalog(env, ["Bash", "Read", "Workflow", "CronCreate"])
+
+    def sessions(prefix, n, listed=()):
+        for i in range(n):
+            t = write_session(str(tmp_path / f"{prefix}{i}.jsonl"), [("look", [
+                ("Bash", {"command": "ls"}, "a.py", False)]), ("and again", [])])
+            run_session(env, repo, f"{prefix}{i}", _listing(t, listed) if listed else t)
+    sessions("a", 5)
+    assert _deny(repo) == ["CronCreate", "Workflow"]
+    new = "mcp__echosvr__echo"
+    if route == "listed":
+        sessions("b", 1, listed=[new])
+    else:
+        _catalog(env, ["Bash", "Read", "Workflow", "CronCreate", new])
+        sessions("b", 1)
+    unt = store_for(env, repo).read("untool.json")
+    assert new in unt["catalog_tools"] and unt["streaks"][new] == 1
+    sessions("c", 4, listed=[new] if route == "listed" else ())
+    assert _deny(repo) == ["CronCreate", "Workflow", new]
+
+
 def _prompts(env, repo, tmp_path, sid, n):
     """One Claude Code session of `n` prompts; only the first calls a tool (Bash)."""
     t = write_session(str(tmp_path / f"{sid}.jsonl"),

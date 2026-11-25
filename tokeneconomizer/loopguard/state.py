@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 
-from ..trace import load_trajectory as _load_trajectory
+from ..trace import load_trajectory as _load_trajectory, tool_kind
 
 # An output that RAN code to verify behavior (the test/repro step of the edit->test
 # loop).
@@ -36,7 +36,7 @@ _CONTENT_TOOLS = ("view", "grep", "glob")
 # Code's stream-json (which names tools Bash/Read/Edit/Write/Grep/Glob/MultiEdit). Unknown
 # names pass through unchanged.
 _TOOL_CANON = {
-    "bash": "bash", "shell": "bash",
+    "bash": "bash", "shell": "bash", "powershell": "bash",
     "read": "view", "view": "view",
     "grep": "grep",
     "glob": "glob",
@@ -47,7 +47,7 @@ _TOOL_CANON = {
 
 
 def canon_tool(name):
-    return _TOOL_CANON.get((name or "").lower(), name or "?")
+    return _TOOL_CANON.get(tool_kind(name), name or "?")
 
 
 def completed_calls(line, pend):
@@ -182,12 +182,18 @@ class SpiralState:
         tool_name = canon_tool(tool_name)   # accept Copilot- or Claude-named tools
         action = tool_name or "?"
         if tool_name in _EDIT_TOOLS:
-            b = basename(args.get("path") or args.get("filePath")
-                          or args.get("file_path") or "")
-            if b:
+            # A patch names every file it changes in `paths`; any other edit names one.
+            paths = args.get("paths")
+            if not isinstance(paths, (list, tuple)) or not paths:
+                paths = [args.get("path") or args.get("filePath") or args.get("file_path")
+                         or args.get("relative_path")]
+            names = list(dict.fromkeys(basename(p) for p in paths if isinstance(p, str)))
+            names = [b for b in names if b]
+            for b in names:
                 self.edit_order.append(b)
                 self.edit_counts[b] = self.edit_counts.get(b, 0) + 1
-                action = f"edit {b}"
+            if names:
+                action = f"edit {', '.join(names)}"
         cmd = args.get("command", "") if tool_name == "bash" else ""
         if cmd:
             short = re.sub(r"\s+", " ", cmd.strip())[:90]

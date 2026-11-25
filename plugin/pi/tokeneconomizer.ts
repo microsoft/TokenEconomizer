@@ -20,7 +20,8 @@
  *
  * Like the hooks on the other agents it fails open: a dispatcher that is missing, slow or
  * broken answers "no change". It does nothing under TE_SIDECALL=1 (the plugin's own side
- * calls) or TE_DISABLE=1. `/te <command>` runs the `te` command line for this repository.
+ * calls) or TE_DISABLE=1. `/te <command>` runs the `te` command line for this repository, and
+ * completes its subcommands, actions and options as they are typed.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
@@ -149,6 +150,45 @@ export function carriedSection(entries: any[]): string {
     : text;
 }
 
+/** What `/te` completes: each `te` subcommand a Pi user runs, with its actions and options, as
+ * `build_parser()` declares them (a test holds the two together). Not `fold` and `judge`, which
+ * the plugin starts itself, nor `probe`, which runs on Copilot only. */
+export const TE_COMMANDS: Record<string, { actions: string[]; flags: string[] }> = {
+  status: { actions: [], flags: ["--json", "--explain"] },
+  microskills: { actions: ["show", "forget", "unforget"], flags: [] },
+  toolprune: {
+    actions: ["show", "apply", "restore", "refresh-catalog", "measure", "apply-pending"],
+    flags: [],
+  },
+  config: { actions: ["show", "set", "unset"], flags: ["--global"] },
+  doctor: { actions: [], flags: [] },
+  repos: { actions: ["list", "migrate", "merge"], flags: ["--json", "--quiet"] },
+  history: { actions: ["status", "import"], flags: ["--dry-run", "--status"] },
+  repomap: { actions: ["show", "refresh"], flags: [] },
+};
+
+/** `/te` argument completions: the subcommand, then its action, then options not yet given.
+ * Pi passes the arguments typed so far and replaces them with the chosen item's value, so a
+ * value restates them, completes the last word and adds a space for the next one. */
+export function completeTe(prefix: string): { value: string; label: string }[] | null {
+  const words = prefix.trimStart().split(/\s+/);
+  const word = words.pop() ?? "";
+  const head = prefix.slice(0, prefix.length - word.length);
+  let candidates: string[];
+  if (words.length === 0) {
+    candidates = Object.keys(TE_COMMANDS);
+  } else {
+    const spec = TE_COMMANDS[words[0]];
+    if (!spec) return null;
+    const actionGiven = words.slice(1).some((w) => !w.startsWith("-"));
+    candidates = [...(actionGiven ? [] : spec.actions), ...spec.flags.filter((f) => !words.includes(f))];
+  }
+  const items = candidates
+    .filter((c) => c.startsWith(word))
+    .map((c) => ({ value: `${head}${c} `, label: c }));
+  return items.length ? items : null;
+}
+
 export default function tokeneconomizer(pi: ExtensionAPI) {
   let manual = "";
   let prompts = 0;
@@ -224,8 +264,10 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
 
   pi.registerCommand("te", {
     description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
+    getArgumentCompletions: completeTe,
     handler: async (args, ctx) => {
-      const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
+      // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
+      const argv = ["--argline", (args || "").trim() || "status"];
       // The session id lets `te status` say when this session is recorded under the repository
       // it started in rather than the one `ctx.cwd` is in now.
       const out = await run("te", ["--host", "pi", "--cwd", ctx.cwd, ...argv], "", ctx.mode, {

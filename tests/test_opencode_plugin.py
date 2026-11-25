@@ -47,25 +47,37 @@ if log:
 '''
 
 # opencode 2.x's plugin context, as far as the plugin reads it: one prompt, one tool call, then
-# the process exits (the plugin hands the open session over then, with a blocking call).
+# the process exits (the plugin hands the open session over then, with a blocking call). With
+# TE_END_TURN the turn ends after the tool call (`session.idle`); without it, it is still open.
 HARNESS = '''import plugin from %s;
 const hooks: Record<string, any> = {};
+let endTurn = () => {};
+const turnEnded = new Promise<void>((r) => (endTurn = r));
 await plugin.setup({
   location: { directory: process.env.TE_WORK },
   session: { hook: async (name: string, fn: any) => { hooks["session." + name] = fn; } },
   tool: { hook: async (name: string, fn: any) => { hooks["tool." + name] = fn; } },
-  event: { subscribe: async function* () {} },
+  event: { subscribe: async function* () {
+    if (!process.env.TE_END_TURN) return;
+    await turnEnded;
+    yield { type: "session.idle", properties: { sessionID: "ses_t" } };
+  } },
 });
 await hooks["session.prompt"]({ sessionID: "ses_t", messageID: "m1", prompt: { text: "say hi" } });
 await hooks["tool.execute.after"]({ sessionID: "ses_t", status: "completed", tool: "bash",
   id: "c1", input: { command: "echo hi" }, result: { content: "hi", metadata: { exit: 0 } } });
+endTurn();
+if (process.env.TE_WAIT_MS) await new Promise((r) => setTimeout(r, Number(process.env.TE_WAIT_MS)));
 console.log("harness done");
 process.exit(0);
 '''
 
 
-def _run(tmp_path, plugin_file, name):
-    """The harness against `plugin_file`, from a parent with no console; the probe's records."""
+def _run(tmp_path, plugin_file, name, state=None, env_over=None, expect_hooks=True):
+    """The harness against `plugin_file`, from a parent with no console; the probe's records.
+    `state` names a state root two runs share (a resumed session); `env_over` overrides the hook
+    environment (e.g. no `TE_CORE_PATH`); with `expect_hooks` False a run that starts no hook
+    process at all is accepted, for the fail-open case."""
     work, probe_dir = tmp_path / f"work-{name}", tmp_path / "probe"
     work.mkdir()
     subprocess.run(["git", "init", "-q", str(work)], check=True)
@@ -75,9 +87,11 @@ def _run(tmp_path, plugin_file, name):
     harness = tmp_path / f"harness-{name}.ts"
     harness.write_text(HARNESS % json.dumps(pathlib.Path(plugin_file).as_uri()), encoding="utf-8")
     env = dict(os.environ, BUN_BE_BUN="1", TE_WORK=str(work), TE_PYTHON=sys.executable,
-               TOKENECONOMIZER_HOME=str(tmp_path / f"te-{name}"), TE_CORE_PATH=REPO,
+               TOKENECONOMIZER_HOME=str(tmp_path / f"te-{state or name}"), TE_CORE_PATH=REPO,
                PYTHONPATH=str(probe_dir), TE_CONSOLE_PROBE=str(log))
-    env.pop("TE_DISABLE", None)
+    for var in ("TE_DISABLE", "TE_PLUGIN_ROOT"):
+        env.pop(var, None)
+    env.update(env_over or {})
     flags = subprocess.DETACHED_PROCESS if os.name == "nt" else 0
     out = subprocess.run([OPENCODE, "run", str(harness)], capture_output=True, text=True,
                          encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
@@ -87,9 +101,95 @@ def _run(tmp_path, plugin_file, name):
     recs = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()] \
         if log.exists() else []
     print(f"{name}: {recs}")
-    # SessionStart, UserPromptSubmit, PostToolUse, and SessionEnd as the process exits
-    assert len([r for r in recs if r["hook"]]) >= 4, (name, recs, out.stderr[-1500:])
+    hooks = [r for r in recs if r["hook"]]
+    if expect_hooks:
+        # SessionStart, UserPromptSubmit, PostToolUse, and SessionEnd as the process exits
+        assert len(hooks) >= 4, (name, recs, out.stderr[-1500:])
     return recs
+
+
+def _installed(tmp_path, name, bundle=False):
+    """The layout opencode loads plugins from: `<dir>/plugins/<file>`. With `bundle`, also the
+    launchers beside it and the package under `lib/` — the self-contained bundle the old
+    `<here>/../scripts` assumption was written for."""
+    root = tmp_path / name
+    (root / "plugins").mkdir(parents=True)
+    dst = root / "plugins" / "tokeneconomizer.ts"
+    shutil.copyfile(os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"), dst)
+    if bundle:
+        shutil.copytree(os.path.join(REPO, "plugin", "scripts"), root / "scripts")
+        shutil.copytree(os.path.join(REPO, "tokeneconomizer"), root / "lib" / "tokeneconomizer",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    return dst
+
+
+def _te_sessions(tmp_path, name):
+    """Session state the dispatcher wrote: proof the hook ran, not just that a Python started.
+    (A hook that cannot find `te_bootstrap.py` still spawns a Python, which records itself and
+    exits; only the dispatcher writes this.)"""
+    return list((tmp_path / f"te-{name}").glob("repos/*/opencode/sessions/*.json"))
+
+
+def test_an_installed_copy_finds_the_dispatcher_through_te_core_path(tmp_path):
+    """opencode loads a copy from its config directory, without the launchers beside it. Resolving
+    `join(here, '..', 'scripts')` there points at a directory that does not exist, and every hook
+    silently fails to spawn: TE looks loaded but folds, injects and guards nothing. The plugin
+    must find the checkout named by TE_CORE_PATH instead."""
+    plugin = _installed(tmp_path, "installed")
+    _run(tmp_path, plugin, "installed")
+    assert _te_sessions(tmp_path, "installed")
+
+
+def test_an_installed_copy_with_a_sibling_scripts_copy_keeps_working(tmp_path):
+    """The bundle the console-window tests use — launchers and package beside the plugin — must
+    keep resolving with no TE_CORE_PATH at all."""
+    plugin = _installed(tmp_path, "sibling", bundle=True)
+    _run(tmp_path, plugin, "sibling", env_over={"TE_CORE_PATH": ""})
+    assert _te_sessions(tmp_path, "sibling")
+
+
+def test_a_scripts_directory_above_the_copy_is_not_an_anchor(tmp_path):
+    """Resolution must not walk up from the plugin's own directory. A `scripts/te_bootstrap.py`
+    planted above it — on Windows the walk reaches `C:\\`, where a standard user can create
+    folders by default — would otherwise win over the dispatcher the plugin ships with, and every
+    hook would run it. Only the shipped layout and the state launcher are anchors."""
+    plugin = _installed(tmp_path, "planted")
+    planted = tmp_path / "scripts"
+    planted.mkdir()
+    marker = tmp_path / "planted-ran"
+    (planted / "te_bootstrap.py").write_text(
+        f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ran')\n", encoding="utf-8")
+    _run(tmp_path, plugin, "planted", env_over={"TE_CORE_PATH": ""}, expect_hooks=False)
+    assert not marker.exists(), "the plugin ran a dispatcher from an ancestor directory"
+    assert not _te_sessions(tmp_path, "planted")
+
+
+def test_the_state_launcher_is_read_when_its_target_has_a_space(tmp_path):
+    """A fresh install's only anchor is the launcher `paths.ensure_launcher` writes under the state
+    root: `exec <plugin>/scripts/te "$@"`, with `shlex.quote` around the path, so a checkout under
+    a path with a space arrives quoted. The plugin must read that form, not only an unquoted path."""
+    core = tmp_path / "core copy" / "plugin"
+    shutil.copytree(os.path.join(REPO, "plugin", "scripts"), core / "scripts")
+    shutil.copytree(os.path.join(REPO, "tokeneconomizer"), core / "lib" / "tokeneconomizer",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    launcher = tmp_path / "te-space" / "bin" / "te"
+    launcher.parent.mkdir(parents=True)
+    target = core / "scripts" / "te"
+    launcher.write_text(f'#!/bin/sh\nexec \'{target}\' "$@"\n', encoding="utf-8")
+    plugin = _installed(tmp_path, "space")
+    _run(tmp_path, plugin, "space", env_over={"TE_CORE_PATH": ""})
+    assert _te_sessions(tmp_path, "space")
+
+
+def test_with_no_anchor_the_hooks_fail_open(tmp_path):
+    """No TE_CORE_PATH, no launchers beside the copy, no state launcher: the dispatcher cannot be
+    found. The session must still run, and the dispatcher must start nothing — the silent failure
+    the resolver removes. This is the near-miss: with the old assumption the same session writes
+    no state at all."""
+    plugin = _installed(tmp_path, "bare")
+    _run(tmp_path, plugin, "bare", env_over={"TE_CORE_PATH": ""}, expect_hooks=False)
+    assert not _te_sessions(tmp_path, "bare"), list(
+        (tmp_path / "te-bare").rglob("sessions/*.json"))
 
 
 def test_the_plugins_hooks_open_no_console_window(tmp_path):
@@ -111,6 +211,61 @@ def test_the_plugins_hooks_open_no_console_window(tmp_path):
         text.replace("windowsHide: true", "windowsHide: false"), encoding="utf-8")
     control = _run(tmp_path, copy / "opencode" / "tokeneconomizer.ts", "control")
     assert all(r["visible"] for r in control if r["hook"]), control
+
+
+def _quiet(monkeypatch, end_turn=True):
+    """A short quiet window, a harness that outlives it, and the TUI's mode, so that a turn's end
+    does not hand the session over at once as a headless run's does."""
+    monkeypatch.setenv("TE_OPENCODE_MODE", "tui")
+    monkeypatch.setenv("TE_OPENCODE_QUIET_MS", "12000")
+    monkeypatch.setenv("TE_WAIT_MS", "18000")
+    if end_turn:
+        monkeypatch.setenv("TE_END_TURN", "1")
+    else:
+        monkeypatch.delenv("TE_END_TURN", raising=False)
+
+
+def test_a_quiet_session_is_handed_over_without_a_mode_guess(tmp_path, monkeypatch):
+    """On 2.x `opencode run` and the TUI are the same background process, so the plugin cannot
+    tell them apart. A session quiet for the window it is told (TE_OPENCODE_QUIET_MS) is handed
+    over with SessionEnd while the process is still up, instead of waiting for the next start."""
+    _quiet(monkeypatch)
+    _run(
+        tmp_path,
+        os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+        "quiet",
+    )
+    (state,) = (tmp_path / "te-quiet").glob("repos/*/opencode/sessions/ses_t.json")
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    assert doc.get("end_reason") == "idle" and doc.get("ended"), doc
+
+
+def test_a_turn_still_open_is_not_handed_over_as_quiet(tmp_path, monkeypatch):
+    """A turn whose end has not arrived (a long tool call, a permission prompt waiting on the
+    person) is not quiet: the session stays open past the window, and is handed over only when
+    the process exits."""
+    _quiet(monkeypatch, end_turn=False)
+    _run(
+        tmp_path,
+        os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts"),
+        "open-turn",
+    )
+    (state,) = (tmp_path / "te-open-turn").glob("repos/*/opencode/sessions/ses_t.json")
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    assert doc.get("end_reason") == "exit", doc
+
+
+def test_a_resumed_session_keeps_the_earlier_turns(tmp_path, monkeypatch):
+    """A quiet hand-over ends the session and writes its export. Resuming the session must not
+    replace that file with only the new turn: the fold reads the turns from it."""
+    _quiet(monkeypatch)
+    plugin = os.path.join(REPO, "plugin", "opencode", "tokeneconomizer.ts")
+    _run(tmp_path, plugin, "resume-a", state="resume")
+    _run(tmp_path, plugin, "resume-b", state="resume")
+    export = tmp_path / "te-resume" / "opencode-sessions" / "ses_t.json"
+    doc = json.loads(export.read_text(encoding="utf-8"))
+    users = [m for m in doc.get("messages", []) if (m.get("info") or {}).get("role") == "user"]
+    assert len(users) == 2, doc
 
 
 class _Chat(BaseHTTPRequestHandler):
