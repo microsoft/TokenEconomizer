@@ -24,6 +24,11 @@ PRICES = [
     ("gemini-4-argon",         2.00, 0.10,  None,  10.00),
     ("gemini-4-carbon",        2.00, 0.10,  None,  10.00),
     ("gemini-4-hydrogen",      1.50, 0.075, None,   7.50),
+    ("deepseek-chat",          0.14, 0.014, None,   0.28),
+    ("deepseek-reasoner",      0.55, 0.14,  None,   2.19),
+    ("qwen-2.5-coder-32b",     0.07, 0.014, None,   0.28),
+    ("qwen-plus",              0.40, 0.08,  None,   1.20),
+    ("qwen-max",               1.60, 0.40,  None,   6.40),
 ]
 IDS = [p[0] for p in PRICES]
 
