@@ -30,7 +30,8 @@ from .copilot import (copilot_event_calls, copilot_mcp_servers, copilot_prompt_c
                       copilot_session_meta, copilot_session_usage, copilot_turns,
                       mcp_server_of)
 from .antigravity import (antigravity_prompt_count, antigravity_read,
-                          antigravity_session_to_claude, antigravity_session_usage)
+                          antigravity_session_to_claude, antigravity_session_usage,
+                          antigravity_tool)
 from .cursor import cursor_events_to_claude, cursor_prompt_count
 from .droid import (droid_log_head, droid_prompt_count, droid_prompt_turns,
                     droid_safe_session_id, droid_session_calls, droid_session_header,
@@ -61,7 +62,7 @@ __all__ = [
     "copilot_event_calls", "copilot_mcp_servers", "copilot_prompt_count", "copilot_session_meta",
     "copilot_session_usage", "copilot_turns", "mcp_server_of",
     "antigravity_prompt_count", "antigravity_read", "antigravity_session_to_claude",
-    "antigravity_session_usage",
+    "antigravity_session_usage", "antigravity_tool",
     "cursor_events_to_claude", "cursor_prompt_count",
     "droid_log_head", "droid_prompt_count", "droid_prompt_turns", "droid_safe_session_id",
     "droid_session_header", "droid_session_to_claude", "droid_session_usage", "droid_sessions",

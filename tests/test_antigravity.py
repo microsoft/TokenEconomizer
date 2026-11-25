@@ -305,6 +305,26 @@ def test_usage_sums_the_rows_that_report_it_and_skips_the_rest(tp):
         None, "no_usage")
 
 
+def test_usage_records_the_model_and_prices_it(tmp_path):
+    tp = tmp_path / "transcript.jsonl"
+    t = Transcript(tp)
+    t.prompt("test")
+    t._add(source="MODEL", type="PLANNER_RESPONSE", input_tokens=100, cache_read_tokens=500,
+           output_tokens=50, model="gemini-3.8-flash-high")
+    usage = trace.antigravity_session_usage(str(tp))
+    assert usage["model"] == "gemini-3.8-flash-high"
+    from tokeneconomizer.plugin import accounting
+    eff, priced_by = accounting.effective(usage)
+    assert priced_by == "model"
+    assert eff == 100 + 500 * 0.10 + 50 * 5.0
+
+
+def test_tool_mapping_handles_lowercase_path_arguments():
+    name, args = trace.antigravity_tool("read_file", {"path": "/work/repo/b.py"})
+    assert name == "Read"
+    assert args == {"file_path": "/work/repo/b.py"}
+
+
 def test_the_trace_conversion_feeds_the_mechanisms_and_prompts_are_counted(tp, tmp_path):
     t = Transcript(tp)
     t.prompt("first")

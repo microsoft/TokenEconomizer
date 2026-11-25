@@ -38,9 +38,9 @@ _TOKENS = (("input_tokens", "input_tokens"), ("cache_read_tokens", "cache_read_i
 _ARG_CAP = 2000          # characters of an unmapped tool's string argument that are kept
 
 # agy tool -> (name the mechanisms read, {their argument: agy's argument names, first found})
-_FILE = ("TargetFile", "AbsolutePath", "Path")
+_FILE = ("TargetFile", "AbsolutePath", "Path", "file_path", "filePath", "path")
 _TOOLS = {
-    "run_command": ("Bash", {"command": ("CommandLine",)}),
+    "run_command": ("Bash", {"command": ("CommandLine", "command", "cmd")}),
     "view_file": ("Read", {"file_path": _FILE}),
     "read_file": ("Read", {"file_path": _FILE}),
     "write_file": ("Write", {"file_path": _FILE}),
@@ -49,9 +49,10 @@ _TOOLS = {
     "replace_file_content": ("Edit", {"file_path": _FILE}),
     "multi_replace_file_content": ("Edit", {"file_path": _FILE}),
     "sed_file": ("Edit", {"file_path": _FILE}),
-    "grep_search": ("Grep", {"pattern": ("Query",), "path": ("SearchPath",)}),
-    "find_by_name": ("Glob", {"pattern": ("Pattern",), "path": ("SearchDirectory",)}),
-    "list_dir": ("Glob", {"path": ("DirectoryPath",)}),
+    "grep_search": ("Grep", {"pattern": ("Query", "pattern"), "path": ("SearchPath", "path", "directory")}),
+    "find_by_name": ("Glob", {"pattern": ("Pattern", "pattern"), "path": ("SearchDirectory", "path", "directory")}),
+    "list_dir": ("Glob", {"path": ("DirectoryPath", "path", "directory")}),
+    "search_web": ("Grep", {"pattern": ("query", "Query")}),
 }
 _UI_KEYS = ("toolAction", "toolSummary", "WaitMsBeforeAsync")
 
@@ -205,11 +206,10 @@ def antigravity_session_to_claude(path, out_path):
 def antigravity_session_usage(path):
     """Token breakdown over the planner rows that report usage; {} when none does. `input_tokens`
     is fresh input only, as agy writes it, so cached re-reads are `cache_read_input_tokens`.
-    The transcript names no model, so `model` is "antigravity": an id no price table has, which
-    the ledger prices on its labelled fallback curve (with none it would be the Claude curve)."""
+    `model` is the primary model named in the planner rows (or 'antigravity' fallback when unstated)."""
     totals = {"input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
               "output_tokens": 0}
-    requests = 0
+    requests, models = 0, {}
     for row in _records(path):
         if row.get("type") != "PLANNER_RESPONSE":
             continue
@@ -220,9 +220,13 @@ def antigravity_session_usage(path):
                 totals[dst] += v
                 seen = True
         requests += seen
+        m = row.get("model")
+        if isinstance(m, str) and m.strip():
+            models[m.strip()] = models.get(m.strip(), 0) + 1
     if not requests:
         return {}
-    return dict(totals, requests=requests, model="antigravity")
+    model = max(models, key=models.get) if models else "antigravity"
+    return dict(totals, requests=requests, model=model)
 
 
 def antigravity_prompt_count(path):

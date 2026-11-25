@@ -213,6 +213,9 @@ def weights_for(rec):
     key = mid.lower()
     if key in MODEL_WEIGHTS:
         return MODEL_WEIGHTS[key]
+    base_key = re.sub(r"-(?:high|medium|low|thinking|latest)$", "", key)
+    if base_key in MODEL_WEIGHTS:
+        return MODEL_WEIGHTS[base_key]
     if "claude" in key:
         return _claude_weights(key)
     raise ValueError(
