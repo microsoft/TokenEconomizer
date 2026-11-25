@@ -27,6 +27,19 @@ class LiveContext:
         return self.store.ensure("mechanisms")
 
     @property
+    def microskills_store(self):
+        """Store for micro-skills state: per-repo (`shared/`) when `microskills_scope=repo`,
+        else this host's store."""
+        if getattr(self.config, "microskills_scope", "host") == "repo":
+            return Store(os.path.join(os.path.dirname(self.store.base), "shared"))
+        return self.store
+
+    @property
+    def microskills_mech_dir(self):
+        """Where micro-skills distillers persist their state (`envfacts_state`, `manual_state`)."""
+        return self.microskills_store.ensure("mechanisms")
+
+    @property
     def headless(self):
         return self.is_headless()
 
