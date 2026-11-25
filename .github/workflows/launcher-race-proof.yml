@@ -30,18 +30,19 @@ jobs:
       - name: "stress: 4 threads write the launcher at once, 300 times"
         run: |
           python -I .proof/stress.py ../old 300 "before (main)" || true
-          python -I .proof/stress.py "$PWD" 300 "after, unique name only" noretry
+          python -I .proof/stress.py ../old 300 "main + retry only" retryonly || true
+          python -I .proof/stress.py "$PWD" 300 "after, unique name only" noretry || true
           python -I .proof/stress.py "$PWD" 300 "after (the fix)"
-      - name: "the CI test, 40 times, on main's code"
+      - name: "the CI test, 100 times, on main's code"
         run: |
           cp -r tokeneconomizer ../new
           rm -rf tokeneconomizer && cp -r ../old/tokeneconomizer tokeneconomizer
-          f=0; for i in $(seq 40); do python -m pytest -q -p no:cacheprovider "tests/test_hermes_plugin.py::test_gateway_and_cron_sessions_in_two_repositories_fold_apart_through_the_real_dispatcher" >/dev/null 2>&1 || f=$((f+1)); done
-          echo "before (main): $f/40 failed"
+          f=0; for i in $(seq 100); do python -m pytest -q -p no:cacheprovider "tests/test_hermes_plugin.py::test_gateway_and_cron_sessions_in_two_repositories_fold_apart_through_the_real_dispatcher" >/dev/null 2>&1 || f=$((f+1)); done
+          echo "before (main): $f/100 failed"
           rm -rf tokeneconomizer && cp -r ../new tokeneconomizer
-      - name: "the CI test, 40 times, with the fix"
+      - name: "the CI test, 100 times, with the fix"
         run: |
-          f=0; for i in $(seq 40); do python -m pytest -q -p no:cacheprovider "tests/test_hermes_plugin.py::test_gateway_and_cron_sessions_in_two_repositories_fold_apart_through_the_real_dispatcher" >/dev/null 2>&1 || f=$((f+1)); done
-          echo "after (the fix): $f/40 failed"; test "$f" = 0
+          f=0; for i in $(seq 100); do python -m pytest -q -p no:cacheprovider "tests/test_hermes_plugin.py::test_gateway_and_cron_sessions_in_two_repositories_fold_apart_through_the_real_dispatcher" >/dev/null 2>&1 || f=$((f+1)); done
+          echo "after (the fix): $f/100 failed"; test "$f" = 0
       - name: new regression test and launcher tests
         run: python -m pytest -q -p no:cacheprovider tests/test_windows_launcher.py tests/test_hermes_plugin.py

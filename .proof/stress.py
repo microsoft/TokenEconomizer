@@ -5,6 +5,10 @@ from tokeneconomizer.plugin import paths
 if len(sys.argv) > 4 and sys.argv[4] == "noretry":
     from tokeneconomizer.plugin import store
     store._replace = os.replace      # the unique name alone, without the Windows retry
+if len(sys.argv) > 4 and sys.argv[4] == "retryonly":
+    from tokeneconomizer.plugin import store
+    _real = os.replace
+    os.replace = lambda s, d: store._retrying(lambda: _real(s, d))   # main + a retry, nothing else
 if len(sys.argv) > 4 and sys.argv[4] == "windows":
     paths._WINDOWS = True
 plugin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin")
