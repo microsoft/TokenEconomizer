@@ -134,6 +134,13 @@ and date it was verified on; §5 says what has not been exercised.
   `<session>/subagents/`, and their calls and tokens are counted with their session.
 * A `claude -p` session's hooks see `CLAUDE_CODE_SESSION_ATTENDED=0` and
   `CLAUDE_CODE_ENTRYPOINT=sdk-cli`; `mode: auto` uses them to tell headless from interactive.
+* **Side calls run with `--safe-mode`** where `claude --help` lists it (verified on 2.1.329,
+  2026-11-19, against a local listener standing in for the API): a `SessionStart` and a
+  `UserPromptSubmit` hook in the person's settings ran in a plain `claude -p` and in neither under
+  `--safe-mode`, whose request also left out the person's `CLAUDE.md` (8.8 kB, 6.5 kB without).
+  The settings file's `env` (`ANTHROPIC_BASE_URL` and a key) still applied, so a provider set
+  there is still the one called. `toolprune measure` and `refresh-catalog` keep the person's
+  setup: they measure the real session.
 
 **Codex 0.153.1 — verified live with `codex exec`** (`gpt-5.6-sol`, direct OpenAI API key, an
 isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`; 2026-09-30):
@@ -598,8 +605,17 @@ was not.)
   (`reason: cli_close`), and, against the docs, not for `hermes -z`.
 * A subagent fires the whole set, on a session of its own (`created_source: subagent`).
 * A user's interactive row reads `source: local`, `created_source: cli`; a side call's reads
-  `tool`, with no `cwd`. The plugin follows `created_source` `cli` and `oneshot` with a `cwd`, and a
-  row it cannot read not at all, so the filter fails closed.
+  `tool`, with no `cwd`. The plugin follows `created_source` `cli`, `oneshot`, `cron` and the gateway
+  platforms it lists with a directory, and a row it cannot read not at all, so the filter fails
+  closed. The gateway's `os.getcwd()` and `TERMINAL_CWD` are the daemon's, shared by every chat, so
+  neither names a session's repository. A session's directory is its row's `cwd`; a gateway or
+  `cron` row that records none (Hermes writes `cwd` at a cron run's end) takes the `terminal_cwd`
+  of its `gateway_routing` entry, then the directory scoped to the running turn
+  (`agent.runtime_cwd.scoped_session_cwd`, `ctx.session_cwd()`), and with none it is looked at again
+  at its next hook. `/te` handlers are passed the `session_id` and `session_key` they declare, and
+  run in that session's directory. `on_session_reset` is handled as a finalize of the session it
+  leaves. Subagents stay out: the fold
+  prices a session with its subagents.
 * **Side calls.** `--source tokeneconomizer` is refused (`invalid_params`), though the docs say any
   value is stored; `tool` is accepted. `TE_SIDECALL` does not reach the gateway, and worse: with no
   gateway running a side call starts one, which kept `TE_SIDECALL=1` in its environment, and would
@@ -829,34 +845,40 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
 * **opencode (experimental)** — verified on 1.19.5, 2.2.0 and 2.2.5 (CI), not in the 2.x
   terminal UI. On 2.x the loop guard's notices go to the server's stderr because plugins cannot
   toast there; opencode has no deny-list settings file, so tool pruning does not apply (as on
-  Pi), and a TUI quit is only noticed by the next session's start.
+  Pi), and a TUI quit is noticed by the plugin itself: a session quiet for `fold.STALE_S`
+  (600 s; `TE_OPENCODE_QUIET_MS` overrides it) is handed over without waiting for a next start.
 * **Grok Build (experimental)** — micro-skills and the loop guard, on 1.0.70. No tool pruning. The
   start context reaches the model only with the session's first tool call (a session with none
   never gets it), and the ledger counts it as injected from `SessionStart`. A turn interrupted
   with Ctrl+C is closed by the next prompt, not by an event. Side calls leave a session under
   `~/.grok/sessions/`; xAI models are priced on the fallback curve.
-* **Hermes Agent** — experimental: micro-skills and the loop guard, on the classic CLI and one-shot
-  runs, verified with a scripted model and one free real model. Its limits are listed in
+* **Hermes Agent** (experimental): micro-skills and the loop guard, on the classic CLI, one-shot
+  runs, gateway sessions and `cron`, and `/te` where Hermes has `register_command`; verified with a scripted model and one free real model. Its limits are listed in
   `plugin/README.md`.
-* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, written against
-  agy 1.5.1 and its own installed hook documentation; tool pruning is not implemented. The
-  plugin makes no model call through `agy`, which has no option that runs a prompt with every tool
-  off (`sidecall.NO_SIDE_CALLS`), so the paid proposer and the loop guard's judge never run. What
-  was captured live: hooks come from a `hooks.json` at the plugin root, run through `sh -c` in
-  that directory, with camelCase payloads that name no event (the hook file's command does,
-  `--event`) and leave out a zero (`invocationNum` 0, the first model call of a prompt). A
-  `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
+* **Antigravity CLI (`agy`, experimental)** — micro-skills' LLM-free facts, tested against
+  `agy` 1.5.1 and 1.5.2 on Windows 11, macOS, and Linux, using its installed hook documentation;
+  tool pruning is not implemented. The plugin makes no model call through `agy`, which has no
+  option that runs a prompt with every tool off (`sidecall.NO_SIDE_CALLS`), so the paid proposer
+  and the loop guard's judge never run. What was captured live: hooks come from a `hooks.json` at
+  the plugin root, invoking `./scripts/te-hook` on macOS/Linux and native batch launcher
+  `scripts\te-hook.cmd` on Windows, with camelCase payloads that name no event (the hook file's
+  command does, `--event`) and leave out a zero (`invocationNum` 0, the first model call of a
+  prompt). A `PreToolUse` hook that prints `{}` makes agy deny the tool, so none is registered;
   `PostToolUse` carries no tool result and a matcher `"*"` never matches, so the results are read
   from the conversation's `transcript_full.jsonl` at the next `PreInvocation` and at `Stop`, where
-  every result of the previous model call is already written (`trace/antigravity.py`). There is no
+  every result of the previous model call is already written (`trace/antigravity.py`). The reader
+  also takes `write_file` and `edit_file` (with `Path`), the names reported from Antigravity
+  Desktop's transcripts, as Write and Edit; the plugin has not been run with Antigravity Desktop.
+  There is no
   prompt event and no `SessionEnd`: a prompt is the `PreInvocation` with `invocationNum` 0, and a
   conversation is folded by the next session start in its repository once its transcript has been
   quiet for ten minutes. Context goes back as `injectSteps`: a persistent `systemMessage` at
   `SessionStart`, an `ephemeralMessage` (dropped after the turn) at `PreInvocation`. Calls a subagent
   makes are not in the transcript and are not seen. Transcript token fields are absent from older
   agy versions (unknown, not zero), and the transcript names no model, so session cost is priced
-  on the ledger's labelled fallback. macOS and Linux only: agy runs hook commands through
-  `cmd /c` on Windows, and the launcher is a POSIX shell script.
+  on the ledger's labelled fallback. Works across Windows, macOS, and Linux (tested on `agy` 1.5.1
+  and 1.5.2 on Windows 11, macOS, and Linux; on Windows, terminal commands run through the plugin's
+  `scripts\te.cmd`, in the repository).
 * **Factory Droid (experimental)** — micro-skills, the loop guard and session cost, on 0.233.0
   (macOS). No tool pruning: the TUI has no persistent per-tool setting (Factory issue #65). Side
   calls are off until `droid_sidecall` is on; see `docs/DROID.md`.

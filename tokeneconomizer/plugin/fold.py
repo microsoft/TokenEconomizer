@@ -64,22 +64,28 @@ def _run_dir(workdir, trace_path):
     return run
 
 
+def _microskills_config(ctx, profile):
+    from tokeneconomizer.config import InjectionConfig
+    return InjectionConfig(enabled=True, profile=profile,
+                           propose_every=ctx.config.microskills_propose_every,
+                           max_facts=ctx.config.microskills_max_facts,
+                           max_tokens=ctx.config.microskills_max_tokens)
+
+
 def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported=False):
     profile = ctx.config.microskills
     if profile == "off":
         return None
-    from tokeneconomizer.config import InjectionConfig
     from tokeneconomizer.microskills import PrefixStage
-    icfg = InjectionConfig(enabled=True, profile=profile,
-                           propose_every=ctx.config.microskills_propose_every,
-                           max_facts=ctx.config.microskills_max_facts,
-                           max_tokens=ctx.config.microskills_max_tokens)
+    icfg = _microskills_config(ctx, profile)
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns. A session read from the agent's history never calls a model: the free
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
-    runner = (sidecall.runner_for(ctx.host.name, ctx.config)
-              if icfg.paid and not imported and not sidecall.paused(ctx.host.name, ctx.root)
-              else None)
+    runner = None
+    if icfg.paid and not imported:
+        runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
+                  if not sidecall.paused(ctx.host.name, ctx.root)
+                  else sidecall.local_runner("proposer", ctx.config))
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
@@ -96,6 +102,42 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
         "sessions": int(prior.get("sessions", 0)) + 1,
         "imported_sessions": int(prior.get("imported_sessions", 0)) + bool(imported)})
     return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
+
+
+class Busy(RuntimeError):
+    """Another fold holds this repository's learning state."""
+
+
+def forget_microskills(ctx, ids, undo=False):
+    """`te microskills forget` (`unforget` with `undo`): forget the facts `ids` in this
+    repository's learning state, so that no later fold learns them again, and render the cached
+    block again without them (with them, for `unforget`). Returns [(id, changed, claim)];
+    raises KeyError with the unknown ids, changing nothing, and `Busy` when a fold holds the
+    state longer than the lock waits."""
+    from tokeneconomizer.microskills import PrefixStage, forget_facts
+    adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
+                          catalog={}, protect=ctx.config.toolprune_protect)
+    vocab = adapter.env_vocabulary()
+    with ctx.store.locked("mechanisms") as got:
+        if not got:
+            raise Busy("a fold of this repository's sessions holds its state")
+        out = forget_facts(ctx.repo.label, ctx.mech_dir, ids, vocab=vocab, undo=undo)
+        prior = ctx.store.read("injection.json")
+        profile = (ctx.config.microskills if ctx.config.microskills != "off"
+                   else (prior or {}).get("profile"))
+        if not any(changed for _, changed, _ in out) or prior is None or not profile:
+            return out
+        stage = PrefixStage(_microskills_config(ctx, profile), ctx.repo.label, ctx.mech_dir,
+                            False, adapter=adapter, agent=ctx.host.name)
+        rendered = stage.render() or ""
+        facts = dict(stage.distiller.debug_row()) if stage.distiller else {}
+        # What only a fold knows (the last session's verdicts) stays as the fold left it.
+        facts.update({k: v for k, v in (prior.get("facts") or {}).items()
+                      if k.startswith("_") and k not in facts})
+        ctx.store.write("injection.json", dict(
+            prior, rendered=rendered, rendered_ids=stage.injected_ids(), facts=facts,
+            updated=time.time()))
+    return out
 
 
 def enough_evidence(sessions, prompts, cfg, high_risk=False):
@@ -145,8 +187,10 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     stage.catalog_desc = dict(st.get("catalog_desc") or {})
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
-    # The mask this session actually ran under: none, for one from before the plugin.
-    stage._exclude_tools = [] if imported else list(applied)
+    # Read the session's catalog even when it ran under a deny list. The stage skips a masked
+    # session's catalog, but here the catalog is only ever added to, so a shorter list removes
+    # nothing, and skipping it would keep out every tool that first appears later.
+    stage._exclude_tools = []
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
     # person wrote, and only in the direction of giving a tool back.
@@ -191,8 +235,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     doc = {"used_tools": sorted(stage.used_tools), "streaks": stage.tool_unused_streaks,
            "prompt_streaks": prompt_streaks,
            "catalog_tools": sorted(stage.catalog_tools), "catalog_desc": stage.catalog_desc,
-           # A session run under an applied mask parses no catalog (the stage skips it, as the
-           # masked list is not the full one); the last source still describes the catalog.
+           # A session with no tool call and no catalog parses none; the last source still
+           # describes the catalog.
            "catalog_source": srow.get("untool_catalog_source") or st.get("catalog_source"),
            "sessions": sessions, "prompts": int(st.get("prompts", 0)) + (prompts or 0),
            "updated": time.time()}

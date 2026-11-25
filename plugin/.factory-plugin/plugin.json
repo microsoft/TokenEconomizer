@@ -7,6 +7,6 @@
   },
   "homepage": "https://github.com/microsoft/TokenEconomizer",
   "repository": "https://github.com/microsoft/TokenEconomizer",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "keywords": ["cost", "tokens", "context", "hooks", "micro-skills", "failure-loops", "droid"]
 }

@@ -311,6 +311,44 @@ def test_env_assignments_after_env_are_part_of_how_a_command_was_typed():
     assert o.env is False
 
 
+def test_a_wrappers_own_options_are_not_the_command():
+    for cmd in ("sudo -u bob pytest -q", "sudo -Eu bob pytest", "nice -n 10 pytest",
+                "nice -n5 pytest", "nice -10 pytest", "timeout -s KILL 60 pytest",
+                "timeout --kill-after 5 2m pytest", "time -o t.txt pytest", "exec -a x pytest",
+                "sudo -- pytest"):
+        (o,) = observe.classify_command(cmd)
+        assert (o.intent, o.form, o.env) == ("run_tests", "pytest", False), cmd
+    for cmd in ("env -u CURSOR_AGENT python -m pytest -q", "env -i PATH=/bin python -m pytest",
+                "env -C sub python -m pytest", "sudo env --unset=X timeout 60 python -m pytest"):
+        (o,) = observe.classify_command(cmd)
+        assert (o.intent, o.form, o.env) == ("run_tests", "python -m pytest", True), cmd
+
+
+def test_a_form_typed_behind_a_wrapper_with_options_is_evidence(tmp_path):
+    """`nice -n 10 python -m pytest` is the same repair as `python -m pytest`; one that only
+    worked with `env -u VAR` in front is not named, as with `VAR=value` (see above)."""
+    def niced(tmp_path, i):
+        return _task(tmp_path, i, [
+            _edit(f"pkg/n{i}.py"),
+            _cmd("pytest -q", "bash: pytest: command not found", 127),
+            _cmd("nice -n 10 python -m pytest -q", "4 passed in 0.01s", 0)])
+    d = _stream(tmp_path, 4, niced)
+    f = d.facts["form_repair:run_tests:pytest"]
+    assert f.params["b_counts"] == {"python -m pytest": 4}
+    assert "`python -m pytest …` works" in d.render()
+
+    def unset(tmp_path, i):
+        return _task(tmp_path, i, [
+            _edit(f"pkg/u{i}.py"),
+            _cmd("pytest -q", "bash: pytest: command not found", 127),
+            _cmd(f"env -u PYTHONHOME {PROJ} -m pytest -q", "4 passed in 0.01s", 0)])
+    d = _stream(tmp_path, 3, _clean)
+    for i in range(3, 6):
+        d.render()
+        d.update(unset(tmp_path, i), iid=f"u-{i}", resolved=True)
+    assert PROJ + " -m pytest" not in d.facts["form_repair:run_tests:pytest"].params["b_counts"]
+
+
 # ---- persistence, other transcript schemas, stage wiring ---------------------------------
 def test_save_load_roundtrip(tmp_path):
     d = _stream(tmp_path, 4, _broken_env_task)

@@ -99,3 +99,16 @@ def test_the_init_probe_returns_the_tools_when_the_init_event_arrives(monkeypatc
     started = time.monotonic()
     assert toolcheck._init_tools([], cli="claude", timeout=30) == (["Bash", "Read"], "2.1")
     assert time.monotonic() - started < 4
+
+
+def test_the_init_probe_skips_json_lines_that_are_not_objects(monkeypatch):
+    """A line the CLI prints that parses but is not an object (null, a bare string, a number,
+    an array) is skipped, not a crash that loses the whole probe (issue #182)."""
+    init = {"type": "system", "subtype": "init", "tools": ["Bash"], "claude_code_version": "2.1"}
+    script = ("import json, time\n"
+              "for junk in (None, [1, 2], 'text', 42):\n"
+              "    print(json.dumps(junk), flush=True)\n"
+              f"print({json.dumps(init)!r}, flush=True)\n"
+              "time.sleep(5)")
+    _fake_probe(monkeypatch, script)
+    assert toolcheck._init_tools([], cli="claude", timeout=30) == (["Bash"], "2.1")

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from ..trace import set_tool_roles
 from . import repos
 from .config import LiveConfig, load_config
 from .paths import RepoId, repo_identity, repo_state_dir, state_root
@@ -54,6 +55,7 @@ class LiveContext:
         ctx = cls(host=host, repo=repo, root=root, store=Store(base),
                   config=load_config(root, repo_dir=os.path.dirname(base), env=env), env=env,
                   unsettled=unsettled)
+        set_tool_roles(ctx.config.tool_roles)
         if settle:
             ctx.settle()
         return ctx
@@ -69,6 +71,7 @@ class LiveContext:
             # A merge may have brought this repository its settings file.
             self.config = load_config(self.root, repo_dir=os.path.dirname(self.store.base),
                                       env=self.env)
+            set_tool_roles(self.config.tool_roles)
 
     def spawn(self, argv, log_name):
         """Run `te <argv>` for this host and repository in a detached process, its output

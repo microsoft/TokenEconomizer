@@ -15,7 +15,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 
-from ..trace import call_cwds, load_trajectory, strip_rtk_prefix
+from ..trace import SHELL_TOOLS, call_cwds, load_trajectory, strip_rtk_prefix, tool_kind
 from .lifecycle import edited_files, edited_pyfiles
 
 
@@ -98,7 +98,24 @@ DEFAULT_VOCAB = PYTHON_GIT
 GIT_FETCH_SUBS = frozenset({"fetch", "clone", "pull", "ls-remote"})
 GIT_PROBE_SUBS = frozenset({"remote", "branch", "tag", "fsck", "stash", "show-ref",
                             "for-each-ref"})
-PREFIX_HEADS = ("sudo", "env", "time", "exec", "nice", "nohup", "timeout")
+# Wrappers a command can be typed behind, each with its options that take a value: `sudo -u bob
+# pytest` and `nice -n 10 pytest` are pytest runs, not a command named `-u` or `-n`.
+# loopguard/shell_edits.py keeps the same table for the edits it reads (`_WRAPPERS`).
+PREFIX_HEADS = {
+    "sudo": frozenset({"-u", "-g", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "--user",
+                       "--group", "--prompt", "--close-from", "--chdir", "--chroot", "--role",
+                       "--type", "--command-timeout", "--other-user"}),
+    "env": frozenset({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}),
+    "time": frozenset({"-f", "-o", "--format", "--output"}),
+    "exec": frozenset({"-a"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "nohup": frozenset(),
+    "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
+}
+# `env` options that change the environment or the directory the command runs in, which the
+# command's form leaves out, as it leaves out a `VAR=value`.
+_ENV_CHANGES_RE = re.compile(r"^(?:-$|-[a-zA-Z0-9]*[iuCS]|"
+                             r"--(?:ignore-environment|unset|chdir|split-string)\b)")
 _PASSTHROUGH = frozenset({"cd", "echo", "head", "tail", "cat", "sort", "uniq", "tee", "true",
                           "printf", "less", "more"})
 
@@ -106,9 +123,41 @@ _ACTIVATE_RE = re.compile(r"^(?:source|\.)\s+\S*activate\s+([\w.-]+)\s*$")
 _CD_RE = re.compile(r"^cd\s+(['\"]?)([^\s;&|'\"]+)\1\s*$")
 _CD_FAILED_RE = re.compile(r"\bcd: [^\n]*: (?:No such file or directory|Not a directory)")
 _CONDA_ACTIVATE_RE = re.compile(r"^(?:conda|mamba)\s+activate\s+([\w.-]+)\s*$")
-_CONDA_RUN_RE = re.compile(r"^(?:conda|mamba)\s+run\s+(?:--no-capture-output\s+|--live-stream\s+)*"
-                           r"(?:-n|--name)\s+([\w.-]+)\s+")
-_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
+# The environment by name (`-n ml`) or by path (`-p ./env`); micromamba takes the same options.
+_CONDA_RUN_RE = re.compile(r"^(conda|mamba|micromamba)\s+run\s+"
+                           r"(?:--no-capture-output\s+|--live-stream\s+)*"
+                           r"(?:(?:-n|--name)(?:\s+|=)([\w.-]+)|"
+                           r"(?:-p|--prefix)(?:\s+|=)([^\s;&|'\"]+))\s+")
+_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|pdm|hatch|rye|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
+# A Python launcher's own options before the command (`uv run --frozen --extra test pytest`), of
+# which these take a value; a bare `--` ends them. They stay in the form: an extra, a group or a
+# `--with` is often what makes the command work.
+_PY_LAUNCHERS = frozenset({"poetry", "pipenv", "uv", "pdm", "hatch", "rye"})
+_RUN_OPTION_RE = re.compile(r"^(?:((?:--with(?:-editable|-requirements)?|--extra|"
+                            r"--(?:only-|no-)?group|--python|-p|--package|--project|--directory|"
+                            r"--env-file|--index|--pyproject)(?:=|\s+)[^\s-]\S*|"
+                            r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
+# `pixi run`'s own options (pixi's CLI reference), of which these take a value; its `-m` is the
+# manifest path, not a module. Its dry run (`-n`, `--dry-run`) only prints the command.
+_PIXI_RUN_RE = re.compile(r"^pixi\s+run\s+")
+_PIXI_OPTION_RE = re.compile(r"^(?:((?:-[epmws]|--(?:environment|platform|manifest-path|workspace|"
+                             r"script|config-file|auth-file|concurrent-downloads|"
+                             r"concurrent-solves|pinning-strategy|pypi-keyring-provider|"
+                             r"tls-root-certs))(?:=|\s+)[^\s-]\S*|"
+                             r"--?[A-Za-z][\w-]*(?:=\S+)?)|--)\s+")
+# A dry run: `--dry-run`, or `-n`, alone or among short flags (`-xn`).
+_DRY_RUN_RE = re.compile(r"--dry-run|-[A-Za-z]*n[A-Za-z]*")
+
+
+def _past_options(body, option_re):
+    """`body` past a launcher's own options, and those options as typed; a bare `--` ends them."""
+    opts = []
+    while o := option_re.match(body):
+        body = body[o.end():]
+        if o.group(1) is None:                   # `--`: the command follows
+            break
+        opts.append(" ".join(o.group(1).split()))
+    return body, opts
 _NPX_RE = re.compile(r"^npx\s+(?:(?:--yes|-y|--no-install|--no)\s+)*")
 # Launchers that fetch and run a Python tool in a throwaway environment (generic reading only).
 _TOOL_LAUNCH_RE = re.compile(r"^(uvx|uv\s+tool\s+run|pipx\s+run)\s+")
@@ -340,12 +389,24 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
         body = seg
         m = _CONDA_RUN_RE.match(body)
         if m:
-            prefix = (prefix + " " if prefix else "") + f"conda run -n {m.group(1)}"
+            launcher = "micromamba" if m.group(1) == "micromamba" else "conda"
+            env = f"-n {m.group(2)}" if m.group(2) else f"-p {m.group(3)}"
+            prefix = (prefix + " " if prefix else "") + f"{launcher} run {env}"
             body = body[m.end():]
+        m = _PIXI_RUN_RE.match(body)
+        if m:
+            body, opts = _past_options(body[m.end():], _PIXI_OPTION_RE)
+            if any(_DRY_RUN_RE.fullmatch(opt) for opt in opts):
+                continue
+            prefix = (prefix + " " if prefix else "") + " ".join(["pixi run", *opts])
         m = _TOOL_RUN_RE.match(body)
         if m:
-            prefix = (prefix + " " if prefix else "") + f"{m.group(1)} run"
+            launcher = [f"{m.group(1)} run"]
             body = body[m.end():]
+            if m.group(1) in _PY_LAUNCHERS:
+                body, opts = _past_options(body, _RUN_OPTION_RE)
+                launcher += opts
+            prefix = (prefix + " " if prefix else "") + " ".join(launcher)
         else:
             m = _NPX_RE.match(body)
             if m and m.end() > 0:
@@ -360,17 +421,45 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             if _ASSIGN_TOKEN_RE.match(toks[0]):          # `env VAR=value cmd`
                 assigned, toks = True, toks[1:]
             else:
-                toks = toks[1:] if toks[0] != "timeout" else toks[2:]
+                rest = _past_prefix(toks)
+                if toks[0] == "env" and any(_ENV_CHANGES_RE.match(t)
+                                            for t in toks[1:len(toks) - len(rest)]):
+                    assigned = True                      # `env -u VAR cmd`, `env -i cmd`
+                toks = rest
         if not toks:
             continue
         head = toks[0]
-        base = head.rsplit("/", 1)[-1]
+        base = _command_base(head)
         rest = toks[1:]
         o = _classify(head, base, rest, body, prefix, seg, call_index, vocab)
         if o is not None:
             o.env = assigned
             obs.append(o)
     return obs
+
+
+def _past_prefix(toks):
+    """The words after a wrapper such as `sudo` or `timeout`: past its own options (`-u bob`,
+    `-Eu bob`, `-n10`, `--signal KILL`, `--`) and, for `timeout`, the duration."""
+    takes_value = PREFIX_HEADS[toks[0]]
+    i = 1
+    while i < len(toks) and toks[i].startswith("-"):
+        t = toks[i]
+        i += 1
+        if t == "--":
+            break
+        if t.startswith("--"):
+            if t in takes_value:                          # `--user bob`, not `--user=bob`
+                i += 1
+            continue
+        for n, letter in enumerate(t[1:], 2):             # `-Eu bob`, `-ubob`, `-n10`, `-10`
+            if "-" + letter in takes_value:
+                if n == len(t):                           # the value is the next word
+                    i += 1
+                break
+    if toks[0] == "timeout":
+        i += 1
+    return toks[i:]
 
 
 def _runner_script(rest, vocab):
@@ -384,15 +473,45 @@ def _runner_script(rest, vocab):
     return None
 
 
+# coverage.py's `run` options that take a value (`--source pkg`); the others are flags.
+_COVERAGE_VALUE_OPTS = frozenset({"--rcfile", "--source", "--omit", "--include", "--data-file",
+                                  "--context", "--concurrency", "--debug", "--save-signal"})
+
+
+def _coverage_target(args, vocab):
+    """What `coverage run <args>` runs, when it is a test runner: `-m pytest`, `manage.py`
+    (given `test`) or a runner script; None for anything else."""
+    i = 0
+    while i < len(args) and args[i].startswith("-") and args[i] != "-m":
+        i += 2 if args[i] in _COVERAGE_VALUE_OPTS else 1
+    if args[i:i + 1] == ["-m"]:
+        mod = args[i + 1] if i + 1 < len(args) else ""
+        return f"-m {mod}" if mod in vocab.runner_modules else None
+    script = _runner_script(args[i:i + 1], vocab)
+    if script and (script != "manage.py" or "test" in args[i + 1:]):
+        return script
+    return None
+
+
 def _classify(head, base, rest, body, prefix, seg, call, vocab):
     def form(expr):
         return (prefix + " " + expr).strip() if prefix else expr
 
+    if base == "coverage" and rest[:1] == ["run"]:          # `coverage run -m pytest`
+        target = _coverage_target(rest[1:], vocab)
+        if target:
+            return Observation(call, "run_tests", form(f"{head} run {target}"), head, prefix, seg)
     if base in vocab.interpreters or _INTERP_VERSIONED_RE.match(base):
         if rest and all(t in ("--version", "-V", "-VV", "-v") for t in rest):
             return Observation(call, "probe_env", form(head), head, prefix, seg)
         if "-m" in rest:
             mod = rest[rest.index("-m") + 1] if rest.index("-m") + 1 < len(rest) else ""
+            after = rest[rest.index("-m") + 2:]
+            if mod == "coverage" and after[:1] == ["run"]:   # `python -m coverage run -m pytest`
+                target = _coverage_target(after[1:], vocab)
+                if target:
+                    return Observation(call, "run_tests", form(f"{head} -m coverage run {target}"),
+                                       head, prefix, seg)
             if mod in vocab.runner_modules:
                 return Observation(call, "run_tests", form(f"{head} -m {mod}"), head, prefix, seg)
             # `python -m mypy` runs the checker itself, not the interpreter.
@@ -611,9 +730,9 @@ def observe_task(transcript_path, vocab=None):
     triples = []
     env_calls = []
     for idx, (name, args, out, ok) in enumerate(calls):
-        tool = (name or "").lower()
+        tool = tool_kind(name)
         triples.append((tool, args if isinstance(args, dict) else {}, out or ""))
-        if tool not in ("shell", "bash", "stop_bash"):
+        if tool not in SHELL_TOOLS:
             continue
         cmd = (args.get("command") or args.get("cmd") or "") if isinstance(args, dict) else ""
         out = out or ""
@@ -715,6 +834,13 @@ def _error_line(out, err):
 
 def _base(path):
     return (path or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _command_base(head):
+    """The command a segment's head names: its last path part, less a Windows `.exe`, so
+    `C:\\Python312\\python.exe` and `.venv/bin/python` are both the `python` interpreter."""
+    base = _base(head)
+    return base[:-4] if base.lower().endswith(".exe") else base
 
 
 def _not_found_name(line):

@@ -23,6 +23,8 @@ from dataclasses import dataclass
 HOME_ENV = "TOKENECONOMIZER_HOME"
 # Names the repository of a session whose directory holds no git metadata, by its remote URL.
 REPO_ENV = "TOKENECONOMIZER_REPO"
+# A flag rather than `os.name` at the call, so the tests can write the Windows launcher anywhere.
+_WINDOWS = os.name == "nt"
 
 
 def state_root(env=None):
@@ -53,36 +55,59 @@ def launcher_path(env=None):
 
 
 def ensure_launcher(env=None):
-    """Keep `<state root>/bin/te` pointing at this plugin's `te`. Returns its path, or None.
+    """Keep `bin/te` and Windows launch information pointing at this plugin. Returns te or None.
 
     A slash command has to name the CLI's path. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}`
     into a command's text; the Copilot CLI substitutes nothing but `$ARGUMENTS` (1.0.83:
     `${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, `${COPILOT_PLUGIN_ROOT}`, `{{plugin_root}}` all
-    arrive literally), and its shell exports none of them. So every hook session start writes
-    this one-line launcher, the commands fall back to it, and a person on any host has a stable
-    `te` to run. The plugin's location comes from the bootstrap (`TE_PLUGIN_ROOT`); the file is
-    rewritten only when it changes, as an installed copy's path does across updates."""
+    arrive literally), and its shell exports none of them. Session-start and prompt hooks keep
+    these launchers current, including in sessions already open when the plugin was updated.
+    The commands fall back to them, and a person on any host has a stable `te` to run. The plugin's
+    location comes from the bootstrap (`TE_PLUGIN_ROOT`); each file is rewritten only when it
+    changes, as an installed copy's path does across updates."""
     import shlex
+    import sys
     env = os.environ if env is None else env
     plugin = env.get("TE_PLUGIN_ROOT")
     target = os.path.join(plugin, "scripts", "te") if plugin else ""
     if not target or not os.access(target, os.X_OK):
         return None
     path = launcher_path(env)
-    body = ("#!/bin/sh\n# Written by the TokenEconomizer plugin at session start: its `te` "
-            "command line.\nexec %s \"$@\"\n" % shlex.quote(target))
-    try:
-        with open(path, encoding="utf-8") as fh:
-            if fh.read() == body:
-                return path
-    except OSError:
-        pass
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(body)
-    os.chmod(tmp, 0o700)
-    os.replace(tmp, path)
+    head = ("#!/bin/sh\n# Written by the TokenEconomizer plugin at session start: its `te` "
+            "command line.\n")
+    body = head + "exec %s \"$@\"\n" % shlex.quote(target)
+    launchers = {path: body}
+    if _WINDOWS:
+        import json
+        bootstrap = os.path.join(plugin, "scripts", "te_bootstrap.py")
+        launchers[path + ".json"] = json.dumps({"python": sys.executable,
+                                                "bootstrap": bootstrap}) + "\n"
+        if sys.executable:
+            # The shell omp runs commands in cannot `exec` a backslash path, and refuses the
+            # `cd` inside `$(...)` that `scripts/te` finds its own directory with (#167). So
+            # `te` runs what te.json names, with forward slashes: the Python the hook runs under
+            # (not one chosen again by TE_PYTHON at each run) and the package it imported.
+            core = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            launchers[path] = head + ('[ -n "${TE_CORE_PATH:-}" ] || TE_CORE_PATH=%s\n'
+                                      "export TE_CORE_PATH PYTHONUTF8=1\n"
+                                      'exec %s %s cli "$@"\n') % tuple(
+                shlex.quote(p.replace("\\", "/")) for p in (core, sys.executable, bootstrap))
+    for launcher, body in launchers.items():
+        try:
+            # newline="": a launcher an earlier version wrote with CRLF does not compare equal.
+            with open(launcher, encoding="utf-8", newline="") as fh:
+                if fh.read() == body:
+                    continue
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(launcher), exist_ok=True)
+        tmp = "%s.%d.tmp" % (launcher, os.getpid())
+        # newline="\n": text mode on Windows would end each line with CRLF, and `sh` would pass
+        # the trailing "\r" on as an argument.
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(body)
+        os.chmod(tmp, 0o700)
+        os.replace(tmp, launcher)
     return path
 
 

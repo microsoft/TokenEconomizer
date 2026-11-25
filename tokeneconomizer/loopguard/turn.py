@@ -21,6 +21,7 @@ import re
 import shlex
 import time
 
+from ..trace import RTK_WORDS
 from .rules import DEFAULT_THRESHOLDS, assess_abort, is_stuck, nudge_text
 from .shell_edits import (_split_heredocs, fold_shell_edits, shell_edit_targets,
                           shell_revert_targets)
@@ -34,13 +35,53 @@ _SLOTS = SpiralState.__slots__
 # is often named by path (`python tests/runtests.py`, `.venv/bin/pytest`, `./node_modules/.bin/
 # jest`): without the optional directories those turns showed no verification at all, so a turn
 # whose last test run failed still counted as ended green and fed the envelope.
+# `python` with the interpreter's own options before what it runs (`python -W error -m pytest`,
+# `python -X dev -m pytest`, `python -u tests/runtests.py`); they are case-sensitive.
+_PYTHON = (r"python\d?(?:\.\d+)?"
+           r"(?-i:(?:\s+(?:-[bBdEiIOPqsSuvx]+|-[WX]\s*[^\s\-]\S*))*)")
+# Gradle's options and other tasks before the test task (`./gradlew clean test`, `./gradlew
+# --offline test`), but not a task it is told to leave out: `./gradlew build -x test` runs no
+# tests. The option is case-sensitive, as the other option letters here are.
+_GRADLE_EXCLUDE = r"(?-i:-x|--exclude-task)"
+_GRADLE_TASKS = (r"(?:\s+(?:" + _GRADLE_EXCLUDE + r"\s+\S+|(?!" + _GRADLE_EXCLUDE + r"\s)\S+))*"
+                 r"\s+")
+# Unless Maven is told to skip the tests (`mvn test -DskipTests`, `-D skipTests`,
+# `--define=maven.test.skip=TRUE`): it then passes without running any. Gradle reads no such
+# property: `./gradlew test -DskipTests` runs them. Read within the one command.
+_UNLESS_MVN_SKIPS_TESTS = (r"(?![^;&|\n]*\s(?-i:(?:-D\s*|--define[=\s]\s*)"
+                           r"(?:skipTests|maven\.test\.skip(?:\.exec)?)(?:=(?i:true))?)(?!\S))")
+# A value of one of make's options or variables: a word, or a `$(...)`/`${...}` whose brackets
+# `_pieces` has turned into spaces (`-j$(nproc)` reads `-j$ nproc`).
+_MAKE_VALUE = r"(?:\$\s*\w+|[^\s\-]\S*)"
 VERIFY_RE = re.compile(
-    r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*python\d?(?:\.\d+)?\s+)?"
-    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|python\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)|"
+    r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
+    r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|"
+    + _PYTHON + r"\s+-m\s+(?:pytest|unittest|tox|nox)|"
+    # coverage.py measuring a test run (`coverage run -m pytest`, `python -m coverage run
+    # manage.py test`), past its own options, of which these take a value
+    r"(?:-m\s+)?coverage\s+run(?:\s+(?:--(?:rcfile|source|omit|include|data-file|context|"
+    r"concurrency|debug|save-signal)(?:=|\s+)\S+|-[-\w]+))*\s+"
+    r"(?:-m\s+(?:pytest|unittest)|(?:[\w.\-]+/)*(?:manage\.py\s+test|runtests(?:\.py)?))|"
     r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
-    r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
-    r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
+    r"(?:mvn|mvnw|\./mvnw)" + _UNLESS_MVN_SKIPS_TESTS + r"\s+(?:\S+\s+)*test|"
+    # also a Gradle subproject's test task by its path, `./gradlew :app:test`, but not an
+    # option's value (`--exclude-task=:app:test`) or a task of a subproject named `test`
+    r"(?:gradle|gradlew|\./gradlew)" + _GRADLE_TASKS + r"(?!-)(?:\S*:)?test(?!:)|"
+    # make's own options and variables before the target (`make -j8 check`, `make -C build
+    # test`, `make V=1 test`, `make -j$(nproc) check`, whose `$(nproc)` reaches here as
+    # `$ nproc`). They are case-sensitive. `-C`, `-f`, `-I`, `-o` and `-W` always take a value,
+    # `-j` and `-l` may; the generic option does not also read one of them with its value, so
+    # a long line of options does not backtrack exponentially.
+    r"make(?-i:(?:\s+(?:-[CfIjloW]\s*" + _MAKE_VALUE + r"|"
+    r"--(?:directory|file|makefile|include-dir|jobs|load-average|old-file|assume-old|"
+    r"what-if|new-file|assume-new)\s+" + _MAKE_VALUE + r"|"
+    r"-(?![CfIoW]|[jl][^\s\-])[-\w]+(?:=(?:\$\s*\w+|\S*))?|\w+=(?:\$\s*\w+|\S*)))*)"
+    r"\s+(?:test|check)|"
+    # the other Python runners the micro-skills observer reads as test runs: Twisted's `trial`,
+    # nose (`nosetests`, `python -m nose`) and `python -m django test`
+    r"trial|nosetests|" + _PYTHON + r"\s+-m\s+(?:nose|django\s+test)|"
+    r"ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
     # Ruby: `rake test`, `bin/rails test`, and `ruby` given a test file (`ruby -Itest
     # test/models/user_test.rb`), but not `ruby -e '...'`, a syntax check (`ruby -wc x.rb`) or a
     # script that is not a test (`ruby repro.rb`): the options it takes are spelled out, and
@@ -61,19 +102,45 @@ VERIFY_RE = re.compile(
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 _QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
-# A runner asked for its help, version or test list, not to run the tests.
-_NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
+# A runner asked for its help, version or test list, not to run the tests; and pytest asked
+# only to show its fixtures, markers, setup plan or cache, or to set up fixtures, which runs none.
+_NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*|"
+                          r"--fixtures(?:-per-test)?|--funcargs|--markers|--setup-plan|"
+                          r"--setup-only|--cache-show(?:=\S*)?)(?!\S)")
 # What may precede the command itself: `FOO=1 timeout 60 npm test`, `env -u VAR`, `nice -n 10`,
-# and a launcher that runs it in the project's environment, `uv run pytest`, `npx jest`,
-# `bundle exec rspec`.
-_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nohup|command|"
-                        r"nice(?:\s+(?:-n\s*|--adjustment=)?[-+]?\d+)?|"
+# `sudo -u bob`, `time -p`, and a launcher that runs it in the project's environment, `uv run
+# pytest`, `npx jest`, `bundle exec rspec`. `command -v pytest` looks the runner up; only
+# `command -p` runs it.
+_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|nohup|command(?:\s+-p)?(?:\s+--)?|"
+                        # time's options; `-f` and `-o` take a value
+                        r"time(?:\s+(?:-[fo](?:\s+\S+|\S+)|--(?:format|output)(?:=|\s+)\S+|"
+                        r"-[pvaq]+|--(?:portability|verbose|append|quiet)))*|"
+                        r"exec(?:\s+(?:-a\s*[^\s-]\S*|-[cl]+))*(?:\s+--)?|"
+                        # sudo's options; these letters and long forms take a value
+                        r"sudo(?:\s+(?:-\w*[ugpCDRrtTU]\s*[^\s-]\S*|--(?:user|group|prompt|"
+                        r"close-from|chdir|chroot|role|type|command-timeout|other-user)"
+                        r"(?:=|\s+)\S+|-[-\w]*(?:=\S*)?))*|"
+                        r"nice(?:\s+(?:-n\s*|--adjustment(?:=|\s+))?[-+]?\d+)?|"
                         # env's options; `-u`, `-C` and their long forms take a value
                         r"env(?:\s+(?:(?:-[uC]|--unset|--chdir)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
                         r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+|"
+                        # `conda run -n ml`, `mamba run -p ./env`, `micromamba run -r /opt -n ml`:
+                        # the environment's name or path, and the other options that take a value
+                        r"(?:conda|mamba|micromamba)\s+run(?:\s+(?:(?:-[npr]|--name|--prefix|"
+                        r"--root-prefix|--cwd)(?:=|\s*)[^\s-]\S*|-[-\w]*))*|"
+                        # `pixi run -e test`: pixi's options, of which these take a value, but
+                        # not its dry run (`-n`, also among short flags as `-xn`, `--dry-run`),
+                        # which only prints the command
+                        r"pixi\s+run(?:\s+(?:(?:-[epmws]|--(?:environment|platform|manifest-path|"
+                        r"workspace|script|config-file|auth-file|concurrent-downloads|"
+                        r"concurrent-solves|pinning-strategy|pypi-keyring-provider|"
+                        r"tls-root-certs))(?:=|\s*)[^\s-]\S*|"
+                        r"(?!-[A-Za-z]*n[A-Za-z]*(?:\s|$)|--dry-run(?:\s|$))-[-\w]*(?:=\S*)?))*|"
                         r"(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\s+run|npx|bunx|"
                         r"(?:npm|pnpm|yarn)\s+(?:exec|dlx)|bundle\s+exec|xvfb-run)"
                         r"(?:\s+-\S+)*|"
+                        # rtk's prefix, `rtk pytest`, `rtk proxy npm test` (trace.RTK_WORDS)
+                        + RTK_WORDS + r"(?=\s+\S)|"
                         # `dotenv -e .env.local -- npx vitest run`: dotenv-cli's options, then `--`
                         r"dotenv(?:\s+(?!--(?:\s|$))\S+)*\s+--)\s+)*")
 # What only reports on the run before it: `echo "exit=$?"`, `true`, `exit 0`.

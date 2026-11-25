@@ -395,6 +395,30 @@ def test_te_repos_lists_merges_and_says_what_it_did(tmp_path, env, monkeypatch, 
     assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", "nope"]) == 2
 
 
+def test_te_repos_says_which_checkouts_tool_pruning_left_tools_out_of(tmp_path, env, monkeypatch,
+                                                                     capsys):
+    """From anywhere, `te repos` names each settings file the deny list wrote and how much it
+    left out, so finding the affected repositories takes no command run inside each (#219)."""
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
+    b = git_repo(str(tmp_path / "b"), "https://github.com/o/b")
+    for sid, cwd in (("s1", a), ("s2", b)):
+        call(env, {"hook_event_name": "SessionStart", "session_id": sid, "cwd": cwd}, "claude")
+    settings = denylist.settings_path(a, "claude")
+    denylist.write_applied(state(env, paths.repo_identity(a, env).key),
+                           {os.path.realpath(settings): ["Artifact", "mcp__teams__send"]})
+    assert cli.main(["--host", "claude", "--cwd", b, "repos"]) == 0
+    out = capsys.readouterr().out
+    left = [ln for ln in out.splitlines() if ln.startswith("  left out")]
+    assert left == [f"  left out     claude 2 tools in {os.path.realpath(settings)}"], out
+    assert "`te toolprune restore` gives it back" in out
+    assert cli.main(["--host", "claude", "--cwd", b, "repos", "--json"]) == 0
+    rows = {r["label"]: r for r in json.loads(capsys.readouterr().out)["repos"]}
+    assert rows["o/a"]["pruned"] == {"claude": {os.path.realpath(settings): 2}}
+    assert rows["o/b"]["pruned"] == {}
+
+
 def test_te_repos_merge_refuses_a_key_that_is_not_one_state_directory(tmp_path, env,
                                                                       monkeypatch, capsys):
     # `.` or "" (an unset shell variable) joined to `repos/` is `repos/` itself: merging it

@@ -70,6 +70,8 @@ def test_hook_files_run_the_launcher_on_every_event(name, host):
             assert f"--host {host}" in h["command"]
         if host == "copilot":
             assert h["command"].startswith('"${PLUGIN_ROOT}/scripts/te-hook"')
+            assert "te_bootstrap.py" in h["windows"] and "'--host', 'copilot'" in h["windows"]
+            assert h["windows"] == next(_commands(doc))[2]["windows"]
         if host == "codex":
             assert h["commandWindows"] == CODEX_WINDOWS
             if event == "SessionEnd":
@@ -135,12 +137,210 @@ def _run_hook(launcher, payload, env):
 WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
 
 
+# Where Windows PowerShell 5.1 finds its module analysis cache, where one is set: GitHub's Windows
+# image builds it ahead of time there. Without it, every launch analyzes each installed module
+# again before its first cmdlet (`Get-Content`, `Join-Path`): 12-18 s per launch on the runner,
+# against 0.4 s with it (measured in #238). pwsh starts as fast either way.
+POWERSHELL_ENV = ("PSMODULEANALYSISCACHEPATH",)
+
+
 def _hook_env(tmp_path, **extra):
     env = {k: os.environ[k] for k in WINDOWS_ENV if os.name == "nt" and k in os.environ}
     env.update({"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
                 "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"})
     env.update(extra)
     return env
+
+
+def _powershell_env(tmp_path, **extra):
+    """`_hook_env` plus where Windows PowerShell keeps its module analysis cache."""
+    env = _hook_env(tmp_path)
+    env.update({k: os.environ[k] for k in POWERSHELL_ENV if os.name == "nt" and k in os.environ})
+    env.update(extra)
+    return env
+
+
+POWERSHELLS = [p for p in (shutil.which("powershell"), shutil.which("pwsh")) if p]
+
+
+def _powershell_copilot(tmp_path, shell, policy):
+    """A Copilot plugin copy under a path with a quote and a space, its working folder, and a
+    `run(script, payload)` that runs PowerShell text there as the Copilot CLI does."""
+    work = tmp_path / "work space \u00e9"
+    work.mkdir()
+    scripts = tmp_path / "plugin's copy" / "scripts"
+    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
+                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    env["PATH"] = os.path.dirname(sys.executable)
+
+    def run(script, payload=None):
+        flags = ["-ExecutionPolicy", policy] if policy else []
+        return subprocess.run([shell, "-NoProfile"] + flags + ["-Command", script],
+                              input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+    return work, env, run
+
+
+def _copilot_windows_hook():
+    return next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+
+
+def _powershell_block(name):
+    text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
+    return re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+@pytest.mark.parametrize("policy", [None, "Restricted"])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_hook_without_git_bash(tmp_path, shell, event, policy):
+    """Either event records the session and leaves the launch information (`bin/te.json`) the
+    slash commands read."""
+    work, _env, run = _powershell_copilot(tmp_path, shell, policy)
+    payload = json.dumps({"hook_event_name": event, "session_id": "s",
+                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
+    out = run(_copilot_windows_hook(), payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    errors = tmp_path / "home" / "errors.log"
+    assert not errors.exists(), errors.read_text(encoding="utf-8")
+    sessions = list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
+    assert sessions, (out.stdout, out.stderr)
+    assert json.loads(sessions[0].read_text(encoding="utf-8"))["cwd"] == str(work)
+    assert (tmp_path / "home" / "bin" / "te.json").exists()
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.parametrize("policy", [None, "Restricted"])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_slash_commands_without_git_bash(tmp_path, shell, policy):
+    """The slash commands run from the launch information a hook left, and the hook also takes
+    its payload from the pipeline and answers with no Python at all. None of this depends on
+    which event the hook saw (test_powershell_hook_without_git_bash covers both), so it runs
+    once per shell and policy: each line here is a PowerShell launch, seconds apiece on CI."""
+    work, env, run = _powershell_copilot(tmp_path, shell, policy)
+    command = _copilot_windows_hook()
+    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "s",
+                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
+    out = run(command, payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
+        out = run(_powershell_block(name).replace("$ARGUMENTS", ""))
+        assert out.returncode == 0 and out.stdout.strip(), (name, out.stderr)
+    out = run(_powershell_block("config").replace("$ARGUMENTS", "set loopguard=off"))
+    assert out.returncode == 0, out.stderr
+    settings = list((tmp_path / "home" / "repos").glob("*/config.json"))
+    assert settings and json.loads(settings[0].read_text())["loopguard"] == "off"
+    out = run(f"'{payload.replace(chr(39), chr(39) * 2)}' | {command}")
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    env.update(PATH="", TE_PYTHON=str(tmp_path / "missing.exe"))
+    out = run(command, payload)
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_path, shell):
+    from tokeneconomizer.plugin.paths import ensure_launcher
+
+    work = tmp_path / "work space \u00e9"
+    work.mkdir()
+    scripts = tmp_path / "plugin's copy" / "scripts"
+    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (scripts / "te_bootstrap.py").write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\nsys.exit(7)\n")
+    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable,
+                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
+    ensure_launcher(dict(env, TE_PLUGIN_ROOT=str(scripts.parent)))
+
+    def run(command, payload=None):
+        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
+                               command], input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+
+    text = open(os.path.join(PLUGIN, "slash-commands", "config.md"), encoding="utf-8").read()
+    command = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
+    command = command.replace("$ARGUMENTS", "set 'paid_model=a&b' 'a|b' 'a%PATH%b'")
+    out = run(command + "; exit $LASTEXITCODE")
+    assert out.returncode == 7, out.stderr
+    assert json.loads(out.stdout) == ["cli", "--host", "copilot", "--cwd", str(work),
+                                     "config", "set", "paid_model=a&b", "a|b", "a%PATH%b"]
+
+    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+    winapps = tmp_path / "Microsoft" / "WindowsApps"
+    winapps.mkdir(parents=True)
+    marker = tmp_path / "alias_called"
+    alias = winapps / "python3.cmd"
+    alias.write_text(f'@echo alias>"{marker}"\n@exit /b 1\n')
+    env.update(TE_PYTHON="", PATH=os.pathsep.join((str(winapps), os.path.dirname(sys.executable))))
+    out = run(command, "{}")
+    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
+    assert not marker.exists()
+    env["PATH"] = str(winapps)
+    out = run(command, "{}")
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
+    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
+    alias.write_text(f'@"{sys.executable}" %*\n')
+    out = run(command, "{}")
+    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shell):
+    work = tmp_path / "work"
+    work.mkdir()
+    old = tmp_path / "old"
+    old.mkdir()
+    marker = tmp_path / "old_ran"
+    shim = old / "old.py"
+    shim.write_text(
+        "import runpy, sys\n"
+        "sys.argv.pop(0)\n"
+        "sys.version_info = (3, 9)\n"
+        "if '-c' in sys.argv:\n"
+        "    exec(sys.argv[sys.argv.index('-c') + 1])\n"
+        "else:\n"
+        f"    open({str(marker)!r}, 'w').close()\n"
+        "    runpy.run_path(sys.argv[0], run_name='__main__')\n",
+        encoding="utf-8")
+    (old / "python3.cmd").write_text(f'@"{sys.executable}" "{shim}" %*\n')
+    new = tmp_path / "new"
+    new.mkdir()
+    (new / "python.cmd").write_text(f'@"{sys.executable}" %*\n')
+    env = _powershell_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
+                          PATH=os.pathsep.join((str(old), str(new))))
+    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
+    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "version-test",
+                          "cwd": str(work), "source": "new"})
+
+    def run():
+        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
+                               command], input=payload, capture_output=True, encoding="utf-8",
+                              env=env, cwd=work, timeout=60)
+
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert list((tmp_path / "home" / "repos").glob("*/copilot/sessions/version-test.json"))
+    assert not marker.exists()
+    env["PATH"] = str(old)
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
+    marker.unlink()
+    env.update(PATH=str(new), TE_PYTHON=str(old / "python3.cmd"))
+    out = run()
+    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
+    assert marker.exists()
 
 
 def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
@@ -191,11 +391,90 @@ def test_on_windows_the_launcher_probes_and_skips_a_broken_alias_when_it_is_the_
     assert (tmp_path / "alias_called").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash's path conversion")
+def test_on_windows_the_launchers_hand_python_a_windows_path_with_path_conversion_off(tmp_path):
+    """Claude Code runs hooks in Git Bash with MSYS path conversion off. `pwd` there prints
+    `/c/...`, which native Python reads as `C:\\c\\...` when nothing converts it, so the
+    launchers pass the Windows form (`pwd -W`)."""
+    work = tmp_path / "work"
+    work.mkdir()
+    env = _hook_env(tmp_path, MSYS_NO_PATHCONV="1")
+    code, out, err = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                               {"hook_event_name": "SessionStart", "session_id": "s",
+                                "cwd": str(work), "source": "startup"}, env)
+    assert code == 0 and json.loads(out) == {}, err
+    assert os.path.isdir(tmp_path / "home" / "repos")
+    p = subprocess.run(SH + [os.path.join(PLUGIN, "scripts", "te"), "--help"],
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert p.returncode == 0 and "usage" in p.stdout, p.stderr
+
+
 def test_the_launcher_fails_open_without_python(tmp_path):
     code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
                              {"hook_event_name": "SessionStart"},
                              {"PATH": "", "TE_PYTHON": "/nonexistent/python"})
     assert code == 0 and json.loads(out) == {}
+
+
+def _old_python(path, marker):
+    # Fails the launcher's version probe (`-E -S -c ...`); anything else it is asked to run, it
+    # records.
+    _script(path, f'for a in "$@"; do [ "$a" = -c ] && exit 1; done\n: > "{marker}"\n'
+                  'while IFS= read -r _l; do :; done\necho "{}"')
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_the_launcher_skips_a_python3_older_than_the_bootstrap_needs(tmp_path):
+    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
+    _old_python(old, tmp_path / "old_ran")
+    _script(new, f'exec "{sys.executable}" "$@"')
+    work = tmp_path / "work"
+    work.mkdir()
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart", "session_id": "s",
+                              "cwd": str(work), "source": "startup"},
+                             _hook_env(tmp_path, PATH=f"{old.parent}:{new.parent}:/usr/bin:/bin"))
+    assert code == 0 and json.loads(out) == {}
+    assert os.path.isdir(tmp_path / "home" / "repos")      # the new Python ran the dispatcher
+    assert not (tmp_path / "old_ran").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_with_only_an_old_python_the_launcher_still_hands_it_the_hook(tmp_path):
+    old = tmp_path / "old" / "python3"
+    _old_python(old, tmp_path / "old_ran")
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"},
+                             {"PATH": str(old.parent),
+                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "old_ran").exists()                 # so the bootstrap can fail open itself
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_a_shim_that_runs_no_python_is_passed_over(tmp_path):
+    """A pyenv shim with no version set exits 127 and runs nothing: with no other Python on
+    PATH, the launcher answers no change itself."""
+    shim = tmp_path / "shims" / "python3"
+    _script(shim, 'echo "pyenv: python3: command not found" >&2\nexit 127')
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"}, {"PATH": str(shim.parent)})
+    assert code == 0 and json.loads(out) == {}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
+def test_te_python_runs_as_named_even_beside_a_newer_python(tmp_path):
+    """`TE_PYTHON` is the person's own choice: the launcher runs it without a probe, and the
+    bootstrap says what it needs if it is too old."""
+    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
+    _old_python(old, tmp_path / "old_ran")
+    _script(new, f'exec "{sys.executable}" "$@"')
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+                             {"hook_event_name": "SessionStart"},
+                             {"PATH": str(new.parent), "TE_PYTHON": str(old),
+                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
+    assert code == 0 and json.loads(out) == {}
+    assert (tmp_path / "old_ran").exists()
 
 
 def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch):
@@ -374,6 +653,61 @@ console.log(JSON.stringify([
     assert run.returncode == 0, run.stderr
     facts = "Facts:\n- one"
     assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
+
+
+def test_pi_completes_te_as_its_parser_declares_it():
+    """`/te` completes the `te` command line from a table that must match `build_parser()`: every
+    subcommand a Pi user runs, its actions and its options. It completes a word at a time, the
+    item restating what was typed, since Pi replaces the typed arguments with the item's value."""
+    import argparse
+    from tokeneconomizer.plugin.cli import build_parser
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    (sub,) = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)]
+    expected, seen = {}, set()
+    for name, p in sub.choices.items():          # a name first, then its aliases
+        if id(p) in seen or name in ("fold", "judge", "probe"):
+            seen.add(id(p))
+            continue
+        seen.add(id(p))
+        expected[name] = {
+            "actions": [c for a in p._actions if a.dest == "action" for c in a.choices],
+            "flags": [s for a in p._actions if a.option_strings and a.help != argparse.SUPPRESS
+                      and a.dest not in ("help", "cwd", "host") for s in a.option_strings],
+        }
+    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
+    script = """
+const { pathToFileURL } = await import("node:url");
+const { TE_COMMANDS, completeTe } = await import(pathToFileURL(process.argv[1]).href);
+const values = (p) => completeTe(p)?.map((i) => i.value) ?? null;
+console.log(JSON.stringify({
+  table: TE_COMMANDS,
+  cases: ["", "mi", "microskills ", "microskills f", "status --", "status --json --",
+          "history import ", "config --global ", "nope ", "doctor x"].map(values),
+}));
+"""
+    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
+                          "--input-type=module", "-e", script, ext],
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert out["table"] == expected
+    assert out["cases"] == [
+        [f"{name} " for name in expected],
+        ["microskills "],
+        ["microskills show ", "microskills forget ", "microskills unforget "],
+        ["microskills forget "],
+        ["status --json ", "status --explain "],
+        ["status --json --explain "],
+        ["history import --dry-run ", "history import --status "],
+        ["config --global show ", "config --global set ", "config --global unset "],
+        None,
+        None,
+    ]
 
 
 def test_the_plugin_directory_is_also_a_pi_package():
@@ -618,3 +952,362 @@ def test_text_io_names_its_encoding():
             if text and "encoding" not in kw:
                 missing.append(f"{os.path.relpath(path, REPO)}:{call.lineno}")
     assert not missing, missing
+
+
+def _copy_plugin_with_stub(dest):
+    shutil.copytree(PLUGIN, str(dest), symlinks=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
+    (dest / "lib").mkdir()
+    (dest / "lib" / "tokeneconomizer").write_text("../../tokeneconomizer", encoding="utf-8")
+    return dest
+
+
+def test_copilot_and_vscode_plugin_copies_find_the_core(tmp_path):
+    """#265: Copilot `installed-plugins/<market>/<plugin>` and VS Code `agentPlugins/file-...`
+    mirrors with a plain-file `lib/tokeneconomizer` stub find the core via Copilot marketplace
+    checkouts/config, `~/.claude/plugins/known_marketplaces.json`, or `<TOKENECONOMIZER_HOME>/src`."""
+    user = tmp_path / "user"
+    copilot = user / ".copilot"
+    copy = _copy_plugin_with_stub(copilot / "installed-plugins" / "tokeneconomizer" / "tokeneconomizer")
+    vscode_copy = _copy_plugin_with_stub(
+        user / "AppData" / "Roaming" / "Code" / "agentPlugins"
+        / "file-c-3A-Users-test-copilot-installed-plugins-tokeneconomizer-tokeneconomizer"
+        / "1a1eddd1a4c")
+
+    base_env = dict(os.environ, HOME=str(user), USERPROFILE=str(user),
+                    TOKENECONOMIZER_HOME=str(tmp_path / "te-home"),
+                    TE_CORE_PATH="", PYTHONPATH="")
+
+    def doctor(plugin_dir, env=None):
+        return subprocess.run(SH + [str(plugin_dir / "scripts" / "te"), "doctor"],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60,
+                              cwd=str(tmp_path), env=env or base_env)
+
+    # 1. Nothing configured yet: fails cleanly and writes errors.log.
+    out = doctor(copy)
+    assert out.returncode == 1 and "core package was not found" in out.stderr
+
+    # 2. Copilot `config.json` (JSONC with //, /* ... */, trailing comma, and string-leading //).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "te_bootstrap_under_test", os.path.join(PLUGIN, "scripts", "te_bootstrap.py"))
+    boot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boot)
+    copilot.mkdir(parents=True, exist_ok=True)
+    (copilot / "config.json").write_text(
+        "// Copilot CLI config\n"
+        "{\n"
+        '  /* inline block comment */\n'
+        '  "note": "line 1\n//not-a-comment",\n'
+        '  "marketplaces": {\n'
+        f'    "tokeneconomizer": {json.dumps(REPO)}, // inline comment\n'
+        "  },\n"
+        "}\n",
+        encoding="utf-8")
+    parsed_cfg = boot._json_load_relaxed(str(copilot / "config.json"))
+    assert parsed_cfg["note"] == "line 1\n//not-a-comment"
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    (copilot / "config.json").unlink()
+
+    # 3. Cross-cache fallback via `~/.claude/plugins/known_marketplaces.json` (#167 / #265).
+    claude_plugins = user / ".claude" / "plugins"
+    claude_plugins.mkdir(parents=True)
+    (claude_plugins / "known_marketplaces.json").write_text(
+        json.dumps({"tokeneconomizer": {"source": {"path": REPO}}}), encoding="utf-8")
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    (claude_plugins / "known_marketplaces.json").unlink()
+
+    # 4. Copilot `<copilot_home>/marketplaces/<market>` directory layout (#265).
+    mkt_dir = copilot / "marketplaces" / "tokeneconomizer"
+    mkt_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(os.path.join(REPO, "tokeneconomizer"), mkt_dir / "tokeneconomizer",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    assert doctor(copy).returncode == 0
+    assert doctor(vscode_copy).returncode == 0
+    shutil.rmtree(mkt_dir)
+
+    # 5. State-root `<TOKENECONOMIZER_HOME>/src` fallback (#167).
+    te_home = tmp_path / "te-home-src"
+    te_home.mkdir()
+    try:
+        os.symlink(REPO, str(te_home / "src"))
+    except OSError:
+        shutil.copytree(os.path.join(REPO, "tokeneconomizer"), te_home / "src" / "tokeneconomizer",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    src_env = dict(base_env, TOKENECONOMIZER_HOME=str(te_home))
+    assert doctor(copy, src_env).returncode == 0
+    assert doctor(vscode_copy, src_env).returncode == 0
+
+
+def test_te_bootstrap_stays_python30_compatible():
+    """`plugin/scripts/te_bootstrap.py` must parse on Python <3.6 so old interpreters can still
+    fail open cleanly instead of dying with a SyntaxError."""
+    import ast
+    src = open(os.path.join(PLUGIN, "scripts", "te_bootstrap.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        assert not isinstance(node, ast.JoinedStr), "f-string not allowed in te_bootstrap.py"
+        assert not isinstance(node, ast.AnnAssign), "type annotation not allowed in te_bootstrap.py"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            assert node.returns is None, "return annotation not allowed in te_bootstrap.py"
+            for a in node.args.args + node.args.kwonlyargs:
+                assert a.annotation is None, "arg annotation not allowed in te_bootstrap.py"
+
+
+def test_powershell_slash_commands_guard_missing_te_json():
+    """#265: PowerShell slash commands check `Test-Path` on `bin\\te.json` before reading it."""
+    templates = set()
+    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
+        block = _powershell_block(name)
+        assert "Test-Path -LiteralPath $meta" in block
+        assert "COPILOT_PLUGIN_ROOT" in block
+        templates.add(re.sub(r"--cwd \(Get-Location\)\.Path .+", "--cwd (Get-Location).Path <CMD>",
+                             block))
+    assert len(templates) == 1
+
+
+@pytest.mark.powershell
+@pytest.mark.parametrize("shell", POWERSHELLS or [None])
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
+def test_powershell_slash_command_reports_cleanly_when_te_json_missing(tmp_path, shell):
+    work, env, run = _powershell_copilot(tmp_path, shell, None)
+    env.pop("COPILOT_PLUGIN_ROOT", None)
+    out = run(_powershell_block("status"))
+    assert out.returncode != 0
+    assert "not initialized yet" in out.stderr
+    assert "Cannot find path" not in out.stderr
+
+
+def _run_opencode_v2_script(tmp_path, driver_js, hook_script_body):
+    """Run an offline Node script against a copy of `plugin/opencode/tokeneconomizer.ts` with a
+    mock `te-hook` / `te_bootstrap.py` dispatcher."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    root = tmp_path / "oc-plugin"
+    (root / "opencode").mkdir(parents=True)
+    (root / "scripts").mkdir(parents=True)
+    plugin_copy = root / "opencode" / "tokeneconomizer.ts"
+    shutil.copyfile(os.path.join(PLUGIN, "opencode", "tokeneconomizer.ts"), plugin_copy)
+    bootstrap = root / "scripts" / "te_bootstrap.py"
+    bootstrap.write_text(hook_script_body, encoding="utf-8")
+    te_hook = root / "scripts" / "te-hook"
+    te_hook.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bootstrap}" hook "$@"\n',
+                       encoding="utf-8")
+    os.chmod(te_hook, 0o755)
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    env = dict(os.environ,
+               TOKENECONOMIZER_HOME=str(tmp_path / "te-home"),
+               TE_PYTHON=sys.executable,
+               TE_OPENCODE_MODE="tui")
+    env.pop("TE_DISABLE", None)
+    env.pop("TE_SIDECALL", None)
+    run = subprocess.run(
+        [node, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e",
+         driver_js, str(plugin_copy), str(work)],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+def test_opencode_v2_delivers_redirect_on_failed_tool_and_holds_when_immutable(tmp_path):
+    """opencode 2.x `execute.after` must deliver loop-guard redirects even when `status !==
+    'completed'`, and hold an undeliverable redirect until the next tool call in the same turn
+    (never leaking across turns)."""
+    hook_py = (
+        "import json, sys\n"
+        "p = json.loads(sys.stdin.read())\n"
+        "if p.get('hook_event_name') == 'PostToolUse' and p.get('tool_use_id') in ('c_mut', 'c_frz', 'c_obj'):\n"
+        "    print(json.dumps({'hookSpecificOutput': {'additionalContext': 'REDIRECT:' + p['tool_use_id']}}))\n"
+        "else:\n"
+        "    print('{}')\n"
+    )
+    driver = """
+const { pathToFileURL } = await import("node:url");
+const plugin = (await import(pathToFileURL(process.argv[1]).href)).default;
+const work = process.argv[2];
+const hooks = {};
+const events = [];
+let wake;
+const teardown = await plugin.setup({
+  location: { directory: work },
+  session: { hook: async (n, fn) => { hooks["session." + n] = fn; } },
+  tool: { hook: async (n, fn) => { hooks["tool." + n] = fn; } },
+  event: {
+    subscribe: async function* ({ signal }) {
+      while (!signal.aborted) {
+        if (events.length) { yield events.shift(); continue; }
+        await new Promise((r) => { wake = r; });
+      }
+    },
+  },
+});
+const push = async (ev) => { events.push(ev); wake?.(); await new Promise((r) => setTimeout(r, 20)); };
+
+await hooks["session.prompt"]({ sessionID: "s1", messageID: "m1", prompt: { text: "p1" } });
+const errMut = { sessionID: "s1", status: "failed", tool: "edit", id: "c_mut",
+  input: {}, error: { message: "Edit failed" } };
+await hooks["tool.execute.after"](errMut);
+
+const errFrz = { sessionID: "s1", status: "failed", tool: "bash", id: "c_frz",
+  input: {}, error: Object.freeze({ message: "Frozen error" }) };
+await hooks["tool.execute.after"](errFrz);
+
+const okNext = { sessionID: "s1", status: "completed", tool: "read", id: "c_ok",
+  input: {}, result: { content: "file text", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okNext);
+
+// Non-string, non-array object `result.content` must not be overwritten; hold for next call.
+const okObj = { sessionID: "s1", status: "completed", tool: "custom", id: "c_obj",
+  input: {}, result: { content: { structured: 1 }, metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okObj);
+
+const okAfterObj = { sessionID: "s1", status: "completed", tool: "read", id: "c_after_obj",
+  input: {}, result: { content: "after obj", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okAfterObj);
+
+// An undelivered redirect from turn 1 must not spill into turn 2.
+const errFrz2 = { sessionID: "s1", status: "failed", tool: "bash", id: "c_frz",
+  input: {}, error: Object.freeze({ message: "Frozen again" }) };
+await hooks["tool.execute.after"](errFrz2);
+await push({ type: "session.idle", properties: { sessionID: "s1" } });
+await hooks["session.prompt"]({ sessionID: "s1", messageID: "m2", prompt: { text: "p2" } });
+const okTurn2 = { sessionID: "s1", status: "completed", tool: "read", id: "c_t2",
+  input: {}, result: { content: "clean turn2", metadata: { exit: 0 } } };
+await hooks["tool.execute.after"](okTurn2);
+
+teardown();
+wake?.();
+console.log(JSON.stringify({
+  mutError: errMut.error.message,
+  frozenError: errFrz.error.message,
+  okNextContent: okNext.result.content,
+  okObjContent: okObj.result.content,
+  okAfterObjContent: okAfterObj.result.content,
+  okTurn2Content: okTurn2.result.content,
+}));
+"""
+    got = _run_opencode_v2_script(tmp_path, driver, hook_py)
+    assert got["mutError"] == "Edit failed\n\nREDIRECT:c_mut"
+    assert got["frozenError"] == "Frozen error"
+    assert got["okNextContent"] == "file text\n\nREDIRECT:c_frz"
+    assert got["okObjContent"] == {"structured": 1}
+    assert got["okAfterObjContent"] == "after obj\n\nREDIRECT:c_obj"
+    assert got["okTurn2Content"] == "clean turn2"
+
+
+def test_opencode_v2_exports_session_before_cleaning_state_on_end(tmp_path):
+    """In opencode 2.x's long-lived service, `session.deleted` exports the recorded session
+    messages first and clears per-session state afterwards so daemon memory stays bounded."""
+    hook_py = (
+        "import json, sys\n"
+        "p = json.loads(sys.stdin.read())\n"
+        "if p.get('hook_event_name') == 'SessionStart':\n"
+        "    print(json.dumps({'hookSpecificOutput': {'additionalContext': 'LEARNED MANUAL'}}))\n"
+        "else:\n"
+        "    print('{}')\n"
+    )
+    driver = """
+const { pathToFileURL } = await import("node:url");
+const plugin = (await import(pathToFileURL(process.argv[1]).href)).default;
+const work = process.argv[2];
+const hooks = {};
+const events = [];
+let wake;
+const baseExitListeners = process.listenerCount("exit");
+const teardown = await plugin.setup({
+  location: { directory: work },
+  session: { hook: async (n, fn) => { hooks["session." + n] = fn; } },
+  tool: { hook: async (n, fn) => { hooks["tool." + n] = fn; } },
+  event: {
+    subscribe: async function* ({ signal }) {
+      while (!signal.aborted) {
+        if (events.length) { yield events.shift(); continue; }
+        await new Promise((r) => { wake = r; });
+      }
+    },
+  },
+});
+const push = async (ev) => { events.push(ev); wake?.(); await new Promise((r) => setTimeout(r, 25)); };
+
+await hooks["session.prompt"]({ sessionID: "s_del", messageID: "u1", prompt: { text: "fix bug" } });
+await push({ type: "session.step.started", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", model: { id: "m-test" } } });
+await push({ type: "session.tool.input.started", properties: {
+  sessionID: "s_del", id: "tc1", name: "bash" } });
+await push({ type: "session.tool.input.started", properties: {
+  sessionID: "s_del", id: "tc_orphan", name: "leaked_tool" } });
+await push({ type: "session.tool.called", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", id: "tc1", input: { command: "pytest" } } });
+await push({ type: "session.tool.success", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", id: "tc1", content: "ok", metadata: { exit: 0 } } });
+await push({ type: "session.step.ended", properties: {
+  sessionID: "s_del", assistantMessageID: "a1", cost: 0.01, tokens: { input: 10, output: 2 } } });
+
+const sysBefore = [];
+hooks["session.context"]({ sessionID: "s_del", system: sysBefore });
+
+await push({ type: "session.deleted", properties: { sessionID: "s_del" } });
+
+const sysAfter = [];
+hooks["session.context"]({ sessionID: "s_del", system: sysAfter });
+
+// Reusing the same assistant/call ids in a new session must not hit leftover `steps`/`names`.
+await hooks["session.prompt"]({ sessionID: "s_next", messageID: "u2", prompt: { text: "next task" } });
+await push({ type: "session.step.started", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", model: { id: "m-test" } } });
+await push({ type: "session.tool.called", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", input: {} } });
+await push({ type: "session.tool.success", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", id: "tc_orphan", content: "ok", metadata: { exit: 0 } } });
+await push({ type: "session.step.ended", properties: {
+  sessionID: "s_next", assistantMessageID: "a1", cost: 0.01, tokens: { input: 10, output: 2 } } });
+await push({ type: "session.deleted", properties: { sessionID: "s_next" } });
+
+teardown();
+wake?.();
+const v2After = process.listenerCount("exit");
+
+// v1 `exit` listener should attach only while sessions are open and detach on close.
+const v1 = await plugin.server({ client: { tui: { showToast: async () => {} } }, directory: work });
+const v1Before = process.listenerCount("exit");
+await v1.event({ event: { type: "session.created", properties: { info: { id: "s_v1" } } } });
+const v1During = process.listenerCount("exit");
+await v1.event({ event: { type: "session.deleted", properties: { info: { id: "s_v1" } } } });
+const v1After = process.listenerCount("exit");
+
+console.log(JSON.stringify({
+  sysBefore,
+  sysAfter,
+  baseExitListeners,
+  v2After,
+  v1Before,
+  v1During,
+  v1After,
+}));
+"""
+    got = _run_opencode_v2_script(tmp_path, driver, hook_py)
+    assert got["sysBefore"] == [{"type": "text", "text": "LEARNED MANUAL"}]
+    assert got["sysAfter"] == []
+    assert got["v2After"] == got["baseExitListeners"]
+    assert got["v1Before"] == got["baseExitListeners"]
+    assert got["v1During"] == got["baseExitListeners"] + 1
+    assert got["v1After"] == got["baseExitListeners"]
+    exported = json.loads(
+        (tmp_path / "te-home" / "opencode-sessions" / "s_del.json").read_text(encoding="utf-8")
+    )
+    assert exported["info"]["id"] == "s_del"
+    assert len(exported["messages"]) == 2
+    assert exported["messages"][0]["parts"][0]["text"] == "fix bug"
+    assert exported["messages"][1]["parts"][0]["tool"] == "bash"
+    assert exported["messages"][1]["parts"][0]["state"]["status"] == "completed"
+    next_exported = json.loads(
+        (tmp_path / "te-home" / "opencode-sessions" / "s_next.json").read_text(encoding="utf-8")
+    )
+    assert len(next_exported["messages"]) == 2
+    assert next_exported["messages"][1]["parts"][0]["tool"] == ""
