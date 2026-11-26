@@ -226,8 +226,18 @@ _DRIVE_RE = re.compile(r"(?<![\w/])[A-Za-z]:/")
 _EXE_RE = re.compile(r"\.exe(?=\s|$)", re.I)
 
 
+# The Windows `py` launcher runs the default Python, or the one a `-V:<tag>` or `-3.x` option
+# chooses (`py -3.12 -m pytest`): it is read as `python`.
+_PY_LAUNCHER_RE = re.compile(r"^(\s*)(?:\S*/)?py(?:\s+-(?:V:\S+|3\S*))?(?=\s)")
+
+
 def _posix_spelling(stage):
     return _EXE_RE.sub("", _DRIVE_RE.sub("/", stage.replace("\\", "/")))
+
+
+def _as_run(stage):
+    """The command a stage runs, past its prefix and in its POSIX spelling."""
+    return _PY_LAUNCHER_RE.sub(r"\1python", _PREFIX_RE.sub("", _posix_spelling(stage)))
 
 
 def status_of_tests(cmd):
@@ -242,8 +252,7 @@ def status_of_tests(cmd):
     found = None
     for i in range(0, len(pieces), 2):
         stage = pieces[i]
-        if (not VERIFY_RE.match(_PREFIX_RE.sub("", _posix_spelling(stage)))
-                or _NOT_A_RUN_RE.search(stage)):
+        if not VERIFY_RE.match(_as_run(stage)) or _NOT_A_RUN_RE.search(stage):
             continue
         status = "own"
         for sep, then in zip(pieces[i + 1::2], pieces[i + 2::2]):
