@@ -1,5 +1,8 @@
 """Trace seam: load_trajectory / tool_usage / parse_catalog over synthetic transcripts."""
+import json
 import os
+
+import pytest
 
 from tokeneconomizer import trace
 from fixtures import write_claude_transcript, write_codex_transcript
@@ -310,6 +313,95 @@ def test_a_non_object_line_does_not_stop_a_rollout_from_being_converted(tmp_path
     r.write_text("\n".join(_around_non_objects([done, call])))
     assert trace.codex_rollout_to_exec(str(r), str(out)) == 1
     assert trace.codex_capability_trace(str(r), str(out)) == 2
+
+
+def _assert_codex_runner_repair(tmp_path, wrap, missing_message, failure_code, expected):
+    from tokeneconomizer.microskills import EnvFactsDistiller
+    from tokeneconomizer.trace.codex import codex_exec_calls
+
+    rollout = tmp_path / "rollout.jsonl"
+    converted = tmp_path / "exec.jsonl"
+    commands = [
+        ("pytest -q", missing_message, failure_code),
+        ("python -m pytest -q", "1 passed in 0.1s", 0),
+    ]
+    records = []
+    for index, (command, output, code) in enumerate(commands):
+        records.append({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "id": f"call-{index}", "command": wrap(command),
+            "aggregated_output": output, "exit_code": code,
+            "status": "failed" if code else "completed",
+        }}})
+    rollout.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    assert trace.codex_rollout_to_exec(str(rollout), str(converted)) == len(commands)
+    calls = codex_exec_calls(converted.read_text(encoding="utf-8").splitlines())
+    assert [args["command"] for _, args, _, _ in calls] == expected
+    assert [ok for _, _, _, ok in calls] == [False, True]
+
+    distiller = EnvFactsDistiller("synthetic")
+    distiller.update(str(converted), iid="synthetic-session")
+    assert "form_repair:run_tests:pytest" in distiller.facts
+
+
+def test_codex_powershell_rollout_keeps_the_script_visible_to_envfacts(tmp_path):
+    def wrap(command):
+        return [r"C:\Program Files\PowerShell\7\pwsh.exe", "-NoProfile", "-Command", command]
+
+    _assert_codex_runner_repair(
+        tmp_path, wrap, "The term 'pytest' is not recognized as a name of a cmdlet.", 1,
+        ["pytest -q", "python -m pytest -q"],
+    )
+
+
+@pytest.mark.parametrize("prefix", [
+    ["/opt/microsoft/powershell/7/pwsh", "-Command"],
+    ["powershell", "-Command"],
+    ["pwsh.exe", "-c"],
+    ["pwsh.exe", "-ExecutionPolicy", "Bypass", "-Command"],
+    ["pwsh", "-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-NonInteractive", "-C"],
+])
+def test_codex_powershell_rollout_recognizes_inline_variants(tmp_path, prefix):
+    _assert_codex_runner_repair(
+        tmp_path, lambda command: [*prefix, command],
+        "The term 'pytest' is not recognized as a name of a cmdlet.", 1,
+        ["pytest -q", "python -m pytest -q"],
+    )
+
+
+def test_codex_bash_rollout_preserves_quoting_and_envfacts(tmp_path):
+    def wrap(command):
+        return ["/bin/bash", "-lc", command]
+
+    _assert_codex_runner_repair(
+        tmp_path, wrap, "/bin/bash: line 1: pytest: command not found", 127,
+        ["/bin/bash -lc 'pytest -q'", "/bin/bash -lc 'python -m pytest -q'"],
+    )
+
+
+def test_codex_powershell_inline_script_preserves_quotes_and_other_modes():
+    from tokeneconomizer.trace.codex import rollout_item_to_exec
+
+    def command_text(argv):
+        item = {"type": "CommandExecution", "command": argv}
+        return rollout_item_to_exec(item)["command"]
+
+    executable = r"C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.EXE"
+    script = 'Write-Output "a b"\nWrite-Output "c"'
+    assert command_text([executable, "-NoProfile", "-COMMAND", script]) == script
+    assert command_text(["powershell.exe", "-File", "path with spaces.ps1"]) == (
+        "powershell.exe -File 'path with spaces.ps1'"
+    )
+    assert command_text(["pwsh.exe", "-File", "fixture.ps1", "-Command", "value"]) == (
+        "pwsh.exe -File fixture.ps1 -Command value"
+    )
+    assert command_text(["pwsh", "-ExecutionPolicy", "-File", "fixture.ps1", "-c", "value"]) == (
+        "pwsh -ExecutionPolicy -File fixture.ps1 -c value"
+    )
+    assert command_text(["pwsh", "-ExecutionPolicy", "-c", "value"]) == (
+        "pwsh -ExecutionPolicy -c value"
+    )
+    assert command_text([]) == ""
+    assert command_text("python -m pytest -q") == "python -m pytest -q"
 
 
 def test_a_non_object_line_does_not_empty_a_tool_catalog():
