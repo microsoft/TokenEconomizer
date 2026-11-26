@@ -48,7 +48,7 @@ class Vocabulary:
 
 PYTHON_GIT = Vocabulary(
     name="python-git",
-    interpreters=frozenset({"python", "python2", "python3", "pypy", "pypy3"}),
+    interpreters=frozenset({"python", "python2", "python3", "pypy", "pypy3", "py"}),
     canonical_interpreter="python",
     runner_heads=frozenset({"pytest", "py.test", "tox", "nox", "nosetests", "trial"}),
     runner_scripts=("runtests.py", "bin/test", "bin/doctest", "manage.py"),
@@ -493,9 +493,16 @@ def _coverage_target(args, vocab):
     return None
 
 
+# The Windows `py` launcher's choice of Python, before any other option: `-V:3.12`, or `-3.12`.
+_PY_TAG_RE = re.compile(r"^-(?:V:\S+|3\S*)$")
+
+
 def _classify(head, base, rest, body, prefix, seg, call, vocab):
     def form(expr):
         return (prefix + " " + expr).strip() if prefix else expr
+
+    if base == "py" and rest and _PY_TAG_RE.match(rest[0]):     # `py -3.12 -m pytest`
+        head, rest = f"{head} {rest[0]}", rest[1:]
 
     if base == "coverage" and rest[:1] == ["run"]:          # `coverage run -m pytest`
         target = _coverage_target(rest[1:], vocab)
