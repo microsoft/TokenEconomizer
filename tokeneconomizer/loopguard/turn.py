@@ -53,6 +53,34 @@ _UNLESS_MVN_SKIPS_TESTS = (r"(?![^;&|\n]*\s(?-i:(?:-D\s*|--define[=\s]\s*)"
 # A value of one of make's options or variables: a word, or a `$(...)`/`${...}` whose brackets
 # `_pieces` has turned into spaces (`-j$(nproc)` reads `-j$ nproc`).
 _MAKE_VALUE = r"(?:\$\s*\w+|[^\s\-]\S*)"
+
+
+def _options(value):
+    """A command's own options before what it runs: one of `value` with the value it takes (a
+    word, or a `$(...)` read as `_MAKE_VALUE` reads one), any other as a flag, which may carry
+    its value after `=` (`--filter=web`). Case-sensitive. An option of `value` before a space is
+    read only that way, so a long line of options that runs no tests does not backtrack
+    exponentially."""
+    return (r"(?-i:(?:\s+(?:" + value + r"\s+" + _MAKE_VALUE + r"|(?!" + value + r"\s)"
+            r"-[-\w]+(?:=(?:\$\s*\w+|\S*))?))*)")
+
+
+# A JavaScript test runner, run by its name (`jest`, `npx vitest run`) or by a package manager
+_JS_RUNNERS = r"(?:jest|vitest|mocha|ava|playwright\s+test)"
+# A package manager running the test script, or a runner, past its own options (`npm -w web
+# test`, `pnpm --filter web test`, `pnpm -r test`, `yarn --cwd web test`, `yarn workspace web
+# test`), of which these take a value. Each has its own: npm's `-w` names a workspace, pnpm's is
+# `--workspace-root`, a flag. `t` and `tst` are npm's and pnpm's aliases of `test`, and pnpm and
+# yarn run an installed runner by its name (`pnpm vitest run`, `yarn jest`).
+_NPM_TEST = (r"npm" + _options(r"(?:-[wC]|--(?:workspace|prefix|loglevel|script-shell|"
+                               r"userconfig))")
+             + r"\s+(?:(?:run(?:-script)?\s+)?test|t|tst)")
+_PNPM_TEST = (r"pnpm" + _options(r"(?:-[FC]|--(?:filter|filter-prod|dir|workspace-packages|"
+                                 r"env-file|reporter|loglevel|test-pattern|"
+                                 r"changed-files-ignore-pattern))")
+              + r"\s+(?:(?:run\s+)?test|t|tst|(?:exec\s+)?" + _JS_RUNNERS + r")")
+_YARN_TEST = (r"yarn" + _options(r"--cwd") + r"(?:\s+workspace\s+" + _MAKE_VALUE + r")?"
+              r"\s+(?:run\s+)?(?:test|" + _JS_RUNNERS + r")")
 VERIFY_RE = re.compile(
     r"(?i)(?:^|[\s;&|(])(?:(?:~?/)?(?:[\w.\-]+/)*" + _PYTHON + r"\s+)?"
     r"(?:~?/)?(?:[\w.\-]+/)*(?:pytest|py\.test|tox|nox|"
@@ -62,8 +90,9 @@ VERIFY_RE = re.compile(
     r"(?:-m\s+)?coverage\s+run(?:\s+(?:--(?:rcfile|source|omit|include|data-file|context|"
     r"concurrency|debug|save-signal)(?:=|\s+)\S+|-[-\w]+))*\s+"
     r"(?:-m\s+(?:pytest|unittest)|(?:[\w.\-]+/)*(?:manage\.py\s+test|runtests(?:\.py)?))|"
-    r"manage\.py\s+test|runtests(?:\.py)?|jest|vitest|mocha|ava|playwright\s+test|"
-    r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
+    r"manage\.py\s+test|runtests(?:\.py)?|" + _JS_RUNNERS + r"|"
+    + _NPM_TEST + r"|" + _PNPM_TEST + r"|" + _YARN_TEST + r"|"
+    r"bun\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)" + _UNLESS_MVN_SKIPS_TESTS + r"\s+(?:\S+\s+)*test|"
     # also a Gradle subproject's test task by its path, `./gradlew :app:test`, but not an
     # option's value (`--exclude-task=:app:test`) or a task of a subproject named `test`
