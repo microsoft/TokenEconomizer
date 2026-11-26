@@ -2,6 +2,8 @@
 import json
 import os
 
+import pytest
+
 from tokeneconomizer import trace
 from fixtures import write_claude_transcript, write_codex_transcript
 
@@ -351,6 +353,21 @@ def test_codex_powershell_rollout_keeps_the_script_visible_to_envfacts(tmp_path)
     )
 
 
+@pytest.mark.parametrize("prefix", [
+    ["/opt/microsoft/powershell/7/pwsh", "-Command"],
+    ["powershell", "-Command"],
+    ["pwsh.exe", "-c"],
+    ["pwsh.exe", "-ExecutionPolicy", "Bypass", "-Command"],
+    ["pwsh", "-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-NonInteractive", "-C"],
+])
+def test_codex_powershell_rollout_recognizes_inline_variants(tmp_path, prefix):
+    _assert_codex_runner_repair(
+        tmp_path, lambda command: [*prefix, command],
+        "The term 'pytest' is not recognized as a name of a cmdlet.", 1,
+        ["pytest -q", "python -m pytest -q"],
+    )
+
+
 def test_codex_bash_rollout_preserves_quoting_and_envfacts(tmp_path):
     def wrap(command):
         return ["/bin/bash", "-lc", command]
@@ -376,6 +393,12 @@ def test_codex_powershell_inline_script_preserves_quotes_and_other_modes():
     )
     assert command_text(["pwsh.exe", "-File", "fixture.ps1", "-Command", "value"]) == (
         "pwsh.exe -File fixture.ps1 -Command value"
+    )
+    assert command_text(["pwsh", "-ExecutionPolicy", "-File", "fixture.ps1", "-c", "value"]) == (
+        "pwsh -ExecutionPolicy -File fixture.ps1 -c value"
+    )
+    assert command_text(["pwsh", "-ExecutionPolicy", "-c", "value"]) == (
+        "pwsh -ExecutionPolicy -c value"
     )
     assert command_text([]) == ""
     assert command_text("python -m pytest -q") == "python -m pytest -q"

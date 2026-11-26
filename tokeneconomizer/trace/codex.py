@@ -102,14 +102,28 @@ def _command_text(command):
     if isinstance(command, list):
         if len(command) >= 3:
             executable = ntpath.basename(str(command[0])).lower()
-            startup_switches = {"-nologo", "-noprofile", "-noninteractive"}
-            if (executable in {"pwsh.exe", "powershell.exe"}
-                    and all(str(arg).lower() in startup_switches for arg in command[1:-2])
-                    and str(command[-2]).lower() == "-command"):
+            if (executable in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}
+                    and str(command[-2]).lower() in {"-c", "-command"}
+                    and _powershell_startup_options(command[1:-2])):
                 # Preserve the script verbatim; POSIX shell quoting hides it from envfacts.
                 return str(command[-1])
         return shlex.join(str(c) for c in command)
     return str(command or "")
+
+
+def _powershell_startup_options(args):
+    """Accept known startup options before the final inline command flag."""
+    options = iter(str(arg).lower() for arg in args)
+    for option in options:
+        if option in {"-nologo", "-noprofile", "-noninteractive"}:
+            continue
+        if option == "-executionpolicy":
+            value = next(options, "")
+            if value and not value.startswith("-"):
+                continue
+        # An unknown option can introduce another invocation mode, such as -File.
+        return False
+    return True
 
 
 def rollout_item_to_exec(item):
