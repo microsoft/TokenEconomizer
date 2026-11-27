@@ -13,6 +13,7 @@ session.
 import os
 import posixpath
 import re
+import shlex
 from dataclasses import dataclass
 
 from ..trace import SHELL_TOOLS, call_cwds, load_trajectory, strip_rtk_prefix, tool_kind
@@ -165,6 +166,11 @@ _INTERP_VERSIONED_RE = re.compile(r"^(?:python|node)\d(?:\.\d+)?$")
 _ENV_ASSIGN_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)+")
 _ASSIGN_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _WRAP_RE = re.compile(r"^/bin/(?:ba)?sh\s+-l?c\s+(.*)$", re.S)
+# The shells a command can come wrapped in. Codex records each call as `<shell> -lc '<script>'`,
+# the shell by name or by path: `bash`, `/bin/bash`, and the user's `/bin/zsh` on macOS.
+# loopguard/turn.py reads the same wrappers (`_SHELLS`).
+_WRAP_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_WRAP_OPTION_RE = re.compile(r"-[a-z]*c")
 _HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\b", re.S)
 _URL_HOST_RE = re.compile(r"https?://([^/\s'\"`]+)")
 
@@ -213,8 +219,16 @@ _PROBE_HIT = {
 # observations
 # --------------------------------------------------------------------------------------
 def unwrap(cmd):
-    """Strip an agent's `/bin/bash -lc "<cmd>"` wrapper, if present."""
+    """Strip an agent's `/bin/bash -lc "<cmd>"` wrapper, if present: any of `_WRAP_SHELLS`, by
+    name or by path, with `-c` among its options."""
     cmd = cmd or ""
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        parts = []
+    if (len(parts) == 3 and posixpath.basename(parts[0]) in _WRAP_SHELLS
+            and _WRAP_OPTION_RE.fullmatch(parts[1])):
+        return parts[2]
     m = _WRAP_RE.match(cmd.strip())
     if not m:
         return cmd
