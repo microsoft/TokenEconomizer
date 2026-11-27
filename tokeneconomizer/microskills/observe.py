@@ -128,7 +128,10 @@ _CONDA_RUN_RE = re.compile(r"^(conda|mamba|micromamba)\s+run\s+"
                            r"(?:--no-capture-output\s+|--live-stream\s+)*"
                            r"(?:(?:-n|--name)(?:\s+|=)([\w.-]+)|"
                            r"(?:-p|--prefix)(?:\s+|=)([^\s;&|'\"]+))\s+")
-_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|pdm|hatch|rye|npx|bundle|yarn|pnpm)\s+(?:run|exec)\s+")
+# The verb stays as typed in the form: `bundle exec rspec` is not `bundle run rspec`, which Bundler
+# has no command for, and `pnpm run jest` runs a `package.json` script named `jest`, not the
+# binary `pnpm exec jest` runs.
+_TOOL_RUN_RE = re.compile(r"^(poetry|pipenv|uv|pdm|hatch|rye|npx|bundle|yarn|pnpm)\s+(run|exec)\s+")
 # A Python launcher's own options before the command (`uv run --frozen --extra test pytest`), of
 # which these take a value; a bare `--` ends them. They stay in the form: an extra, a group or a
 # `--with` is often what makes the command work.
@@ -401,7 +404,7 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None)
             prefix = (prefix + " " if prefix else "") + " ".join(["pixi run", *opts])
         m = _TOOL_RUN_RE.match(body)
         if m:
-            launcher = [f"{m.group(1)} run"]
+            launcher = [f"{m.group(1)} {m.group(2)}"]
             body = body[m.end():]
             if m.group(1) in _PY_LAUNCHERS:
                 body, opts = _past_options(body, _RUN_OPTION_RE)
@@ -853,4 +856,5 @@ def is_bare(form):
     """A form with no activation prefix and no explicit path is 'bare'."""
     head = form.split()[0] if form else ""
     return "/" not in head and " activate " not in form and " run " not in form and \
+        " exec " not in form and \
         not form.startswith(("conda run", "poetry run", "pipenv run", "uv run", "npx ", "uvx "))
