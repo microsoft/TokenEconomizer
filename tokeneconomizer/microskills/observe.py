@@ -625,10 +625,14 @@ def _label_failed(labels, out):
 _LOADED_RE = re.compile(r"\bRan [1-9]\d* tests?\b|\b[1-9]\d* (?:passed|failed|passing|failing)\b|"
                         r"\bcollected [1-9]\d* items?\b")
 # Other runners' summaries, for the generic reading: Go's `ok  pkg 0.01s` and `--- PASS`, Rust's
-# `test result:`, RSpec's `3 examples, 0 failures`, .NET's `Passed!`, Maven's `Tests run: 3`.
-_LOADED_GENERIC_RE = re.compile(r"^ok\s+\S+\s+[\d.]+s\b|^--- (?:PASS|FAIL)\b|"
+# `test result:`, RSpec's `3 examples, 0 failures`, .NET's `Passed!`, Maven's `Tests run: 3`. Go
+# prints `(cached)` in place of the time for a package whose result it replays from its test
+# cache; minitest sums up as `3 runs, 3 assertions, ...` and test-unit as `3 tests, 3 assertions,
+# ...` (the loop guard reads the same summaries, `loopguard.turn._RUN_PASSED_RE`).
+_LOADED_GENERIC_RE = re.compile(r"^ok\s+\S+\s+(?:[\d.]+s\b|\(cached\))|^--- (?:PASS|FAIL)\b|"
                                 r"\btest result: (?:ok|FAILED)\b|"
                                 r"\b[1-9]\d* examples?, \d+ failures?\b|"
+                                r"^[1-9]\d* (?:runs|tests), \d+ assertions\b|"
                                 r"\b(?:Passed|Failed)!\s+-|\bTests run: [1-9]\d*", re.M)
 # Code asking for an environment variable by name, and the ways a command sets one.
 _ENV_NEED_RE = re.compile(r"environment variable\s+['\"`]?([A-Z][A-Z0-9_]{2,})")
