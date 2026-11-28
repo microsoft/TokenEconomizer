@@ -171,6 +171,18 @@ def resume(host, root=None):
         return False
 
 
+def pi_cli():
+    """The Pi executable side calls run: `pi` on PATH, else oh-my-pi's `omp`, the fork this
+    plugin also serves. A session inside oh-my-pi carries `OMPCODE=1`, so the bare `omp` is used
+    even where PATH lookup cannot find it. Falls back to `pi`, so the error stays the
+    CLI-not-found one."""
+    found = shutil.which("pi")
+    if found:
+        return found
+    # oh-my-pi's binary is `omp`, not `pi`; a session inside it carries OMPCODE=1.
+    return shutil.which("omp") or ("omp" if os.environ.get("OMPCODE") else "pi")
+
+
 def claude_cli():
     """The Claude Code executable to start: `claude` on PATH (with PATHEXT on Windows, so a
     `claude.cmd` shim too), else the native installer's `~/.local/bin/claude` -- which is often
@@ -367,6 +379,18 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S, effort=""):
 PI_FLAGS = ("--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
             "--no-skills", "--no-prompt-templates", "--no-context-files", "--offline")
 
+# A flag this CLI does not have: Pi says `Unknown option: --no-mcp`; oh-my-pi says
+# `unknown flags: --no-prompt-templates, --no-mcp` (one line, any number of names).
+_UNKNOWN_FLAG_RE = re.compile(r"unknown (?:option|flag)s?:?\s*(.*)", re.IGNORECASE)
+
+
+def _unknown_flags(stderr):
+    """The `--flags` a CLI's error names as unknown, which a side call leaves out and retries:
+    the two Pi implementations do not have the same set (oh-my-pi drops `--no-prompt-templates`
+    and `--no-mcp`), and probing `--help` would cost a second start."""
+    m = _UNKNOWN_FLAG_RE.search(stderr or "")
+    return set(re.findall(r"--[\w-]+", m.group(1))) if m else set()
+
 
 def pi_extension_args(extensions):
     """`--extension <path>` for each extension a side call loads despite `--no-extensions` (Pi
@@ -383,14 +407,18 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     model_args = ["--model", model] if model else []
     ext_args = pi_extension_args(extensions)
     exe = program(cli)
+    flags = [*PI_FLAGS, "--no-mcp"]     # Pi before 1.0 and oh-my-pi reject the last one
     with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
-        for extra in (["--no-mcp"], []):
-            cmd = [*exe, *PI_FLAGS, *extra, *ext_args, *model_args, "--", prompt]
+        for _ in range(len(flags) + 1):
+            cmd = [*exe, *flags, *ext_args, *model_args, "--", prompt]
             out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
                                  timeout=timeout, env=_env(), cwd=cwd,
                                  stdin=subprocess.DEVNULL)
-            if "Unknown option: --no-mcp" not in (out.stderr or ""):
+            unknown = _unknown_flags(out.stderr)
+            kept = [f for f in flags if f not in unknown]
+            if not unknown or kept == flags:
                 break
+            flags = kept
     text, usage = trace.pi_json_reply(out.stdout)
     if not text:
         _no_reply("pi", out)
@@ -1022,7 +1050,7 @@ def _host_call(host_name, config):
     effort = getattr(config, f"{host_name}_paid_effort", "")
     kw = {"effort": effort} if effort else {}
     if host_name == "pi":
-        cli = os.path.expanduser(config.pi_cli) if config.pi_cli else "pi"
+        cli = os.path.expanduser(config.pi_cli) if config.pi_cli else pi_cli()
         extensions = list(config.pi_extensions)
         return lambda prompt, _m="agent": pi_call(prompt, model=model, cli=cli,
                                                   extensions=extensions)

@@ -1431,6 +1431,47 @@ def test_a_pi_side_call_is_a_bare_run_on_the_persons_own_pi(monkeypatch):
 
 
 @pytest.mark.real_sidecalls
+def test_a_pi_side_call_drops_every_flag_the_cli_reports_unknown(monkeypatch):
+    """oh-my-pi (`omp`) rejects two of Pi's flags in one error line; both are left out and the
+    call retried, rather than failing the side call."""
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if "--no-prompt-templates" in cmd or "--no-mcp" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="",
+                stderr="Error: unknown flags: --no-prompt-templates, --no-mcp\n")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="\n".join(json.dumps(e) for e in PI_JSON_RUN), stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    text, eff = sidecall.pi_call("propose facts", cli="omp")
+    assert text == "- use python -m pytest" and eff and eff > 0
+    assert "--no-prompt-templates" not in calls[-1] and "--no-mcp" not in calls[-1]
+    assert "--offline" in calls[-1] and calls[-1][-2:] == ["--", "propose facts"]
+
+
+def test_a_pi_side_call_prefers_pi_and_falls_back_to_oh_my_pi_s_omp(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.delenv("OMPCODE", raising=False)
+    monkeypatch.setattr(sidecall.shutil, "which",
+                        lambda name: {"pi": "/usr/local/bin/pi"}.get(name))
+    assert sidecall.pi_cli() == "/usr/local/bin/pi"
+    monkeypatch.setattr(sidecall.shutil, "which",
+                        lambda name: {"omp": "/usr/local/bin/omp"}.get(name))
+    assert sidecall.pi_cli() == "/usr/local/bin/omp"
+    monkeypatch.setattr(sidecall.shutil, "which", lambda name: None)
+    monkeypatch.setenv("OMPCODE", "1")
+    assert sidecall.pi_cli() == "omp"
+    monkeypatch.delenv("OMPCODE")
+    assert sidecall.pi_cli() == "pi"
+
+
+@pytest.mark.real_sidecalls
 def test_a_pi_side_call_loads_the_provider_extensions_and_the_pi_the_person_names(
         monkeypatch, tmp_path):
     """A model whose provider an extension registers is not there under `--no-extensions`; Pi
@@ -1438,6 +1479,7 @@ def test_a_pi_side_call_loads_the_provider_extensions_and_the_pi_the_person_name
     import subprocess
     from tokeneconomizer.plugin import sidecall
     monkeypatch.setattr(sidecall, "program", lambda cli: [cli])
+    monkeypatch.setattr(sidecall, "pi_cli", lambda: "pi")
     calls = []
 
     def fake_run(cmd, **kw):

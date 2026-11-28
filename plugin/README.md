@@ -361,7 +361,9 @@ after the loop guard's redirect gets a notice: press **Esc** to abort it, or Ctr
 on your default model (`paid_model` names another). If that model's provider comes from an
 extension (a company gateway, a package's provider), list the extension's file in
 `pi_extensions` so the calls can reach it; it loads with no tools. If the first `pi` on your PATH
-is a wrapper the calls should not run, set `pi_cli` to the real one.
+is a wrapper the calls should not run, set `pi_cli` to the real one. oh-my-pi (`omp`) works too:
+with no `pi` on PATH, `pi_cli` falls back to `omp` (or `OMPCODE=1` names it), and a side call
+leaves out the flags that CLI reports unknown (`--no-prompt-templates`, `--no-mcp`).
 
 **Update.** `pi update --extensions` (plain `pi update` does not update extensions).
 
@@ -935,7 +937,7 @@ first session there ends.
 | `local_roles` | `judge` | which side calls `local_model` takes: `judge`, `nudge` (the redirect writer), `proposer`, separated by commas |
 | `local_judge_confidence` | `0.9` | how sure a stuck verdict from the on-device judge must be to count; below it the turn is spared |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
-| `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
+| `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first `pi` on PATH, else oh-my-pi's `omp` |
 | `tool_roles` | none | tools the mechanisms do not know by name, each given the role of a built-in one: `tool=role` entries separated by commas, a tool by name or pattern, a role `shell`, `edit` or `read` (`mcp__serena__replace_content=edit,mcp__serena__execute_shell_command=shell`). Micro-skills read a shell tool's commands, and an edit tool's file counts as edited; tool pruning still knows each tool by its own name |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
